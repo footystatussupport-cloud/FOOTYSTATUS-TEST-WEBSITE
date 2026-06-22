@@ -4,7 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- TODO: Set the document title to the name of your application -->
-    <title>Lovable App</title>
+    <title>Footy Status</title>
+    <meta name="footy-status-build" content="2026-06-22-cloud-supabase-fix" />
     <meta name="description" content="Lovable Generated Project" />
     <meta name="author" content="Lovable" />
 
@@ -22,5 +23,20 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
-  </body>
+    <script>
+      window.addEventListener("error", function (event) {
+        window.setTimeout(function () {
+          var root = document.getElementById("root");
+          if (root && !root.innerHTML.trim()) {
+            root.innerHTML =
+              '<main style="max-width:680px;margin:40px auto;padding:24px;font-family:Arial,sans-serif;color:#111827">' +
+              '<h1>Footy Status could not start</h1>' +
+              '<p>Please refresh the page. If this message remains, send this error to Footy Status:</p>' +
+              '<pre style="white-space:pre-wrap;background:#f3f4f6;padding:12px;border-radius:8px">' +
+              String(event.message || "A site file failed to load.") +
+              "</pre></main>";
+          }
+        }, 100);
+      }, true);
+    </script>  </body>
 </html>
