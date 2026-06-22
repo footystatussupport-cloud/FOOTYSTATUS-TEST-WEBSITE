@@ -1,0 +1,1218 @@
+import { useState, useEffect } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { supabase } from "@/integrations/supabase/client";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { useToast } from "@/hooks/use-toast";
+import logo from "@/assets/footystatus-logo.png";
+import { Mail, Lock, ArrowLeft } from "lucide-react";
+import AccountTypeSelector from "@/components/signup/AccountTypeSelector";
+import StaffTypeSelector from "@/components/signup/StaffTypeSelector";
+import PlayerProfileForm from "@/components/signup/PlayerProfileForm";
+import TeamProfileForm from "@/components/signup/TeamProfileForm";
+import StaffProfileForm from "@/components/signup/StaffProfileForm";
+import ParentProfileForm from "@/components/signup/ParentProfileForm";
+import RefereeProfileForm from "@/components/signup/RefereeProfileForm";
+import AuthMethodSelector from "@/components/signup/AuthMethodSelector";
+import { buildAppUrl } from "@/lib/appOrigin";
+import { isEmbeddedBrowser } from "@/lib/browserContext";
+import { formatRoleDisplayLabel } from "@/lib/coachStaffTeams";
+import { getUsernameErrorMessage, normalizeUsername, validateUsername } from "@/lib/usernames";
+import { z } from "zod";
+
+type SignupStep = 'account_type' | 'staff_type' | 'auth_method' | 'profile_form';
+type AccountType = 'player' | 'team_staff' | 'parent' | 'referee';
+type StaffType = 'team_club' | 'school_team' | 'head_coach_assistant' | 'scout' | 'academy_director';
+
+const emailPasswordSchema = z.object({
+  email: z.string().trim().email("Please enter a valid email address."),
+  password: z.string().min(6, "Password must be at least 6 characters."),
+});
+
+const forgotPasswordSchema = z.object({
+  email: z.string().trim().email("Please enter a valid email address."),
+});
+
+const getAuthErrorMessage = (error: unknown) => {
+  const message = error instanceof Error ? error.message : "Something went wrong. Please try again.";
+
+  if (message.toLowerCase().includes("already") || message.toLowerCase().includes("registered") || message.toLowerCase().includes("exists")) {
+    return "An account with this email already exists. Please sign in instead.";
+  }
+
+  if (message.toLowerCase().includes("password")) {
+    return message;
+  }
+
+  return message;
+};
+
+const SIGNUP_FLOW_STORAGE_KEY = "footystatus_signup_flow";
+
+const clearStoredAuthSession = () => {
+  Object.keys(localStorage)
+    .filter((key) => key.startsWith("sb-") || key.includes("supabase"))
+    .forEach((key) => localStorage.removeItem(key));
+};
+
+const splitCommaValues = (value?: string | null) =>
+  value
+    ?.split(",")
+    .map((item) => item.trim())
+    .filter(Boolean) || [];
+
+const normalizeEmailValue = (value?: string | null) => String(value || "").trim().toLowerCase();
+
+const isMissingAgeGroupColumnError = (error: any) =>
+  typeof error?.message === "string" &&
+  error.message.includes("Could not find the 'age_group' column of 'teams' in the schema cache");
+
+const mapRoleForLegacyBackend = (role: string) => {
+  switch (role) {
+    case "team_club":
+      return "team";
+    case "referee":
+      return "coach";
+    case "head_coach_assistant":
+      return "coach";
+    default:
+      return role;
+  }
+};
+
+const getAccountCategoryForRole = (role: string) => {
+  if (role === "player") return "player";
+  if (role === "parent") return "parent";
+  if (role === "referee") return "referee";
+  return "team_staff";
+};
+
+const AuthShell = ({ children, backAction }: { children: React.ReactNode; backAction: () => void }) => (
+  <div className="min-h-screen bg-background">
+    <div className="min-h-screen w-full bg-background max-w-md mx-auto border-x border-border overflow-x-hidden flex flex-col items-center justify-center px-4 relative">
+      <button onClick={backAction} className="absolute top-4 left-4 flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors">
+        <ArrowLeft className="h-5 w-5" /> Back
+      </button>
+      {children}
+    </div>
+  </div>
+);
+
+const AuthPage = () => {
+  const [searchParams] = useSearchParams();
+  const mode = searchParams.get("mode");
+  const authReason = searchParams.get("reason");
+  const [isLogin, setIsLogin] = useState(mode !== "signup");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [signupStep, setSignupStep] = useState<SignupStep>('account_type');
+  const [accountType, setAccountType] = useState<AccountType | null>(null);
+  const [staffType, setStaffType] = useState<StaffType | null>(null);
+  const [pendingGoogleAuth, setPendingGoogleAuth] = useState(false);
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const navigate = useNavigate();
+  const { toast } = useToast();
+  const embeddedBrowser = isEmbeddedBrowser();
+  const embeddedGoogleAuthMessage =
+    "Google sign-in opens in Safari and does not carry the session back into this in-app browser. Use email/password here, or open Footy Status directly in Safari before using Google.";
+
+  const persistSignupFlow = (nextAccountType: AccountType | null, nextStaffType: StaffType | null) => {
+    sessionStorage.setItem(
+      SIGNUP_FLOW_STORAGE_KEY,
+      JSON.stringify({
+        accountType: nextAccountType,
+        staffType: nextStaffType,
+        pendingGoogleAuth: true,
+      })
+    );
+  };
+
+  const clearSignupFlow = () => {
+    sessionStorage.removeItem(SIGNUP_FLOW_STORAGE_KEY);
+  };
+
+  useEffect(() => {
+    if (mode === "signup") setIsLogin(false);
+    else if (mode === "login") setIsLogin(true);
+  }, [mode]);
+
+  useEffect(() => {
+    if (authReason === "login_required") {
+      toast({
+        title: "Login required",
+        description: "Create an account or log in to open profiles, teams, leagues, and match details.",
+      });
+    }
+  }, [authReason, toast]);
+
+  useEffect(() => {
+    const savedFlow = sessionStorage.getItem(SIGNUP_FLOW_STORAGE_KEY);
+    if (!savedFlow) return;
+
+    try {
+      const parsed = JSON.parse(savedFlow) as {
+        accountType?: AccountType | null;
+        staffType?: StaffType | null;
+        pendingGoogleAuth?: boolean;
+      };
+
+      if (parsed.accountType) setAccountType(parsed.accountType);
+      if (parsed.staffType) setStaffType(parsed.staffType);
+      if (parsed.pendingGoogleAuth) {
+        setPendingGoogleAuth(true);
+        setIsLogin(false);
+        setSignupStep("profile_form");
+      }
+    } catch {
+      clearSignupFlow();
+    }
+  }, []);
+
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        if (session && isLogin) navigate("/");
+        if (session && !isLogin && pendingGoogleAuth) {
+          setPendingGoogleAuth(false);
+          clearSignupFlow();
+          setEmail(session.user.email || "");
+          setSignupStep('profile_form');
+        }
+      }
+    );
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session && isLogin) navigate("/");
+    });
+    return () => subscription.unsubscribe();
+  }, [navigate, isLogin, pendingGoogleAuth]);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    const parsed = emailPasswordSchema.safeParse({ email, password });
+    if (!parsed.success) {
+      toast({ title: "Error", description: parsed.error.issues[0]?.message, variant: "destructive" });
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: parsed.data.email.toLowerCase(),
+        password: parsed.data.password,
+      });
+      if (error) throw error;
+      toast({ title: "Welcome back!", description: "Successfully logged in." });
+    } catch (error: any) {
+      toast({ title: "Error", description: getAuthErrorMessage(error), variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    const parsed = forgotPasswordSchema.safeParse({ email: forgotEmail });
+    if (!parsed.success) {
+      toast({ title: "Enter your email", description: parsed.error.issues[0]?.message, variant: "destructive" });
+      return;
+    }
+
+    setForgotLoading(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(parsed.data.email.toLowerCase(), {
+        redirectTo: buildAppUrl("/reset-password"),
+      });
+
+      if (error) throw error;
+
+      toast({ title: "Check your email", description: "We sent you a password reset link." });
+      setShowForgotPassword(false);
+      setForgotEmail(parsed.data.email.toLowerCase());
+    } catch (error) {
+      toast({ title: "Error", description: getAuthErrorMessage(error), variant: "destructive" });
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  const handleAccountTypeSelect = (type: AccountType) => {
+    setAccountType(type);
+    if (type === 'team_staff') setSignupStep('staff_type');
+    else setSignupStep('auth_method');
+  };
+
+  const handleStaffTypeSelect = (type: StaffType) => {
+    setStaffType(type);
+    setSignupStep('auth_method');
+  };
+
+  const handleGoogleAuth = async () => {
+    if (embeddedBrowser) {
+      toast({
+        title: "Open Google sign-in in Safari",
+        description: embeddedGoogleAuthMessage,
+        variant: "destructive",
+      });
+      return;
+    }
+    setLoading(true);
+    setPendingGoogleAuth(true);
+    persistSignupFlow(accountType, staffType);
+    try {
+      await supabase.auth.signOut({ scope: "local" });
+      clearStoredAuthSession();
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: buildAppUrl("/auth?mode=signup"),
+          queryParams: {
+            prompt: "select_account",
+            include_granted_scopes: "true",
+          },
+        },
+      });
+      if (error) throw error;
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+      setLoading(false);
+      setPendingGoogleAuth(false);
+      clearSignupFlow();
+    }
+  };
+
+  const handleEmailAuth = (emailVal: string, passwordVal: string) => {
+    const parsed = emailPasswordSchema.safeParse({ email: emailVal, password: passwordVal });
+
+    if (!parsed.success) {
+      toast({ title: "Error", description: parsed.error.issues[0]?.message, variant: "destructive" });
+      return;
+    }
+
+    setEmail(parsed.data.email.toLowerCase());
+    setPassword(parsed.data.password);
+    setSignupStep('profile_form');
+  };
+
+  const getAccountTypeLabel = () => {
+    if (accountType === 'player') return 'Player';
+    if (accountType === 'parent') return 'Parent/Guardian';
+    if (accountType === 'referee') return 'Referee';
+    if (accountType === 'team_staff') {
+      if (staffType === 'team_club') return 'Team / Club';
+      if (staffType === 'school_team') return 'School Team';
+      if (staffType === 'head_coach_assistant') return 'Coach / Trainer';
+      if (staffType === 'scout') return 'Scout';
+      if (staffType === 'academy_director') return 'Team Staff';
+    }
+    return '';
+  };
+
+  const createUserAndProfile = async (profileData: any, role: string) => {
+    setLoading(true);
+
+    try {
+      let sessionUserId: string | null = null;
+      let normalizedEmail = normalizeEmailValue(email);
+      const normalizedUsername = normalizeUsername(profileData.username);
+      const usernameValidationMessage = validateUsername(normalizedUsername);
+
+      if (usernameValidationMessage) {
+        throw new Error(usernameValidationMessage);
+      }
+
+      const { data: existingUsername, error: usernameCheckError } = await (supabase as any)
+        .from("profiles")
+        .select("user_id")
+        .eq("username", normalizedUsername)
+        .maybeSingle();
+
+      if (usernameCheckError) throw usernameCheckError;
+
+      const { data: { session: existingSession } } = await supabase.auth.getSession();
+
+      if (existingSession) {
+        sessionUserId = existingSession.user.id;
+        normalizedEmail = normalizeEmailValue(existingSession.user.email) || normalizedEmail;
+        if (existingUsername && existingUsername.user_id !== sessionUserId) {
+          throw new Error("Username is already taken");
+        }
+      } else {
+        if (existingUsername) throw new Error("Username is already taken");
+
+        const parsed = emailPasswordSchema.safeParse({ email: normalizedEmail, password });
+        if (!parsed.success) {
+          throw new Error(parsed.error.issues[0]?.message || "Please enter a valid email and password.");
+        }
+
+        const { data: authData, error: signUpError } = await supabase.auth.signUp({
+          email: parsed.data.email,
+          password: parsed.data.password,
+          options: {
+            emailRedirectTo: buildAppUrl("/"),
+            data: {
+              full_name: profileData.fullName || profileData.clubName || "",
+              username: normalizedUsername,
+              player_gender: role === "player" ? profileData.gender : null,
+            },
+          },
+        });
+
+        if (signUpError) {
+          throw new Error(getAuthErrorMessage(signUpError));
+        }
+
+        if (!authData.user) {
+          throw new Error("Failed to create your account. Please try again.");
+        }
+
+        sessionUserId = authData.user.id;
+
+        if (!authData.session) {
+          const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+            email: parsed.data.email,
+            password: parsed.data.password,
+          });
+
+          if (signInError) throw signInError;
+          if (!signInData.session) throw new Error("Account created, but we could not sign you in automatically. Please sign in.");
+
+          sessionUserId = signInData.session.user.id;
+        } else {
+          sessionUserId = authData.session.user.id;
+        }
+      }
+
+      if (!sessionUserId) {
+        throw new Error("We couldn't finish creating your account. Please try again.");
+      }
+
+      const normalizedCity = [profileData.city, profileData.state].filter(Boolean).join(", ");
+      const accountCategory = getAccountCategoryForRole(role);
+      const refereeProofFile = role === "referee" ? profileData.refereeCertificationProofFile as File | null : null;
+      let refereeProofPath: string | null = null;
+
+      if (refereeProofFile) {
+        const extension = refereeProofFile.name.split(".").pop() || "file";
+        const storagePath = `${sessionUserId}/certification-${Date.now()}.${extension}`;
+        const uploadResult = await supabase.storage.from("referee-proof").upload(storagePath, refereeProofFile, {
+          upsert: true,
+        });
+        if (uploadResult.error) throw uploadResult.error;
+        refereeProofPath = storagePath;
+      }
+
+      const selectedStaffRole =
+        role === "scout"
+          ? profileData.scoutRoleTitle || "Scout"
+          : role !== "team_club" && role !== "player" && role !== "parent" && role !== "referee"
+            ? formatRoleDisplayLabel(profileData.coachingRoleType || role, "Coach / Trainer")
+            : null;
+
+      const setupPayload = {
+        ...profileData,
+        username: normalizedUsername,
+        accountCategory,
+        accountRole: role,
+        coachingRoleType: selectedStaffRole || profileData.coachingRoleType || null,
+        contactEmail: profileData.contactEmail ? normalizeEmailValue(profileData.contactEmail) : null,
+        email: normalizedEmail || null,
+        city: normalizedCity || profileData.city || null,
+        country: profileData.country || null,
+        homeStadium: profileData.homeFieldAddress || profileData.homeStadium || null,
+        trainingGround: profileData.trainingGroundAddress || profileData.trainingGround || null,
+      };
+
+      let { error: setupError } = await (supabase as any).rpc('complete_account_setup', {
+        _role: role,
+        _profile: setupPayload,
+      });
+
+      if (setupError?.message?.includes('invalid input value for enum account_type')) {
+        const legacyRole = mapRoleForLegacyBackend(role);
+        const retry = await (supabase as any).rpc('complete_account_setup', {
+          _role: legacyRole,
+          _profile: setupPayload,
+        });
+        setupError = retry.error;
+      }
+
+      if (setupError) {
+        throw new Error(setupError.message || "We couldn't finish setting up your profile.");
+      }
+
+      const normalizedFullName =
+        role === "team_club"
+          ? profileData.clubName || ""
+          : profileData.fullName || profileData.clubName || "";
+      const normalizedBio = profileData.bio ? String(profileData.bio).trim().slice(0, 100) : null;
+
+      await (supabase as any)
+        .from("profiles")
+        .update({
+          full_name: normalizedFullName,
+          username: normalizedUsername,
+          bio: normalizedBio,
+          club_name: role === "team_club" ? profileData.clubName || null : null,
+          email: normalizedEmail || normalizeEmailValue(profileData.contactEmail) || null,
+          account_category: accountCategory,
+          account_role: role,
+          role: mapRoleForLegacyBackend(role),
+          coaching_role_type: selectedStaffRole,
+          teams_currently_coaching: role !== "team_club" && role !== "player" && role !== "parent" ? profileData.teamOrganizationName || null : null,
+          past_coaching_experience: role !== "team_club" && role !== "player" && role !== "parent" ? profileData.previousTeams || null : null,
+          coaching_licenses: role !== "team_club" && role !== "player" && role !== "parent" ? splitCommaValues(profileData.coachingLicenses) : null,
+          coaching_accolades: role !== "team_club" && role !== "player" && role !== "parent" ? profileData.notableAchievements || null : null,
+          coaching_location: role !== "team_club" && role !== "player" && role !== "parent" ? [profileData.city, profileData.country].filter(Boolean).join(", ") || null : null,
+          scout_role_title: role === "scout" ? profileData.scoutRoleTitle || null : null,
+          scout_organization: role === "scout" ? profileData.scoutOrganization || null : null,
+          scouting_licenses: role === "scout" ? splitCommaValues(profileData.scoutingLicenses) : null,
+          scouting_experience: role === "scout" ? profileData.scoutingExperience || null : null,
+          scouting_regions: role === "scout" ? profileData.scoutingRegions || null : null,
+          scouting_age_groups: role === "scout" ? splitCommaValues(profileData.scoutingAgeGroups) : null,
+          scouting_positions: role === "scout" ? splitCommaValues(profileData.scoutingPositions) : null,
+          scouting_accolades: role === "scout" ? profileData.scoutingAccolades || null : null,
+          referee_certification_level: role === "referee" ? profileData.refereeCertificationLevel || null : null,
+          referee_license_number: role === "referee" ? profileData.refereeLicenseNumber || null : null,
+          referee_certifying_organization: role === "referee" ? profileData.refereeCertifyingOrganization || null : null,
+          referee_years_experience:
+            role === "referee" && profileData.refereeYearsExperience ? Number(profileData.refereeYearsExperience) : null,
+          referee_main_experience: role === "referee" ? profileData.refereeMainExperience || null : null,
+          referee_assistant_experience: role === "referee" ? profileData.refereeAssistantExperience || null : null,
+          referee_leagues_tournaments: role === "referee" ? profileData.refereeLeaguesTournaments || null : null,
+          referee_availability: role === "referee" ? profileData.refereeAvailability || null : null,
+          referee_certification_proof_url: role === "referee" ? refereeProofPath : null,
+          referee_accolades: role === "referee" ? profileData.refereeAccolades || null : null,
+          referee_profile_public: role === "referee" ? Boolean(profileData.refereeProfilePublic) : null,
+        })
+        .eq("user_id", sessionUserId);
+
+      if (accountCategory === "team_staff" && role !== "team_club") {
+        const staffProfileRole =
+          role === "academy_director"
+            ? "academy_director"
+            : role === "scout"
+              ? "scout"
+              : "coach";
+        const staffOrganization =
+          role === "scout"
+            ? profileData.scoutOrganization || profileData.teamOrganizationName || null
+            : profileData.teamOrganizationName || null;
+        const staffLicenses =
+          role === "scout"
+            ? splitCommaValues(profileData.scoutingLicenses)
+            : splitCommaValues(profileData.coachingLicenses);
+        const staffExperience =
+          role === "scout"
+            ? splitCommaValues(profileData.scoutingExperience)
+            : splitCommaValues(profileData.previousTeams);
+        const staffAgeGroups =
+          role === "scout"
+            ? splitCommaValues(profileData.scoutingAgeGroups)
+            : splitCommaValues(profileData.ageGroupsCoached);
+
+        const { error: staffProfileError } = await (supabase as any)
+          .from("staff_profiles")
+          .upsert(
+            {
+              user_id: sessionUserId,
+              full_name: normalizedFullName,
+              role: staffProfileRole,
+              team_organization_name: staffOrganization,
+              country: profileData.country || null,
+              city: normalizedCity || profileData.city || null,
+              coaching_level: profileData.coachingLevel || null,
+              years_experience: profileData.yearsExperience ? Number(profileData.yearsExperience) : null,
+              coaching_licenses: staffLicenses,
+              age_groups_coached: staffAgeGroups,
+              contact_email: profileData.contactEmail ? String(profileData.contactEmail).trim().toLowerCase() : normalizedEmail,
+              contact_phone: profileData.contactPhone || null,
+              previous_teams: staffExperience,
+              notable_achievements:
+                role === "scout"
+                  ? profileData.scoutingAccolades || null
+                  : profileData.notableAchievements || null,
+            },
+            { onConflict: "user_id" }
+          );
+
+        if (staffProfileError) {
+          throw new Error(staffProfileError.message || "We couldn't save your coach/staff profile answers.");
+        }
+
+        const selectedCoachingTeams = Array.isArray(profileData.selectedCoachingTeams)
+          ? profileData.selectedCoachingTeams.slice(0, 5)
+          : [];
+
+        if (selectedCoachingTeams.length) {
+          const joinRequestRows = selectedCoachingTeams
+            .filter((team: any) => team?.team_id)
+            .map((team: any) => ({
+              team_id: team.team_id,
+              club_team_id: team.club_team_id || null,
+              league_id: team.league_id || null,
+              age_group: team.age_group || null,
+              coach_user_id: sessionUserId,
+              staff_role: profileData.coachingRoleType || null,
+              message: role === "academy_director" ? "Selected during club director/team staff signup." : "Selected during coach signup.",
+              status: "pending",
+              requested_at: new Date().toISOString(),
+            }));
+
+          const { error: joinRequestError } = await (supabase as any)
+            .from("coach_staff_join_requests")
+            .insert(joinRequestRows);
+
+          if (joinRequestError?.message?.includes("club_team_id") || joinRequestError?.message?.includes("league_id") || joinRequestError?.message?.includes("age_group")) {
+            const basicRows = joinRequestRows.map(({ club_team_id, league_id, age_group, ...row }: any) => row);
+            const { error: basicJoinRequestError } = await (supabase as any)
+              .from("coach_staff_join_requests")
+              .insert(basicRows);
+            if (basicJoinRequestError) throw basicJoinRequestError;
+          } else if (joinRequestError) {
+            throw joinRequestError;
+          }
+        }
+      }
+
+      if (role === "player") {
+        const normalizedJerseyNumber = profileData.jerseyNumber ? String(profileData.jerseyNumber).trim() : null;
+
+        const { error: playerGenderError } = await (supabase as any)
+          .from("player_profiles")
+          .update({
+            jersey_number: normalizedJerseyNumber,
+            player_gender: profileData.gender,
+          })
+          .eq("user_id", sessionUserId);
+
+        if (playerGenderError) throw playerGenderError;
+
+        const { error: legacyPlayerError } = await (supabase as any)
+          .from("players")
+          .upsert(
+            {
+              user_id: sessionUserId,
+              name: profileData.fullName || "",
+              club: profileData.team || "",
+              league: "",
+              position: profileData.position || null,
+              jersey_number: normalizedJerseyNumber,
+              height: profileData.height || null,
+              weight: profileData.weight || null,
+              contact_email: profileData.contactEmail ? String(profileData.contactEmail).trim().toLowerCase() : null,
+              contact_phone: profileData.contactPhone || null,
+              profile_image_url: null,
+              player_gender: profileData.gender,
+            },
+            { onConflict: "user_id" }
+          );
+
+        if (legacyPlayerError) throw legacyPlayerError;
+      }
+
+      if (role === "parent") {
+        await (supabase as any)
+          .from("parent_profiles")
+          .upsert(
+            {
+              user_id: sessionUserId,
+              full_name: profileData.fullName || "",
+              relationship_to_player: profileData.relationshipToPlayer || null,
+              contact_email: profileData.contactEmail ? String(profileData.contactEmail).trim().toLowerCase() : normalizedEmail,
+              contact_phone: profileData.contactPhone || null,
+              emergency_contact: profileData.emergencyContact || null,
+              child_full_name: profileData.childFullName || null,
+              child_where_plays: profileData.childWherePlays || null,
+              child_team: profileData.childTeam || null,
+              child_league: profileData.childLeague || null,
+              child_age_group: profileData.childAgeGroup || null,
+              parent_notes: profileData.parentNotes || null,
+            },
+            { onConflict: "user_id" }
+          );
+      }
+
+      if (role === "team_club") {
+        const teamType = profileData.teamType === "school" ? "school" : "club";
+        const schoolLevel = profileData.schoolLevel || null;
+        const teamDisplayName = teamType === "school" ? profileData.schoolName || profileData.clubName : profileData.clubName;
+        const leagueConference = teamType === "school" ? profileData.leagueConference || null : null;
+        const normalizedOfferedTeams = (profileData.offeredTeams || [])
+          .map((team: any) => ({
+            ...team,
+            team_type: teamType,
+            school_level: team.level?.trim() || schoolLevel,
+            age_group: team.age_group?.trim() || "",
+            league_name: team.league_name?.trim() || "",
+            gender: team.gender?.trim() || null,
+            season: team.season?.trim() || null,
+            level: team.level?.trim() || null,
+            coach_name: team.coach_name?.trim() || null,
+            status: team.status || "active",
+          }))
+          .filter((team: any) => team.age_group && team.league_name);
+        const leaguesOffered = [...new Set(normalizedOfferedTeams.map((team: any) => team.league_name))];
+        const ageGroupsOffered = [...new Set(normalizedOfferedTeams.map((team: any) => team.age_group))];
+
+        const initialTeamProfileUpsert = await (supabase as any)
+          .from("team_profiles")
+          .upsert(
+            {
+              user_id: sessionUserId,
+              club_name: teamDisplayName || null,
+              leagues_offered: leaguesOffered,
+              founded_year: profileData.foundedYear ? Number(profileData.foundedYear) : null,
+              city: normalizedCity || null,
+              country: profileData.country || null,
+              home_stadium: profileData.homeFieldAddress || null,
+              training_ground: profileData.trainingGroundAddress || null,
+              home_jersey_color: profileData.homeJerseyColor || null,
+              away_jersey_color: profileData.awayJerseyColor || null,
+              third_kit_color: profileData.thirdKitColor || null,
+              age_groups_offered: ageGroupsOffered,
+              contact_email: profileData.contactEmail ? String(profileData.contactEmail).trim().toLowerCase() : null,
+              contact_phone: profileData.contactPhone || null,
+              team_type: teamType,
+              school_level: schoolLevel,
+              school_name: teamType === "school" ? profileData.schoolName || null : null,
+              team_mascot: teamType === "school" ? profileData.teamMascot || null : null,
+              sport: teamType === "school" ? profileData.sport || "Soccer" : null,
+              league_conference: leagueConference,
+              school_website: teamType === "school" ? profileData.schoolWebsite || null : null,
+              head_coach_name: teamType === "school" ? profileData.headCoachName || null : null,
+              head_coach_email: teamType === "school" ? profileData.headCoachEmail || null : null,
+              head_coach_phone: teamType === "school" ? profileData.headCoachPhone || null : null,
+              team_colors: teamType === "school" ? profileData.teamColors || null : null,
+              social_links: teamType === "school" ? profileData.socialLinks || null : null,
+            },
+            { onConflict: "user_id" }
+          );
+
+        if (initialTeamProfileUpsert.error) {
+          const fallbackTeamProfile = await (supabase as any).rpc("save_team_account_profile", {
+            _club_name: teamDisplayName || null,
+            _leagues_offered: leaguesOffered,
+            _age_groups_offered: ageGroupsOffered,
+            _city: normalizedCity || null,
+            _home_stadium: profileData.homeFieldAddress || null,
+            _training_ground: profileData.trainingGroundAddress || null,
+            _contact_email: profileData.contactEmail ? String(profileData.contactEmail).trim().toLowerCase() : null,
+            _contact_phone: profileData.contactPhone || null,
+          });
+
+          if (fallbackTeamProfile.error) {
+            throw new Error(fallbackTeamProfile.error.message || "We couldn't create your team profile.");
+          }
+        }
+
+        let { error: saveClubProfileError } = await (supabase as any).rpc("save_club_profile", {
+          _club_name: teamDisplayName || null,
+          _city: normalizedCity || null,
+          _founded_year: profileData.foundedYear ? Number(profileData.foundedYear) : null,
+          _home_field_address: profileData.homeFieldAddress || null,
+          _training_ground_address: profileData.trainingGroundAddress || null,
+          _contact_email: profileData.contactEmail ? String(profileData.contactEmail).trim().toLowerCase() : null,
+          _contact_phone: profileData.contactPhone || null,
+          _offered_teams: normalizedOfferedTeams,
+          _staff: (profileData.staffMembers || []).map((staff: any) => ({
+            staff_name: staff.name || "",
+            staff_role: staff.role || "",
+            personal_email: staff.personalEmail || "",
+          })),
+        });
+
+        if (saveClubProfileError?.message?.toLowerCase().includes("team profile not found")) {
+          const fallbackTeamProfile = await (supabase as any).rpc("save_team_account_profile", {
+            _club_name: teamDisplayName || null,
+            _leagues_offered: leaguesOffered,
+            _age_groups_offered: ageGroupsOffered,
+            _city: normalizedCity || null,
+            _home_stadium: profileData.homeFieldAddress || null,
+            _training_ground: profileData.trainingGroundAddress || null,
+            _contact_email: profileData.contactEmail ? String(profileData.contactEmail).trim().toLowerCase() : null,
+            _contact_phone: profileData.contactPhone || null,
+          });
+
+          if (!fallbackTeamProfile.error) {
+            const retry = await (supabase as any).rpc("save_club_profile", {
+              _club_name: profileData.clubName || null,
+              _city: normalizedCity || null,
+              _founded_year: profileData.foundedYear ? Number(profileData.foundedYear) : null,
+              _home_field_address: profileData.homeFieldAddress || null,
+              _training_ground_address: profileData.trainingGroundAddress || null,
+              _contact_email: profileData.contactEmail ? String(profileData.contactEmail).trim().toLowerCase() : null,
+              _contact_phone: profileData.contactPhone || null,
+              _offered_teams: normalizedOfferedTeams,
+              _staff: (profileData.staffMembers || []).map((staff: any) => ({
+                staff_name: staff.name || "",
+                staff_role: staff.role || "",
+                personal_email: staff.personalEmail || "",
+              })),
+            });
+            saveClubProfileError = retry.error;
+          }
+        }
+
+        if (saveClubProfileError) {
+          throw new Error(saveClubProfileError.message || "We couldn't save your offered teams.");
+        }
+
+        const { data: teamProfileRow } = await (supabase as any)
+          .from("team_profiles")
+          .select("id, team_id")
+          .eq("user_id", sessionUserId)
+          .maybeSingle();
+
+        const firstLeagueName = leaguesOffered[0] || null;
+        const firstAgeGroup = ageGroupsOffered[0] || null;
+        let leagueId: string | null = null;
+
+        if (firstLeagueName) {
+          const { data: matchedLeague } = await (supabase as any)
+            .from("leagues")
+            .select("id")
+            .ilike("name", firstLeagueName)
+            .maybeSingle();
+          leagueId = matchedLeague?.id || null;
+        }
+
+        await (supabase as any)
+          .from("team_profiles")
+          .upsert(
+            {
+              user_id: sessionUserId,
+              club_name: teamDisplayName || null,
+              leagues_offered: leaguesOffered,
+              founded_year: profileData.foundedYear ? Number(profileData.foundedYear) : null,
+              city: normalizedCity || null,
+              country: profileData.country || null,
+              home_stadium: profileData.homeFieldAddress || null,
+              training_ground: profileData.trainingGroundAddress || null,
+              home_jersey_color: profileData.homeJerseyColor || null,
+              away_jersey_color: profileData.awayJerseyColor || null,
+              third_kit_color: profileData.thirdKitColor || null,
+              age_groups_offered: ageGroupsOffered,
+              contact_email: profileData.contactEmail ? String(profileData.contactEmail).trim().toLowerCase() : null,
+              contact_phone: profileData.contactPhone || null,
+              team_type: teamType,
+              school_level: schoolLevel,
+              school_name: teamType === "school" ? profileData.schoolName || null : null,
+              team_mascot: teamType === "school" ? profileData.teamMascot || null : null,
+              sport: teamType === "school" ? profileData.sport || "Soccer" : null,
+              league_conference: leagueConference,
+              school_website: teamType === "school" ? profileData.schoolWebsite || null : null,
+              head_coach_name: teamType === "school" ? profileData.headCoachName || null : null,
+              head_coach_email: teamType === "school" ? profileData.headCoachEmail || null : null,
+              head_coach_phone: teamType === "school" ? profileData.headCoachPhone || null : null,
+              team_colors: teamType === "school" ? profileData.teamColors || null : null,
+              social_links: teamType === "school" ? profileData.socialLinks || null : null,
+            },
+            { onConflict: "user_id" }
+          );
+
+        const { data: refreshedTeamProfileRow } = await (supabase as any)
+          .from("team_profiles")
+          .select("id, team_id")
+          .eq("user_id", sessionUserId)
+          .maybeSingle();
+
+        let resolvedTeamId = refreshedTeamProfileRow?.team_id || teamProfileRow?.team_id || null;
+
+        if (!resolvedTeamId) {
+          const { data: existingTeam } = await (supabase as any)
+            .from("teams")
+            .select("id")
+            .eq("owner_user_id", sessionUserId)
+            .maybeSingle();
+          resolvedTeamId = existingTeam?.id || null;
+        }
+
+        if (!resolvedTeamId && profileData.clubName) {
+          const { data: namedTeam } = await (supabase as any)
+            .from("teams")
+            .select("id")
+            .eq("name", profileData.clubName)
+            .maybeSingle();
+          resolvedTeamId = namedTeam?.id || null;
+        }
+
+        if (resolvedTeamId) {
+          const teamPayload = {
+            name: teamDisplayName || null,
+            league_id: leagueId,
+            age_group: firstAgeGroup,
+            contact_email: profileData.contactEmail ? String(profileData.contactEmail).trim().toLowerCase() : null,
+            contact_phone: profileData.contactPhone || null,
+            founded_year: profileData.foundedYear ? Number(profileData.foundedYear) : null,
+            stadium: profileData.homeFieldAddress || null,
+            home_jersey_color: profileData.homeJerseyColor || null,
+            away_jersey_color: profileData.awayJerseyColor || null,
+            third_kit_color: profileData.thirdKitColor || null,
+            owner_user_id: sessionUserId,
+            approval_status: "approved",
+            team_type: teamType,
+            school_level: schoolLevel,
+            school_name: teamType === "school" ? profileData.schoolName || null : null,
+            team_mascot: teamType === "school" ? profileData.teamMascot || null : null,
+            sport: teamType === "school" ? profileData.sport || "Soccer" : null,
+            conference_name: leagueConference,
+            school_website: teamType === "school" ? profileData.schoolWebsite || null : null,
+            head_coach_name: teamType === "school" ? profileData.headCoachName || null : null,
+            head_coach_email: teamType === "school" ? profileData.headCoachEmail || null : null,
+            head_coach_phone: teamType === "school" ? profileData.headCoachPhone || null : null,
+            team_colors: teamType === "school" ? profileData.teamColors || null : null,
+            social_links: teamType === "school" ? profileData.socialLinks || null : null,
+          };
+
+          let updateResult = await (supabase as any)
+            .from("teams")
+            .update(teamPayload)
+            .eq("id", resolvedTeamId);
+
+          if (isMissingAgeGroupColumnError(updateResult.error)) {
+            const { age_group: _ignoredAgeGroup, ...fallbackPayload } = teamPayload;
+            updateResult = await (supabase as any)
+              .from("teams")
+              .update(fallbackPayload)
+              .eq("id", resolvedTeamId);
+          }
+        } else {
+          const teamPayload = {
+            name: teamDisplayName || "Team",
+            league_id: leagueId,
+            age_group: firstAgeGroup,
+            contact_email: profileData.contactEmail ? String(profileData.contactEmail).trim().toLowerCase() : null,
+            contact_phone: profileData.contactPhone || null,
+            founded_year: profileData.foundedYear ? Number(profileData.foundedYear) : null,
+            stadium: profileData.homeFieldAddress || null,
+            home_jersey_color: profileData.homeJerseyColor || null,
+            away_jersey_color: profileData.awayJerseyColor || null,
+            third_kit_color: profileData.thirdKitColor || null,
+            owner_user_id: sessionUserId,
+            approval_status: "approved",
+            team_type: teamType,
+            school_level: schoolLevel,
+            school_name: teamType === "school" ? profileData.schoolName || null : null,
+            team_mascot: teamType === "school" ? profileData.teamMascot || null : null,
+            sport: teamType === "school" ? profileData.sport || "Soccer" : null,
+            conference_name: leagueConference,
+            school_website: teamType === "school" ? profileData.schoolWebsite || null : null,
+            head_coach_name: teamType === "school" ? profileData.headCoachName || null : null,
+            head_coach_email: teamType === "school" ? profileData.headCoachEmail || null : null,
+            head_coach_phone: teamType === "school" ? profileData.headCoachPhone || null : null,
+            team_colors: teamType === "school" ? profileData.teamColors || null : null,
+            social_links: teamType === "school" ? profileData.socialLinks || null : null,
+          };
+
+          let insertResult = await (supabase as any)
+            .from("teams")
+            .insert(teamPayload)
+            .select("id")
+            .maybeSingle();
+
+          if (isMissingAgeGroupColumnError(insertResult.error)) {
+            const { age_group: _ignoredAgeGroup, ...fallbackPayload } = teamPayload;
+            insertResult = await (supabase as any)
+              .from("teams")
+              .insert(fallbackPayload)
+              .select("id")
+              .maybeSingle();
+          }
+
+          resolvedTeamId = insertResult.data?.id || null;
+        }
+
+        if (refreshedTeamProfileRow?.id && resolvedTeamId) {
+          await (supabase as any)
+            .from("team_profiles")
+            .update({ team_id: resolvedTeamId })
+            .eq("id", refreshedTeamProfileRow.id);
+
+          if (teamType === "school") {
+            await Promise.all(
+              normalizedOfferedTeams.map((team: any) =>
+                (supabase as any)
+                  .from("club_teams")
+                  .update({
+                    team_type: "school",
+                    school_level: team.school_level || null,
+                  })
+                  .eq("team_id", resolvedTeamId)
+                  .eq("age_group", team.age_group)
+                  .eq("league_name", team.league_name)
+              )
+            );
+          }
+        }
+
+        if (refreshedTeamProfileRow?.id) {
+          await (supabase as any).from("team_staff").delete().eq("team_profile_id", refreshedTeamProfileRow.id);
+
+          const staffRows = (profileData.staffMembers || [])
+            .filter((staff: any) => staff?.name?.trim() || staff?.role?.trim() || staff?.personalEmail?.trim())
+            .map((staff: any) => ({
+              team_profile_id: refreshedTeamProfileRow.id,
+              staff_name: staff.name?.trim() || "Staff Member",
+              staff_role: staff.role?.trim() || "Staff",
+              personal_email: staff.personalEmail?.trim()?.toLowerCase() || null,
+            }));
+
+          if (staffRows.length) {
+            const staffInsert = await (supabase as any).from("team_staff").insert(staffRows);
+
+            if (staffInsert.error?.message?.includes("personal_email")) {
+              await (supabase as any)
+                .from("team_staff")
+                .insert(
+                  staffRows.map(({ team_profile_id, staff_name, staff_role }: any) => ({
+                    team_profile_id,
+                    staff_name,
+                    staff_role,
+                  }))
+                );
+            }
+          }
+        }
+      }
+
+      toast({ title: "Account created!", description: "Welcome to FootyStatus." });
+      clearSignupFlow();
+      navigate("/");
+    } catch (error) {
+      console.error("Signup error:", error);
+      toast({
+        title: "Signup failed",
+        description: getUsernameErrorMessage(getAuthErrorMessage(error)),
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePlayerSubmit = (data: any) => createUserAndProfile(data, 'player');
+  const handleTeamSubmit = (data: any) => createUserAndProfile(data, 'team_club');
+  const handleStaffSubmit = (data: any) => createUserAndProfile(data, staffType!);
+  const handleParentSubmit = (data: any) => createUserAndProfile(data, 'parent');
+  const handleRefereeSubmit = (data: any) => createUserAndProfile(data, 'referee');
+
+  const handleLoginGoogleAuth = async () => {
+    if (embeddedBrowser) {
+      toast({
+        title: "Open Google sign-in in Safari",
+        description: embeddedGoogleAuthMessage,
+        variant: "destructive",
+      });
+      return;
+    }
+    setLoading(true);
+    try {
+      await supabase.auth.signOut({ scope: "local" });
+      clearStoredAuthSession();
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: buildAppUrl("/"),
+          queryParams: {
+            prompt: "select_account",
+            include_granted_scopes: "true",
+          },
+        },
+      });
+      if (error) throw error;
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+      setLoading(false);
+    }
+  };
+
+  const goBack = () => {
+    clearSignupFlow();
+    if (signupStep === 'profile_form') setSignupStep('auth_method');
+    else if (signupStep === 'auth_method') {
+      if (accountType === 'team_staff') setSignupStep('staff_type');
+      else setSignupStep('account_type');
+    } else if (signupStep === 'staff_type') setSignupStep('account_type');
+    else if (signupStep === 'account_type') setIsLogin(true);
+  };
+
+  // Profile form step
+  if (!isLogin && signupStep === 'profile_form') {
+    return (
+      <AuthShell backAction={goBack}>
+        <div className="w-full max-w-md space-y-6">
+          <div className="flex justify-center mb-4">
+            <img src={logo} alt="FootyStatus" className="h-28 w-auto" />
+          </div>
+          {accountType === 'player' && <PlayerProfileForm email={email} onSubmit={handlePlayerSubmit} onBack={goBack} loading={loading} />}
+          {accountType === 'team_staff' && (staffType === 'team_club' || staffType === 'school_team') && (
+            <TeamProfileForm
+              email={email}
+              teamType={staffType === 'school_team' ? 'school' : 'club'}
+              onSubmit={handleTeamSubmit}
+              onBack={goBack}
+              loading={loading}
+            />
+          )}
+          {accountType === 'team_staff' && staffType && staffType !== 'team_club' && staffType !== 'school_team' && <StaffProfileForm email={email} staffType={staffType as any} onSubmit={handleStaffSubmit} onBack={goBack} loading={loading} />}
+          {accountType === 'parent' && <ParentProfileForm email={email} onSubmit={handleParentSubmit} onBack={goBack} loading={loading} />}
+          {accountType === 'referee' && <RefereeProfileForm email={email} onSubmit={handleRefereeSubmit} onBack={goBack} loading={loading} />}
+        </div>
+      </AuthShell>
+    );
+  }
+
+  // Auth method step
+  if (!isLogin && signupStep === 'auth_method') {
+    return (
+      <AuthShell backAction={goBack}>
+        <div className="w-full max-w-sm space-y-6">
+          <div className="flex justify-center mb-4"><img src={logo} alt="FootyStatus" className="h-28 w-auto" /></div>
+          <AuthMethodSelector
+            onGoogleAuth={handleGoogleAuth}
+            onEmailAuth={handleEmailAuth}
+            loading={loading}
+            accountTypeLabel={getAccountTypeLabel()}
+            disableGoogleAuth={embeddedBrowser}
+            googleAuthHelperText={embeddedBrowser ? embeddedGoogleAuthMessage : null}
+          />
+        </div>
+      </AuthShell>
+    );
+  }
+
+  // Staff type step
+  if (!isLogin && signupStep === 'staff_type') {
+    return (
+      <AuthShell backAction={goBack}>
+        <div className="w-full max-w-sm space-y-6">
+          <div className="flex justify-center mb-4"><img src={logo} alt="FootyStatus" className="h-28 w-auto" /></div>
+          <StaffTypeSelector onSelect={handleStaffTypeSelect} onBack={goBack} />
+        </div>
+      </AuthShell>
+    );
+  }
+
+  // Account type step
+  if (!isLogin && signupStep === 'account_type') {
+    return (
+      <AuthShell backAction={goBack}>
+        <div className="w-full max-w-lg space-y-6">
+          <div className="flex justify-center mb-4"><img src={logo} alt="FootyStatus" className="h-28 w-auto" /></div>
+          {authReason === "login_required" ? (
+            <div className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-center text-sm text-foreground">
+              Log in or create an account to view full profiles, teams, leagues, and match details.
+            </div>
+          ) : null}
+          <AccountTypeSelector onSelect={handleAccountTypeSelect} />
+        </div>
+      </AuthShell>
+    );
+  }
+
+  // Forgot password view
+  if (showForgotPassword) {
+    return (
+      <AuthShell backAction={() => setShowForgotPassword(false)}>
+        <div className="w-full max-w-sm space-y-8">
+          <div className="flex flex-col items-center">
+            <img src={logo} alt="FootyStatus" className="h-28 w-auto mb-6" />
+            <h1 className="text-2xl font-bold text-foreground">Reset Password</h1>
+            <p className="text-muted-foreground mt-2 text-center">Enter your email and we'll send you a reset link</p>
+          </div>
+          <form onSubmit={handleForgotPassword} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="forgot-email">Email</Label>
+              <div className="relative">
+                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input id="forgot-email" type="email" placeholder="you@example.com" value={forgotEmail} onChange={(e) => setForgotEmail(e.target.value)} className="pl-10 border-2 focus:border-navy" required />
+              </div>
+            </div>
+            <Button type="submit" className="w-full h-12 bg-gradient-to-r from-navy to-primary font-semibold" disabled={forgotLoading}>
+              {forgotLoading ? "Sending..." : "Send Reset Link"}
+            </Button>
+          </form>
+          <p className="text-center text-sm text-muted-foreground">
+            Remember your password?{" "}
+            <button onClick={() => setShowForgotPassword(false)} className="font-semibold text-primary hover:underline">Sign in</button>
+          </p>
+        </div>
+      </AuthShell>
+    );
+  }
+
+  // Login form
+  return (
+    <AuthShell backAction={() => navigate("/")}>
+      <div className="w-full max-w-sm space-y-8">
+        <div className="flex flex-col items-center">
+          <img src={logo} alt="FootyStatus" className="h-28 w-auto mb-6" />
+          <h1 className="text-2xl font-bold text-foreground">Welcome Back</h1>
+          <p className="text-muted-foreground mt-2">Sign in to continue</p>
+        </div>
+
+        {embeddedBrowser ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-900">
+            {embeddedGoogleAuthMessage}
+          </div>
+        ) : null}
+
+        <Button
+          variant="outline"
+          className="w-full h-12 gap-3 font-medium border-2 hover:border-navy hover:bg-navy/5 transition-all"
+          onClick={handleLoginGoogleAuth}
+          disabled={loading || embeddedBrowser}
+        >
+          <svg className="h-5 w-5" viewBox="0 0 24 24">
+            <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+            <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+            <path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+            <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+          </svg>
+          Continue with Google
+        </Button>
+
+        <div className="relative">
+          <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-border" /></div>
+          <div className="relative flex justify-center text-xs uppercase"><span className="bg-background px-2 text-muted-foreground">Or continue with email</span></div>
+        </div>
+
+        <form onSubmit={handleLogin} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="email">Email</Label>
+            <div className="relative">
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input id="email" type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} className="pl-10 border-2 focus:border-navy" required />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <div className="flex justify-between items-center">
+              <Label htmlFor="password">Password</Label>
+              <button type="button" onClick={() => setShowForgotPassword(true)} className="text-xs text-primary hover:underline">Forgot password?</button>
+            </div>
+            <div className="relative">
+              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input id="password" type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} className="pl-10 border-2 focus:border-navy" required minLength={6} />
+            </div>
+          </div>
+          <Button type="submit" className="w-full h-12 bg-gradient-to-r from-navy to-primary hover:from-navy-light hover:to-primary font-semibold shadow-lg transition-all" disabled={loading}>
+            {loading ? "Signing in..." : "Sign In"}
+          </Button>
+        </form>
+
+        <p className="text-center text-sm text-muted-foreground">
+          Don't have an account?{" "}
+          <button onClick={() => setIsLogin(false)} className="font-semibold text-primary hover:underline">Sign up</button>
+        </p>
+      </div>
+    </AuthShell>
+  );
+};
+
+export default AuthPage;

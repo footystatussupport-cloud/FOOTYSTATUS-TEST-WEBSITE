@@ -1,0 +1,1 @@
+ALTER TABLE public.player_profiles ADD COLUMN IF NOT EXISTS coach_email text;
