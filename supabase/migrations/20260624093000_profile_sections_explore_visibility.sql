@@ -43,8 +43,6 @@ select
   pp.full_name,
   coalesce(am.team_name, pp.team) as team,
   pp.position,
-  pp.school_grade,
-  pp.player_gender,
   pp.height,
   pp.weight,
   pp.profile_image_url,
@@ -64,7 +62,9 @@ select
   ls.points as team_points,
   ls.wins as team_wins,
   ls.draws as team_draws,
-  ls.losses as team_losses
+  ls.losses as team_losses,
+  pp.school_grade,
+  pp.player_gender
 from public.player_profiles pp
 left join public.profiles p on p.user_id = pp.user_id
 left join active_membership am on am.player_user_id = pp.user_id
