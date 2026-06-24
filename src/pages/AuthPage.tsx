@@ -72,8 +72,10 @@ const mapRoleForLegacyBackend = (role: string) => {
   switch (role) {
     case "team_club":
       return "team";
+    case "school_team":
+      return "team";
     case "referee":
-      return "coach";
+      return "referee";
     case "head_coach_assistant":
       return "coach";
     default:
@@ -585,11 +587,22 @@ const AuthPage = () => {
 
         const { error: playerGenderError } = await (supabase as any)
           .from("player_profiles")
-          .update({
+          .upsert({
+            user_id: sessionUserId,
+            full_name: profileData.fullName || "",
+            date_of_birth: profileData.dateOfBirth || null,
+            position: profileData.position || null,
+            team: profileData.team || null,
+            height: profileData.height || null,
+            weight: profileData.weight || null,
+            contact_email: profileData.contactEmail ? String(profileData.contactEmail).trim().toLowerCase() : normalizedEmail,
+            contact_phone: profileData.contactPhone || null,
+            school_grade: profileData.schoolGrade || null,
+            preferred_foot: profileData.preferredFoot || null,
+            coach_email: profileData.coachEmail ? String(profileData.coachEmail).trim().toLowerCase() : null,
             jersey_number: normalizedJerseyNumber,
             player_gender: profileData.gender,
-          })
-          .eq("user_id", sessionUserId);
+          }, { onConflict: "user_id" });
 
         if (playerGenderError) throw playerGenderError;
 
@@ -613,7 +626,9 @@ const AuthPage = () => {
             { onConflict: "user_id" }
           );
 
-        if (legacyPlayerError) throw legacyPlayerError;
+        if (legacyPlayerError) {
+          console.warn("Legacy player mirror save failed after account setup succeeded:", legacyPlayerError);
+        }
       }
 
       if (role === "parent") {
@@ -981,7 +996,7 @@ const AuthPage = () => {
         }
       }
 
-      toast({ title: "Account created!", description: "Welcome to FootyStatus." });
+      toast({ title: "Welcome to Footy Status!", description: "Your account has been created successfully." });
       clearSignupFlow();
       navigate("/");
     } catch (error) {

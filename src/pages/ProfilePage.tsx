@@ -75,6 +75,7 @@ interface ProfileData {
   club_name: string | null;
   position: string | null;
   jersey_number: string | null;
+  school_grade?: string | null;
   height: string | null;
   weight: string | null;
   is_pro: boolean;
@@ -868,6 +869,7 @@ const ProfilePage = () => {
       team_name: profile?.team_name || "",
       position: profile?.position || "",
       jersey_number: profile?.jersey_number || "",
+      school_grade: profile?.school_grade || "",
       height: profile?.height || "",
       weight: profile?.weight || "",
     };
@@ -1675,14 +1677,27 @@ const ProfilePage = () => {
     if (accountRole === "player") {
       const { data: playerAccount } = await (supabase as any)
         .from("player_profiles")
-        .select("jersey_number")
+        .select("jersey_number, school_grade, team, position, height, weight")
         .eq("user_id", activeProfile.user_id)
         .maybeSingle();
 
-      setProfile((prev) => (prev ? { ...prev, jersey_number: playerAccount?.jersey_number || null } : prev));
+      setProfile((prev) => (prev ? {
+        ...prev,
+        jersey_number: playerAccount?.jersey_number || prev.jersey_number || null,
+        school_grade: playerAccount?.school_grade || prev.school_grade || null,
+        team_name: prev.team_name || playerAccount?.team || null,
+        position: prev.position || playerAccount?.position || null,
+        height: prev.height || playerAccount?.height || null,
+        weight: prev.weight || playerAccount?.weight || null,
+      } : prev));
       setEditForm((prev) => ({
         ...prev,
-        jersey_number: playerAccount?.jersey_number || "",
+        jersey_number: playerAccount?.jersey_number || prev.jersey_number || "",
+        school_grade: playerAccount?.school_grade || prev.school_grade || "",
+        team_name: prev.team_name || playerAccount?.team || "",
+        position: prev.position || playerAccount?.position || "",
+        height: prev.height || playerAccount?.height || "",
+        weight: prev.weight || playerAccount?.weight || "",
       }));
       setPlayerParentLinks(await fetchParentLinksForPlayerUser(activeProfile.user_id));
     }
@@ -2463,6 +2478,7 @@ const ProfilePage = () => {
             team: editForm.team_name || null,
             position: editForm.position || null,
             jersey_number: editForm.jersey_number || null,
+            school_grade: editForm.school_grade || null,
             height: editForm.height || null,
             weight: editForm.weight || null,
           })
@@ -4208,6 +4224,10 @@ const ProfilePage = () => {
                   <Input value={editForm.age_birth_year || ""} onChange={(e) => setEditForm({ ...editForm, age_birth_year: e.target.value })} placeholder="e.g. 2008" />
                 </div>
                 <div>
+                  <label className="text-sm text-muted-foreground">School Grade</label>
+                  <Input value={editForm.school_grade || ""} onChange={(e) => setEditForm({ ...editForm, school_grade: e.target.value })} placeholder="e.g. 10th" />
+                </div>
+                <div>
                   <label className="text-sm text-muted-foreground">Height</label>
                   <Input value={editForm.height || ""} onChange={(e) => setEditForm({ ...editForm, height: e.target.value })} placeholder="e.g. 5'10" />
                 </div>
@@ -5028,6 +5048,12 @@ const ProfilePage = () => {
                   <div className="flex items-center gap-3 p-4">
                     <Calendar className="h-5 w-5 text-muted-foreground" />
                     <div><p className="text-sm text-muted-foreground">Birth Year</p><p className="font-medium">{profile.age_birth_year}</p></div>
+                  </div>
+                )}
+                {profile?.school_grade && (
+                  <div className="flex items-center gap-3 p-4">
+                    <Calendar className="h-5 w-5 text-muted-foreground" />
+                    <div><p className="text-sm text-muted-foreground">School Grade</p><p className="font-medium">{profile.school_grade}</p></div>
                   </div>
                 )}
                 {profile?.height && (
