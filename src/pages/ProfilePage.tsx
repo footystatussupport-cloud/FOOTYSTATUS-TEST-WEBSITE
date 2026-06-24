@@ -3835,7 +3835,7 @@ const ProfilePage = () => {
     }
 
     setCreatingDaughterTeam(true);
-    const { error } = await createDaughterTeam({
+    const daughterPayload = {
       parentTeamId,
       ageGroup: isSchool ? null : ageGroup,
       leagueOrConference,
@@ -3843,10 +3843,23 @@ const ProfilePage = () => {
       gender: daughterTeamForm.gender as "boy" | "girl",
       season: daughterTeamForm.season.trim() || null,
       level: isSchool ? daughterTeamForm.school_level : daughterTeamForm.level.trim() || null,
-    });
+    };
+    const { error } = await createDaughterTeam(daughterPayload);
 
     if (error) {
-      toast({ title: "Could not create daughter team", description: error.message, variant: "destructive" });
+      console.error("Daughter team creation failed", {
+        currentUserId: user?.id,
+        accountType: profile?.account_role || profile?.account_category || profile?.role,
+        motherProfile: teamAccountData,
+        motherProfileId: teamAccountData?.id,
+        daughterTeamPayload: daughterPayload,
+        databaseError: error,
+      });
+      toast({
+        title: "Could not create daughter team",
+        description: "We could not create this daughter team because the main school/club profile was not ready. Please try again.",
+        variant: "destructive",
+      });
       setCreatingDaughterTeam(false);
       return;
     }
