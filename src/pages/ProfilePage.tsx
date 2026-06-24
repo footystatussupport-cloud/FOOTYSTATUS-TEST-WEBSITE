@@ -2469,11 +2469,24 @@ const ProfilePage = () => {
       }
     }
 
+    const currentPlayerDetails = isPlayerAccount
+      ? await (supabase as any)
+          .from("player_profiles")
+          .select("team, position, school_grade, height, weight, jersey_number")
+          .eq("user_id", user.id)
+          .maybeSingle()
+      : { data: null };
+    const preservedPlayerTeamName =
+      editForm.team_name?.trim() ||
+      profile.team_name?.trim() ||
+      currentPlayerDetails.data?.team?.trim() ||
+      null;
+
     const profileUpdate = {
       full_name: editForm.full_name,
       bio: normalizedBio as any,
       age_birth_year: editForm.age_birth_year as any,
-      team_name: editForm.team_name as any,
+      team_name: isPlayerAccount ? preservedPlayerTeamName : editForm.team_name as any,
       position: editForm.position as any,
       height: editForm.height as any,
       weight: editForm.weight as any,
@@ -2490,16 +2503,16 @@ const ProfilePage = () => {
       if (isPlayerAccount) {
         const { error: playerProfileError } = await supabase
           .from('player_profiles')
-          .update({
+          .upsert({
+            user_id: user.id,
             full_name: editForm.full_name || null,
-            team: editForm.team_name || null,
-            position: editForm.position || null,
-            jersey_number: editForm.jersey_number || null,
-            school_grade: editForm.school_grade || null,
-            height: editForm.height || null,
-            weight: editForm.weight || null,
-          })
-          .eq('user_id', user.id);
+            team: preservedPlayerTeamName,
+            position: editForm.position || currentPlayerDetails.data?.position || null,
+            jersey_number: editForm.jersey_number || currentPlayerDetails.data?.jersey_number || null,
+            school_grade: editForm.school_grade || currentPlayerDetails.data?.school_grade || null,
+            height: editForm.height || currentPlayerDetails.data?.height || null,
+            weight: editForm.weight || currentPlayerDetails.data?.weight || null,
+          }, { onConflict: "user_id" });
 
         if (playerProfileError) {
           toast({ title: "Error", description: playerProfileError.message, variant: "destructive" });
@@ -2508,7 +2521,13 @@ const ProfilePage = () => {
         }
 
       } else if (isTeamAccount) {
-        const teamDisplayName = editForm.display_name?.trim() || editForm.club_name?.trim() || null;
+        const teamDisplayName =
+          editForm.display_name?.trim() ||
+          editForm.club_name?.trim() ||
+          teamAccountData?.club_name?.trim() ||
+          profile.club_name?.trim() ||
+          profile.full_name?.trim() ||
+          null;
         const duplicateKey = getOfferedTeamDuplicate(offeredClubTeams);
         if (duplicateKey) {
           toast({ title: "Duplicate team combination", description: "This club already has that exact offered team.", variant: "destructive" });
@@ -2687,7 +2706,7 @@ const ProfilePage = () => {
               emergency_contact: editForm.emergency_contact?.trim() || null,
               child_full_name: editForm.child_full_name?.trim() || null,
               child_where_plays: editForm.child_where_plays?.trim() || null,
-              child_team: editForm.child_team?.trim() || null,
+              child_team: editForm.child_team?.trim() || parentAccountData?.child_team || null,
               child_league: editForm.child_league?.trim() || null,
               child_age_group: editForm.child_age_group?.trim() || null,
               parent_notes: editForm.parent_notes?.trim() || null,
@@ -2731,10 +2750,18 @@ const ProfilePage = () => {
                   ? "academy_director"
                   : "coach";
 
+        const preservedStaffTeamName =
+          editForm.team_organization_name?.trim() ||
+          staffAccountData?.team_organization_name ||
+          staffAccountData?.teams_currently_coaching ||
+          profile?.teams_currently_coaching ||
+          profile?.scout_organization ||
+          null;
+
         const { error: staffSetupError } = await (supabase as any).rpc("save_staff_account_profile", {
           _role: resolvedLegacyRole,
           _full_name: staffDisplayName,
-          _team_organization_name: editForm.team_organization_name?.trim() || null,
+          _team_organization_name: preservedStaffTeamName,
           _city: editForm.city?.trim() || null,
           _coaching_level: editForm.coaching_level || "",
           _years_experience: editForm.years_experience ? Number(editForm.years_experience) : null,
@@ -2768,7 +2795,7 @@ const ProfilePage = () => {
               user_id: user.id,
               full_name: staffDisplayName,
               role: profile?.role || "coach",
-              team_organization_name: editForm.team_organization_name?.trim() || null,
+              team_organization_name: preservedStaffTeamName,
               city: editForm.city?.trim() || null,
               coaching_level: editForm.coaching_level || null,
               years_experience: editForm.years_experience ? Number(editForm.years_experience) : null,
@@ -2809,7 +2836,7 @@ const ProfilePage = () => {
             full_name: staffDisplayName,
             email: editForm.contact_email?.trim().toLowerCase() || null,
             coaching_role_type: editForm.coaching_role_type?.trim() || null,
-            teams_currently_coaching: editForm.team_organization_name?.trim() || null,
+            teams_currently_coaching: preservedStaffTeamName,
             past_coaching_experience: editForm.previous_teams_text?.trim() || null,
             coaching_licenses: (editForm.coaching_licenses_text || "")
               .split(",")
