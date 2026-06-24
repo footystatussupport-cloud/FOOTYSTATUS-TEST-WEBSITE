@@ -750,6 +750,23 @@ const ProfilePage = () => {
   const editedClipDurationSeconds = Math.max(0, Math.round(clipTrimEnd - clipTrimStart));
   const visibleClipCount = clips.filter((clip) => clip.visibility !== "inactive" && clip.visibility !== "private").length;
   const daysRemaining = getDaysRemaining(profile);
+  const profileDetailValues = [
+    profile?.team_name,
+    profile?.club_name,
+    profile?.position,
+    profile?.school_grade,
+    profile?.age_birth_year,
+    profile?.height,
+    profile?.weight,
+    teamAccountData?.club_name,
+    staffAccountData?.team_organization_name,
+  ]
+    .filter(Boolean)
+    .map((value) => String(value).trim().toLowerCase());
+  const displayProfileBio =
+    profile?.bio && !profileDetailValues.includes(profile.bio.trim().toLowerCase())
+      ? profile.bio
+      : null;
 
   const getAccountRoleLabel = () => {
     const selectedStaffRole =
@@ -4086,7 +4103,7 @@ const ProfilePage = () => {
                   {profile?.username ? <span className="break-all text-muted-foreground">@{profile.username}</span> : null}
                 </div>
               ) : null}
-              {profile?.bio && <p className="mx-auto mt-1 w-full max-w-xs break-words whitespace-pre-wrap text-center text-sm text-muted-foreground" style={{ textAlign: "center" }}>{profile.bio}</p>}
+              {displayProfileBio && <p className="mx-auto mt-1 w-full max-w-xs break-words whitespace-pre-wrap text-center text-sm text-muted-foreground" style={{ textAlign: "center" }}>{displayProfileBio}</p>}
             </>
           )}
           {!isTeamAccount && !isOfficialFootyStatusAccount && !isPlayerAccount && (
@@ -4609,10 +4626,10 @@ const ProfilePage = () => {
                     <div><p className="text-sm text-muted-foreground">Accolades / Notable Matches</p><p className="font-medium">{profile.referee_accolades}</p></div>
                   </div>
                 ) : null}
-                {profile?.bio ? (
+                {displayProfileBio ? (
                   <div className="flex items-center gap-3 p-4">
                     <User className="h-5 w-5 text-muted-foreground" />
-                    <div><p className="text-sm text-muted-foreground">Bio</p><p className="font-medium whitespace-pre-wrap">{profile.bio}</p></div>
+                    <div><p className="text-sm text-muted-foreground">Bio</p><p className="font-medium whitespace-pre-wrap">{displayProfileBio}</p></div>
                   </div>
                 ) : null}
               </>
@@ -4920,10 +4937,10 @@ const ProfilePage = () => {
                     <div><p className="text-sm text-muted-foreground">Accolades</p><p className="font-medium">{staffAccountData.coaching_accolades || staffAccountData.notable_achievements}</p></div>
                   </div>
                 ) : null}
-                {profile?.bio ? (
+                {displayProfileBio ? (
                   <div className="flex items-center gap-3 p-4">
                     <User className="h-5 w-5 text-muted-foreground" />
-                    <div><p className="text-sm text-muted-foreground">Bio</p><p className="font-medium whitespace-pre-wrap">{profile.bio}</p></div>
+                    <div><p className="text-sm text-muted-foreground">Bio</p><p className="font-medium whitespace-pre-wrap">{displayProfileBio}</p></div>
                   </div>
                 ) : null}
                 {!staffAccountData?.coaching_role_type &&
@@ -4936,7 +4953,7 @@ const ProfilePage = () => {
                 !staffAccountData?.previous_teams?.length &&
                 !staffAccountData?.coaching_licenses?.length &&
                 !staffAccountData?.coaching_accolades &&
-                !profile?.bio ? (
+                !displayProfileBio ? (
                   <div className="p-4 text-center text-muted-foreground">
                     <p>Your staff profile details will appear here.</p>
                   </div>
@@ -5068,7 +5085,7 @@ const ProfilePage = () => {
                     <div><p className="text-sm text-muted-foreground">Weight</p><p className="font-medium">{profile.weight}</p></div>
                   </div>
                 )}
-                {!profile?.position && !profile?.jersey_number && !profile?.team_name && !profile?.height && !profile?.weight && !profile?.bio && (
+                {!profile?.position && !profile?.jersey_number && !profile?.team_name && !profile?.school_grade && !profile?.height && !profile?.weight && !displayProfileBio && (
                   <div className="p-4 text-center text-muted-foreground">
                     <p>No details yet. Tap Edit to add your info.</p>
                   </div>

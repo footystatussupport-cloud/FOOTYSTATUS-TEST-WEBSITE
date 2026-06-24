@@ -21,6 +21,7 @@ interface Player {
   league: string;
   position: string | null;
   jersey_number: string | null;
+  school_grade?: string | null;
   age_birth_year?: string | null;
   height: string | null;
   weight: string | null;
@@ -192,6 +193,7 @@ const PlayerProfile = () => {
           league: resolvedMembership?.league?.name || "",
           position: publicProfileRes.data.position,
           jersey_number: publicProfileRes.data.jersey_number || null,
+          school_grade: publicProfileRes.data.school_grade || null,
           height: publicProfileRes.data.height,
           weight: publicProfileRes.data.weight,
           contact_email: null,
@@ -418,6 +420,10 @@ const PlayerProfile = () => {
   const activeTeamSubtitle = activeMembership?.team
     ? [activeMembership.league?.name, activeMembership.age_group || activeMembership.team.age_group].filter(Boolean).join(" - ")
     : null;
+  const detailValues = [player.club, player.position, player.school_grade, player.age_birth_year, player.height, player.weight]
+    .filter(Boolean)
+    .map((value) => String(value).trim().toLowerCase());
+  const displayBio = player.bio && !detailValues.includes(player.bio.trim().toLowerCase()) ? player.bio : null;
 
   return (
     <div className="min-h-screen bg-background">
@@ -462,7 +468,7 @@ const PlayerProfile = () => {
             <span className="font-bold text-foreground">Player</span>
             {player.username ? <span className="break-all text-muted-foreground">@{player.username}</span> : null}
           </div>
-          {player.bio && <p className="mx-auto mt-2 w-full max-w-xs break-words whitespace-pre-wrap text-center text-sm text-muted-foreground" style={{ textAlign: "center" }}>{player.bio}</p>}
+          {displayBio && <p className="mx-auto mt-2 w-full max-w-xs break-words whitespace-pre-wrap text-center text-sm text-muted-foreground" style={{ textAlign: "center" }}>{displayBio}</p>}
         </div>
 
         <section className="mb-6">
@@ -526,6 +532,12 @@ const PlayerProfile = () => {
               <div className="flex items-center gap-3 px-4 py-3">
                 <Star className="h-5 w-5 text-muted-foreground" />
                 <div><p className="text-sm text-muted-foreground">Birth Year</p><p className="font-medium">{player.age_birth_year}</p></div>
+              </div>
+            )}
+            {player.school_grade && (
+              <div className="flex items-center gap-3 px-4 py-3">
+                <Star className="h-5 w-5 text-muted-foreground" />
+                <div><p className="text-sm text-muted-foreground">Grade</p><p className="font-medium">{player.school_grade}</p></div>
               </div>
             )}
             {player.height && (

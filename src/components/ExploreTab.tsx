@@ -16,6 +16,8 @@ interface Player {
   club: string;
   league: string;
   position: string | null;
+  school_grade?: string | null;
+  player_gender?: "boy" | "girl" | string | null;
   profile_image_url: string | null;
   username?: string | null;
   team_name?: string | null;
@@ -39,6 +41,7 @@ interface Team {
   school_level?: string | null;
   location?: string | null;
   league_conference?: string | null;
+  gender?: string | null;
 }
 
 interface ClubRecord {
@@ -115,13 +118,14 @@ const ExploreTab = () => {
   const [teamLocationFilter, setTeamLocationFilter] = useState("");
   const [teamLeagueFilter, setTeamLeagueFilter] = useState("");
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
+  const viewerPlayerGender = profile?.account_role === "player" ? profile.player_gender : null;
 
   useEffect(() => {
     const fetchData = async () => {
       const [playersRes, playerProfilesRes, teamsRes, leaguesRes, coachStaffProfiles, refereeProfilesRes, parentProfilesRes] = await Promise.all([
         supabase.from("players").select("*"),
-        supabase.from("player_profiles_public").select("id, user_id, full_name, team, team_name, position, profile_image_url, username"),
+        supabase.from("player_profiles_public").select("id, user_id, full_name, team, team_name, position, school_grade, player_gender, profile_image_url, username"),
         (supabase as any).from("teams").select("*").eq("approval_status", "approved").neq("is_active", false),
         supabase.from("leagues").select("*"),
         fetchCoachStaffProfiles().catch(() => []),
@@ -237,6 +241,7 @@ const ExploreTab = () => {
         club: p.club,
         league: p.league,
         position: p.position,
+        player_gender: p.player_gender || null,
         profile_image_url: p.profile_image_url,
         user_id: p.user_id,
       }));
@@ -253,6 +258,8 @@ const ExploreTab = () => {
           : p.team_name || p.team || "",
         league: linkedLeague?.name || "",
         position: p.position,
+        school_grade: p.school_grade,
+        player_gender: p.player_gender || null,
         profile_image_url: p.profile_image_url,
         username: p.username,
         team_name: linkedTeam?.name || p.team_name || p.team,
@@ -275,7 +282,10 @@ const ExploreTab = () => {
         }
       });
 
-      const merged = Array.from(mergedByName.values());
+      const merged = Array.from(mergedByName.values()).filter((player) => {
+        if (!viewerPlayerGender) return true;
+        return player.player_gender === viewerPlayerGender;
+      });
 
       setAllPlayers(merged);
       setPlayers(merged);
@@ -342,11 +352,19 @@ const ExploreTab = () => {
               school_level: clubTeam.school_level || parentTeam?.school_level || parentTeamProfile?.school_level || null,
               location: parentTeamProfile?.city || (parentTeam as any)?.city || null,
               league_conference: leagueName,
+              gender: clubTeam.gender || null,
               subtitle,
               is_sub_team: true,
             };
           });
-        const normalizedTeams = [...subTeams, ...baseTeams];
+        const visibleSubTeams = viewerPlayerGender
+          ? subTeams.filter((team) => {
+              const gender = (team.gender || "").toLowerCase();
+              if (!gender) return true;
+              return gender === viewerPlayerGender || gender === `${viewerPlayerGender}s`;
+            })
+          : subTeams;
+        const normalizedTeams = [...visibleSubTeams, ...baseTeams];
         setAllTeams(normalizedTeams);
         setTeams(normalizedTeams);
       }
@@ -356,7 +374,7 @@ const ExploreTab = () => {
       }
     };
     fetchData();
-  }, [user?.id]);
+  }, [user?.id, profile?.account_role, profile?.player_gender]);
 
   useEffect(() => {
     if (searchQuery.trim()) {
