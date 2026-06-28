@@ -113,12 +113,13 @@ const ClubTeamProfile = () => {
   const accessCodeChanged = accessCodeDraft !== savedAccessCode;
   const accessCodeIsValid = accessCodeDraft.length === 5;
   const isOfficialFootyStatusAccount = isFootyStatusSuperAdminEmail(user?.email);
+  const isTeamOrganizationAccount = profile?.account_role === "team_club" || profile?.account_role === "school_team";
   const canManageClubTeam =
     !!user &&
     !!club &&
     !!parentTeam &&
     (isOfficialFootyStatusAccount ||
-      (profile?.account_role === "team_club" &&
+      (isTeamOrganizationAccount &&
         ((club?.owner_user_id && club.owner_user_id === user.id) ||
           viewerManagedClubId === club.id ||
           parentTeam.owner_user_id === user.id ||
@@ -142,7 +143,7 @@ const ClubTeamProfile = () => {
 
   useEffect(() => {
     const fetchViewerManagedTeam = async () => {
-      if (!user || profile?.account_role !== "team_club") {
+      if (!user || !isTeamOrganizationAccount) {
         setViewerManagedTeamId(null);
         return;
       }
@@ -158,7 +159,7 @@ const ClubTeamProfile = () => {
     };
 
     fetchViewerManagedTeam();
-  }, [user?.id, profile?.account_role]);
+  }, [user?.id, profile?.account_role, isTeamOrganizationAccount]);
 
   useEffect(() => {
     setAccessCodeValue(clubTeam?.access_code_value || "");

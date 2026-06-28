@@ -243,9 +243,10 @@ const SettingsPage = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      <Header />
-      
-      <div className="px-4 py-6 max-w-2xl mx-auto">
+      <div className="min-h-screen w-full max-w-md mx-auto border-x border-border bg-background overflow-x-hidden">
+        <Header />
+
+      <main className="px-4 py-6">
         <Link 
           to="/other"
           className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground mb-4"
@@ -380,6 +381,7 @@ const SettingsPage = () => {
             </div>
           </div>
         </section>
+      </main>
       </div>
     </div>
   );

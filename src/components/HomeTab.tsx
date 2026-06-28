@@ -28,7 +28,8 @@ const HomeTab = () => {
     city: string | null;
   } | null>(null);
 
-  const canPostClubNews = profile?.account_role === "team_club" && !!managedClubContext && !!user?.id;
+  const isTeamOrganizationAccount = profile?.account_role === "team_club" || profile?.account_role === "school_team";
+  const canPostClubNews = isTeamOrganizationAccount && !!managedClubContext && !!user?.id;
 
   const loadNearbyPosts = async () => {
     const coords = await getCachedViewerCoordinates();
@@ -174,7 +175,7 @@ const HomeTab = () => {
 
   useEffect(() => {
     const loadManagedClubContext = async () => {
-      if (!user?.id || profile?.account_role !== "team_club") {
+      if (!user?.id || !isTeamOrganizationAccount) {
         setManagedClubContext(null);
         return;
       }

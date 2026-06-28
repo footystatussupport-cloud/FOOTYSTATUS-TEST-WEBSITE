@@ -81,8 +81,8 @@ interface ProfileData {
   weight: string | null;
   is_pro: boolean;
   account_category: "player" | "team_staff" | "parent" | "referee" | null;
-  account_type?: "player" | "team_club" | "school_team" | "head_coach_assistant" | "scout" | "trainer" | "academy_director" | "parent" | "referee" | null;
-  account_role: "player" | "team_club" | "head_coach_assistant" | "scout" | "trainer" | "academy_director" | "parent" | "referee" | null;
+  account_type?: "player" | "team_club" | "school_team" | "head_coach_assistant" | "coach" | "scout" | "trainer" | "academy_director" | "team_staff" | "parent" | "referee" | "footy_status_official" | "admin" | "official" | null;
+  account_role: "player" | "team_club" | "school_team" | "head_coach_assistant" | "coach" | "scout" | "trainer" | "academy_director" | "team_staff" | "parent" | "referee" | "footy_status_official" | "admin" | "official" | null;
   role: "player" | "team" | "coach" | "scout" | "trainer" | "academy_director" | "parent" | "referee" | null;
   account_tier?: "free" | "pro_annual" | "pro_lifetime" | null;
   pro_expires_at?: string | null;
@@ -737,8 +737,8 @@ const ProfilePage = () => {
   const resolvedAccountRole = normalizeAccountRole(profile);
 
   const isPlayerAccount = resolvedAccountCategory === "player" || resolvedAccountRole === "player";
-  const isTeamAccount = resolvedAccountRole === "team_club";
-  const isTeamStaffAccount = resolvedAccountCategory === "team_staff" && resolvedAccountRole !== "team_club";
+  const isTeamAccount = resolvedAccountRole === "team_club" || resolvedAccountRole === "school_team";
+  const isTeamStaffAccount = resolvedAccountCategory === "team_staff" && !isTeamAccount;
   const isRefereeAccount = resolvedAccountCategory === "referee" || resolvedAccountRole === "referee";
   const isParentAccount = resolvedAccountCategory === "parent" || resolvedAccountRole === "parent";
   const playerBirthYear = Number(String(profile?.age_birth_year || "").match(/(19|20)\d{2}/)?.[0]);
@@ -784,7 +784,10 @@ const ProfilePage = () => {
     switch (resolvedAccountRole) {
       case "team_club":
         return "Team / Club";
+      case "school_team":
+        return "School Team";
       case "head_coach_assistant":
+      case "coach":
         return formatRoleDisplayLabel(selectedStaffRole, "Coach / Trainer");
       case "scout":
         return formatRoleDisplayLabel(selectedScoutRole, "Scout");
@@ -792,12 +795,20 @@ const ProfilePage = () => {
         return formatRoleDisplayLabel(selectedStaffRole, "Coach / Trainer");
       case "academy_director":
         return formatRoleDisplayLabel(selectedStaffRole, "Academy Director");
+      case "team_staff":
+        return formatRoleDisplayLabel(selectedStaffRole, "Team Staff");
       case "parent":
         return "Parent";
       case "referee":
         return formatRoleDisplayLabel(selectedRefereeRole, "Referee");
-      default:
+      case "footy_status_official":
+      case "admin":
+      case "official":
+        return "Footy Status Official";
+      case "player":
         return formatRoleDisplayLabel(profile?.position, "Player");
+      default:
+        return formatRoleDisplayLabel(resolvedAccountRole, "Account");
     }
   };
 
@@ -2569,6 +2580,7 @@ const ProfilePage = () => {
         }
 
       } else if (isTeamAccount) {
+        const organizationTeamType = resolvedAccountRole === "school_team" ? "school" : "club";
         const teamDisplayName =
           editForm.display_name?.trim() ||
           editForm.club_name?.trim() ||
@@ -2637,6 +2649,7 @@ const ProfilePage = () => {
               third_kit_color: editForm.third_kit_color?.trim() || null,
               contact_email: contactEmail,
               contact_phone: contactPhone,
+              team_type: organizationTeamType,
             },
             { onConflict: "user_id" }
           )
@@ -2677,6 +2690,7 @@ const ProfilePage = () => {
               home_jersey_color: editForm.home_jersey_color?.trim() || null,
               away_jersey_color: editForm.away_jersey_color?.trim() || null,
               third_kit_color: editForm.third_kit_color?.trim() || null,
+              team_type: organizationTeamType,
             })
             .eq("id", savedTeamProfile.team_id);
         }

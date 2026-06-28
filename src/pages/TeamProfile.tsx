@@ -144,6 +144,7 @@ const TeamProfile = () => {
   const [loading, setLoading] = useState(true);
 
   const isOfficialFootyStatusAccount = isFootyStatusSuperAdminEmail(user?.email);
+  const isTeamOrganizationAccount = profile?.account_role === "team_club" || profile?.account_role === "school_team";
   const userOwnsTeam = !!user && !!team && team.owner_user_id === user.id;
   const canManageTeam = !!(
     user &&
@@ -151,7 +152,7 @@ const TeamProfile = () => {
     (isOfficialFootyStatusAccount ||
       userOwnsTeam ||
       viewerManagedTeamId === team.id ||
-      (profile?.account_role === "team_club" && viewerManagedTeamId === team.id))
+      (isTeamOrganizationAccount && viewerManagedTeamId === team.id))
   );
   const linkedClubStaff = useMemo(
     () =>
@@ -414,7 +415,7 @@ const TeamProfile = () => {
 
   useEffect(() => {
     const fetchViewerManagedTeam = async () => {
-      if (!user || profile?.account_role !== "team_club") {
+      if (!user || !isTeamOrganizationAccount) {
         setViewerManagedTeamId(null);
         return;
       }

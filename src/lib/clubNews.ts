@@ -209,7 +209,7 @@ export const fetchManagedClubContext = async (userId: string) => {
     (supabase as any).from("profiles").select("account_role").eq("user_id", userId).maybeSingle(),
   ]);
 
-  if (!teamProfile || profile?.account_role !== "team_club") return null;
+  if (!teamProfile || !["team_club", "school_team"].includes(profile?.account_role || "")) return null;
 
   const club =
     teamProfile.club_id &&

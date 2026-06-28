@@ -189,6 +189,32 @@ const getSignupRoleFromSelection = (
   return null;
 };
 
+const getSignupSelectionFromRole = (role?: string | null): { accountType: AccountType | null; staffType: StaffType | null } => {
+  switch (role) {
+    case "player":
+      return { accountType: "player", staffType: null };
+    case "parent":
+      return { accountType: "parent", staffType: null };
+    case "referee":
+      return { accountType: "referee", staffType: null };
+    case "team_club":
+    case "school_team":
+    case "head_coach_assistant":
+    case "scout":
+    case "academy_director":
+      return { accountType: "team_staff", staffType: role };
+    case "coach":
+      return { accountType: "team_staff", staffType: "head_coach_assistant" };
+    case "team":
+    case "club":
+      return { accountType: "team_staff", staffType: "team_club" };
+    case "school":
+      return { accountType: "team_staff", staffType: "school_team" };
+    default:
+      return { accountType: null, staffType: null };
+  }
+};
+
 const AuthShell = ({ children, backAction }: { children: React.ReactNode; backAction: () => void }) => (
   <div className="min-h-screen bg-background">
     <div className="min-h-screen w-full bg-background max-w-md mx-auto border-x border-border overflow-x-hidden flex flex-col items-center justify-center px-4 relative">
@@ -266,13 +292,23 @@ const AuthPage = () => {
         selectedRole?: string | null;
         pendingGoogleAuth?: boolean;
       };
+      const restoredSelection = getSignupSelectionFromRole(parsed.selectedRole);
 
-      if (parsed.accountType) setAccountType(parsed.accountType);
-      if (parsed.staffType) setStaffType(parsed.staffType);
+      if (parsed.accountType || restoredSelection.accountType) setAccountType(parsed.accountType || restoredSelection.accountType);
+      if (parsed.staffType || restoredSelection.staffType) setStaffType(parsed.staffType || restoredSelection.staffType);
       if (parsed.pendingGoogleAuth) {
         setPendingGoogleAuth(true);
         setIsLogin(false);
-        setSignupStep("profile_form");
+        if (parsed.accountType || restoredSelection.accountType) {
+          setSignupStep("profile_form");
+        } else {
+          setSignupStep("account_type");
+          toast({
+            title: "Signup session expired",
+            description: "Please choose your account type again before creating your account.",
+            variant: "destructive",
+          });
+        }
       }
     } catch {
       clearSignupFlow();
@@ -445,6 +481,11 @@ const AuthPage = () => {
 
       if (!role || !VALID_SIGNUP_ROLES.has(role)) {
         throw new Error("Please choose an account type before creating your account.");
+      }
+
+      const selectedRoleFromFlow = getSignupRoleFromSelection(accountType, staffType);
+      if (selectedRoleFromFlow && selectedRoleFromFlow !== role) {
+        throw new Error("Your signup account type changed unexpectedly. Please go back and choose the account type again.");
       }
 
       console.info("Footy Status signup started", {
@@ -621,12 +662,18 @@ const AuthPage = () => {
       }
 
       if (setupError) {
-        throw new Error(setupError.message || "We couldn't finish setting up your profile.");
+        console.warn("complete_account_setup failed; continuing with direct profile save fallback", {
+          method: signupMethod,
+          authUserId: sessionUserId,
+          selectedRole: role,
+          error: setupError,
+        });
+      } else {
+        console.info("Footy Status complete_account_setup saved", {
+          authUserId: sessionUserId,
+          selectedRole: role,
+        });
       }
-      console.info("Footy Status complete_account_setup saved", {
-        authUserId: sessionUserId,
-        selectedRole: role,
-      });
 
       const normalizedFullName =
         role === "team_club"
@@ -635,6 +682,7 @@ const AuthPage = () => {
       const normalizedBio = profileData.bio ? String(profileData.bio).trim().slice(0, 100) : null;
 
       const profileRolePayload = {
+          user_id: sessionUserId,
           full_name: normalizedFullName,
           username: normalizedUsername,
           bio: normalizedBio,
@@ -675,8 +723,7 @@ const AuthPage = () => {
       const profileRoleUpdate = await stripMissingProfilesColumnsAndRetry(profileRolePayload, (nextPayload) =>
         (supabase as any)
           .from("profiles")
-          .update(nextPayload)
-          .eq("user_id", sessionUserId)
+          .upsert(nextPayload, { onConflict: "user_id" })
       );
 
       if (profileRoleUpdate.error) {
@@ -1214,7 +1261,7 @@ const AuthPage = () => {
 
       toast({ title: "Welcome to Footy Status!", description: "Your account has been created successfully." });
       clearSignupFlow();
-      navigate("/");
+      navigate("/", { replace: true });
     } catch (error) {
       console.error("Signup error:", {
         error,
@@ -1228,10 +1275,10 @@ const AuthPage = () => {
       if (coreProfileSaved && sessionUserIdForRecovery) {
         toast({
           title: "Welcome to Footy Status!",
-          description: "Your account was created. Some extra profile details may need to be refreshed or saved again.",
+          description: "Your account has been created successfully.",
         });
         clearSignupFlow();
-        navigate("/");
+        navigate("/", { replace: true });
         return;
       }
 
