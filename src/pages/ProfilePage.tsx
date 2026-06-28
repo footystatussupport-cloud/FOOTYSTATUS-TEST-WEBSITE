@@ -3813,15 +3813,10 @@ const ProfilePage = () => {
   };
 
   const handleCreateDaughterTeam = async () => {
-    const parentTeamId = teamAccountData?.team_id;
+    const parentTeamId = teamAccountData?.team_id || null;
     const isSchool = teamAccountData?.team_type === "school";
     const ageGroup = daughterTeamForm.age_group.trim();
     const leagueOrConference = daughterTeamForm.league_or_conference.trim();
-
-    if (!parentTeamId) {
-      toast({ title: "Team profile not ready", description: "Refresh the page and try again.", variant: "destructive" });
-      return;
-    }
 
     if ((!isSchool && !ageGroup) || !leagueOrConference || !daughterTeamForm.gender || (isSchool && !daughterTeamForm.school_level)) {
       toast({
@@ -3844,7 +3839,15 @@ const ProfilePage = () => {
       season: daughterTeamForm.season.trim() || null,
       level: isSchool ? daughterTeamForm.school_level : daughterTeamForm.level.trim() || null,
     };
-    const { error } = await createDaughterTeam(daughterPayload);
+    console.info("Creating daughter team", {
+      authUserId: user?.id,
+      accountType: profile?.account_role || profile?.account_category || profile?.role,
+      mainProfile: profile,
+      motherTeamProfile: teamAccountData,
+      motherTeamIdUsed: parentTeamId,
+      daughterTeamPayload: daughterPayload,
+    });
+    const { data: createdDaughterTeam, error } = await createDaughterTeam(daughterPayload);
 
     if (error) {
       console.error("Daughter team creation failed", {
@@ -3857,20 +3860,28 @@ const ProfilePage = () => {
       });
       toast({
         title: "Could not create daughter team",
-        description: "We could not create this daughter team because the main school/club profile was not ready. Please try again.",
+        description: error.message || "We could not create this daughter team. Please try again.",
         variant: "destructive",
       });
       setCreatingDaughterTeam(false);
       return;
     }
 
-    const club = teamAccountData?.club_id
+    console.info("Daughter team created", {
+      authUserId: user?.id,
+      createdDaughterTeam,
+    });
+
+    const club = createdDaughterTeam?.club_id
+      ? { id: createdDaughterTeam.club_id }
+      : teamAccountData?.club_id
       ? { id: teamAccountData.club_id }
       : await fetchClubByTeamId(parentTeamId);
     if (club?.id) {
       const refreshedTeams = await fetchClubTeams(club.id);
       setOfferedClubTeams(refreshedTeams);
     }
+    await fetchProfile();
 
     toast({
       title: isSchool ? "School team created" : "Club team created",

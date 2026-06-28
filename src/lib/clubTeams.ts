@@ -183,7 +183,7 @@ export const archiveClubTeam = async (clubTeamId: string) =>
   });
 
 export interface CreateDaughterTeamInput {
-  parentTeamId: string;
+  parentTeamId?: string | null;
   ageGroup?: string | null;
   leagueOrConference: string;
   schoolLevel?: "varsity" | "junior_varsity" | "prep" | "middle_school" | null;
@@ -194,7 +194,7 @@ export interface CreateDaughterTeamInput {
 
 export const createDaughterTeam = async (input: CreateDaughterTeamInput) =>
   (supabase as any).rpc("create_daughter_team", {
-    _parent_team_id: input.parentTeamId,
+    _parent_team_id: input.parentTeamId || null,
     _age_group: input.ageGroup || null,
     _league_or_conference: input.leagueOrConference,
     _school_level: input.schoolLevel || null,
