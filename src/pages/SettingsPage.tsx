@@ -1,4 +1,5 @@
-import { Link } from "react-router-dom";
+import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { ArrowLeft, Moon, Globe, Smartphone, Volume2, Download, Trash2, ChevronRight } from "lucide-react";
 import Header from "@/components/Header";
 import { Switch } from "@/components/ui/switch";
@@ -7,6 +8,8 @@ import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSettings, type UserSettings } from "@/hooks/useSettings";
 import NotificationSettingsSection from "@/components/notifications/NotificationSettingsSection";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
 
 interface SettingItem {
   id: keyof UserSettings;
@@ -19,7 +22,102 @@ interface SettingItem {
 }
 
 const SettingsPage = () => {
+  const navigate = useNavigate();
+  const { toast } = useToast();
   const { settings, updateSetting, loading } = useSettings();
+  const [clearingCache, setClearingCache] = useState(false);
+  const [deletingAccount, setDeletingAccount] = useState(false);
+
+  const getAuthStorageEntries = (storage: Storage) =>
+    Object.keys(storage)
+      .filter((key) => {
+        const normalizedKey = key.toLowerCase();
+        return key.startsWith("sb-") || normalizedKey.includes("supabase");
+      })
+      .map((key) => [key, storage.getItem(key) ?? ""] as const);
+
+  const restoreStorageEntries = (storage: Storage, entries: readonly (readonly [string, string])[]) => {
+    entries.forEach(([key, value]) => storage.setItem(key, value));
+  };
+
+  const handleClearCache = async () => {
+    setClearingCache(true);
+
+    try {
+      const localAuthEntries = getAuthStorageEntries(localStorage);
+      const sessionAuthEntries = getAuthStorageEntries(sessionStorage);
+
+      Object.keys(localStorage).forEach((key) => localStorage.removeItem(key));
+      Object.keys(sessionStorage).forEach((key) => sessionStorage.removeItem(key));
+
+      restoreStorageEntries(localStorage, localAuthEntries);
+      restoreStorageEntries(sessionStorage, sessionAuthEntries);
+
+      if ("caches" in window) {
+        const cacheNames = await caches.keys();
+        await Promise.all(cacheNames.map((cacheName) => caches.delete(cacheName)));
+      }
+
+      await supabase.auth.getSession();
+
+      toast({
+        title: "Cache cleared",
+        description: "Temporary app data was cleared. You are still signed in.",
+      });
+    } catch (error) {
+      console.error("Clear cache failed", error);
+      toast({
+        title: "Could not clear cache",
+        description: "Please try again in a moment.",
+        variant: "destructive",
+      });
+    } finally {
+      setClearingCache(false);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    const confirmed = window.confirm(
+      "Delete Account?\n\nThis action is permanent and cannot be undone. This will permanently delete your Footy Status account, profile, videos, and associated data."
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingAccount(true);
+
+    try {
+      const { error } = await supabase.rpc("delete_my_account");
+
+      if (error) {
+        throw error;
+      }
+
+      await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+      localStorage.clear();
+      sessionStorage.clear();
+
+      toast({
+        title: "Account deleted",
+        description: "Your Footy Status account has been permanently deleted.",
+      });
+
+      navigate("/auth", { replace: true });
+    } catch (error) {
+      console.error("Delete account failed", error);
+      toast({
+        title: "Account could not be deleted",
+        description:
+          error instanceof Error
+            ? error.message
+            : "Please try again. If this keeps happening, contact Footy Status support.",
+        variant: "destructive",
+      });
+    } finally {
+      setDeletingAccount(false);
+    }
+  };
 
   const appearanceSettings: SettingItem[] = [
     { id: 'darkMode', label: 'Dark Mode', description: 'Switch between light and dark themes', type: 'toggle', icon: <Moon className="h-5 w-5" /> },
@@ -256,13 +354,11 @@ const SettingsPage = () => {
                 </div>
               </div>
               <button
-                className="text-sm font-medium text-destructive hover:underline"
-                onClick={() => {
-                  localStorage.clear();
-                  window.location.reload();
-                }}
+                className="text-sm font-medium text-destructive hover:underline disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={handleClearCache}
+                disabled={clearingCache || deletingAccount}
               >
-                Clear
+                {clearingCache ? "Clearing..." : "Clear"}
               </button>
             </div>
             <Separator />
@@ -274,8 +370,12 @@ const SettingsPage = () => {
                   <p className="text-sm text-muted-foreground">Permanently delete your account and all data</p>
                 </div>
               </div>
-              <button className="text-sm font-medium text-destructive hover:underline">
-                Delete
+              <button
+                className="text-sm font-medium text-destructive hover:underline disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={handleDeleteAccount}
+                disabled={deletingAccount || clearingCache}
+              >
+                {deletingAccount ? "Deleting..." : "Delete"}
               </button>
             </div>
           </div>

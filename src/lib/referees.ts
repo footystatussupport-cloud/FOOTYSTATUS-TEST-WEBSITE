@@ -139,6 +139,15 @@ export const reviewRefereeMatchClaim = async (payload: {
     .single();
 };
 
+export const removeRefereeMatchAssignment = async (payload: {
+  claimId: string;
+  matchId?: string | null;
+}) =>
+  (supabase as any).rpc("remove_referee_match_assignment", {
+    _claim_id: payload.claimId,
+    _match_id: payload.matchId || null,
+  });
+
 export const fetchRefereeClaimsForMatch = async (matchId: string, includePrivate = false) => {
   if (!includePrivate) {
     const { data, error } = await (supabase as any).rpc("get_public_referee_match_assignments", { _match_id: matchId });

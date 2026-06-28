@@ -39,10 +39,12 @@ import {
   refereeRoleLabel,
   RefereeMatchClaim,
   RefereeMatchRole,
+  removeRefereeMatchAssignment,
   reviewRefereeMatchClaim,
   submitRefereeMatchClaim,
   updateRefereeMatchClaim,
 } from "@/lib/referees";
+import { isFootyStatusSuperAdminEmail } from "@/lib/superAdmin";
 
 const initialResultForm = {
   status: "completed",
@@ -95,8 +97,10 @@ const MatchDetails = () => {
   const [refereeClaimProofFile, setRefereeClaimProofFile] = useState<File | null>(null);
   const [submittingRefereeClaim, setSubmittingRefereeClaim] = useState(false);
   const [reviewingRefereeClaimId, setReviewingRefereeClaimId] = useState<string | null>(null);
+  const [removingRefereeClaimId, setRemovingRefereeClaimId] = useState<string | null>(null);
 
   const canManageMatch = adminContext.isMatchAdmin;
+  const isFootyStatusAdmin = isFootyStatusSuperAdminEmail(user?.email || "") || isFootyStatusSuperAdminEmail(profile?.email || "");
   const isRefereeAccount = profile?.account_category === "referee" || profile?.account_role === "referee" || profile?.role === "referee";
   const ownRefereeClaim = useMemo(
     () => refereeClaims.find((claim) => claim.referee_user_id === user?.id) || null,
@@ -310,6 +314,31 @@ const MatchDetails = () => {
       await loadMatch();
     }
     setReviewingRefereeClaimId(null);
+  };
+
+  const handleRemoveRefereeAssignment = async (claim: RefereeMatchClaim, mode: "self" | "admin") => {
+    if (!id) return;
+    const confirmed = window.confirm(
+      mode === "self"
+        ? "Are you sure you want to leave this match? You will no longer be listed as a referee for this fixture."
+        : "Are you sure you want to remove this referee from this match? They will no longer be linked to this fixture."
+    );
+    if (!confirmed) return;
+
+    setRemovingRefereeClaimId(claim.id);
+    const { error } = await removeRefereeMatchAssignment({ claimId: claim.id, matchId: id });
+    if (error) {
+      toast({
+        title: mode === "self" ? "Could not leave match" : "Could not remove referee",
+        description: error.message,
+        variant: "destructive",
+      });
+    } else {
+      setRefereeClaims((claims) => claims.filter((item) => item.id !== claim.id));
+      toast({ title: mode === "self" ? "You left this match" : "Referee removed from match" });
+      await loadMatch();
+    }
+    setRemovingRefereeClaimId(null);
   };
 
   const handleOpenRefereeProof = async (proofPath?: string | null) => {
@@ -562,25 +591,44 @@ const MatchDetails = () => {
 
           {approvedRefereeClaims.length ? (
             <div className="space-y-2">
-              {approvedRefereeClaims.map((claim) => (
-                <div key={claim.id} className="rounded-lg border border-border p-3 text-sm">
-                  <p className="font-semibold text-foreground">{refereeRoleLabel(claim.referee_type)}</p>
-                  {claim.show_name_publicly || canManageMatch ? (
-                    <button
-                      type="button"
-                      className="text-left text-muted-foreground hover:text-navy hover:underline"
-                      onClick={() => navigate(`/referee-profile/${claim.referee_user_id}`)}
-                    >
-                      {claim.referee_name || "Referee assigned"}
-                    </button>
-                  ) : (
-                    <p className="text-muted-foreground">{`${refereeRoleLabel(claim.referee_type)} assigned`}</p>
-                  )}
-                  {canManageMatch && !claim.show_name_publicly ? (
-                    <p className="mt-1 text-xs text-muted-foreground">Private on public fixture</p>
-                  ) : null}
-                </div>
-              ))}
+              {approvedRefereeClaims.map((claim) => {
+                const canSelfRemove = claim.referee_user_id === user?.id;
+                const canAdminRemove = isFootyStatusAdmin && claim.referee_user_id !== user?.id;
+                return (
+                  <div key={claim.id} className="rounded-lg border border-border p-3 text-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-semibold text-foreground">{refereeRoleLabel(claim.referee_type)}</p>
+                        {claim.show_name_publicly || canManageMatch || isFootyStatusAdmin ? (
+                          <button
+                            type="button"
+                            className="text-left text-muted-foreground hover:text-navy hover:underline"
+                            onClick={() => navigate(`/referee-profile/${claim.referee_user_id}`)}
+                          >
+                            {claim.referee_name || "Referee assigned"}
+                          </button>
+                        ) : (
+                          <p className="text-muted-foreground">{`${refereeRoleLabel(claim.referee_type)} assigned`}</p>
+                        )}
+                        {canManageMatch && !claim.show_name_publicly ? (
+                          <p className="mt-1 text-xs text-muted-foreground">Private on public fixture</p>
+                        ) : null}
+                      </div>
+                      {canSelfRemove || canAdminRemove ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleRemoveRefereeAssignment(claim, canSelfRemove ? "self" : "admin")}
+                          disabled={removingRefereeClaimId === claim.id}
+                        >
+                          {canSelfRemove ? "Leave Match" : "Remove Referee"}
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <div className="rounded-lg border border-dashed border-border p-3 text-sm text-muted-foreground">
@@ -745,15 +793,27 @@ const MatchDetails = () => {
                           Approve
                         </Button>
                       ) : null}
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleReviewRefereeClaim(claim.id, false)}
-                        disabled={reviewingRefereeClaimId === claim.id}
-                      >
-                        {isPending ? "Dismiss" : "Remove Referee"}
-                      </Button>
+                      {isPending ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleReviewRefereeClaim(claim.id, false)}
+                          disabled={reviewingRefereeClaimId === claim.id}
+                        >
+                          Dismiss
+                        </Button>
+                      ) : isFootyStatusAdmin ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleRemoveRefereeAssignment(claim, "admin")}
+                          disabled={removingRefereeClaimId === claim.id}
+                        >
+                          Remove Referee
+                        </Button>
+                      ) : null}
                     </div>
                   </div>
                   );

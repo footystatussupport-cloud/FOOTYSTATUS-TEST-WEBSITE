@@ -64,9 +64,82 @@ const splitCommaValues = (value?: string | null) =>
 
 const normalizeEmailValue = (value?: string | null) => String(value || "").trim().toLowerCase();
 
-const isMissingAgeGroupColumnError = (error: any) =>
-  typeof error?.message === "string" &&
-  error.message.includes("Could not find the 'age_group' column of 'teams' in the schema cache");
+const getMissingTeamsColumnFromError = (error: any) => {
+  const message = typeof error?.message === "string" ? error.message : "";
+  return (
+    message.match(/Could not find the '([^']+)' column of 'teams'/i)?.[1] ||
+    message.match(/column "([^"]+)" of relation "teams" does not exist/i)?.[1] ||
+    message.match(/column '([^']+)' of relation 'teams' does not exist/i)?.[1] ||
+    null
+  );
+};
+
+const stripMissingTeamsColumnsAndRetry = async (
+  payload: Record<string, any>,
+  runQuery: (nextPayload: Record<string, any>) => Promise<any>
+) => {
+  let nextPayload = { ...payload };
+  const removedColumns: string[] = [];
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    console.info("Saving teams payload", {
+      attempt: attempt + 1,
+      payload: nextPayload,
+      removedInvalidColumns: removedColumns,
+    });
+    const result = await runQuery(nextPayload);
+    const missingColumn = getMissingTeamsColumnFromError(result.error);
+
+    if (!missingColumn || !(missingColumn in nextPayload)) {
+      return result;
+    }
+
+    console.warn("Removing invalid teams column and retrying", {
+      missingColumn,
+      originalError: result.error,
+    });
+    removedColumns.push(missingColumn);
+    const { [missingColumn]: _removed, ...cleanPayload } = nextPayload;
+    nextPayload = cleanPayload;
+  }
+
+  return runQuery(nextPayload);
+};
+
+const getMissingProfilesColumnFromError = (error: any) => {
+  const message = typeof error?.message === "string" ? error.message : "";
+  return (
+    message.match(/Could not find the '([^']+)' column of 'profiles'/i)?.[1] ||
+    message.match(/column "([^"]+)" of relation "profiles" does not exist/i)?.[1] ||
+    message.match(/column '([^']+)' of relation 'profiles' does not exist/i)?.[1] ||
+    null
+  );
+};
+
+const stripMissingProfilesColumnsAndRetry = async (
+  payload: Record<string, any>,
+  runQuery: (nextPayload: Record<string, any>) => Promise<any>
+) => {
+  let nextPayload = { ...payload };
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const result = await runQuery(nextPayload);
+    const missingColumn = getMissingProfilesColumnFromError(result.error);
+
+    if (!missingColumn || !(missingColumn in nextPayload)) {
+      return result;
+    }
+
+    console.warn("Removing invalid profiles column and retrying", {
+      missingColumn,
+      originalError: result.error,
+    });
+    const { [missingColumn]: _removed, ...cleanPayload } = nextPayload;
+    nextPayload = cleanPayload;
+  }
+
+  return runQuery(nextPayload);
+};
 
 const mapRoleForLegacyBackend = (role: string) => {
   switch (role) {
@@ -83,11 +156,24 @@ const mapRoleForLegacyBackend = (role: string) => {
   }
 };
 
+const getLegacyRoleForAccountRole = (role: string) => mapRoleForLegacyBackend(role);
+
 const getAccountCategoryForRole = (role: string) => {
   if (role === "player") return "player";
   if (role === "parent") return "parent";
   if (role === "referee") return "referee";
   return "team_staff";
+};
+
+const getSignupRoleFromSelection = (
+  selectedAccountType: AccountType | null,
+  selectedStaffType: StaffType | null
+) => {
+  if (selectedAccountType === "player") return "player";
+  if (selectedAccountType === "parent") return "parent";
+  if (selectedAccountType === "referee") return "referee";
+  if (selectedAccountType === "team_staff") return selectedStaffType;
+  return null;
 };
 
 const AuthShell = ({ children, backAction }: { children: React.ReactNode; backAction: () => void }) => (
@@ -123,18 +209,23 @@ const AuthPage = () => {
     "Google sign-in opens in Safari and does not carry the session back into this in-app browser. Use email/password here, or open Footy Status directly in Safari before using Google.";
 
   const persistSignupFlow = (nextAccountType: AccountType | null, nextStaffType: StaffType | null) => {
-    sessionStorage.setItem(
-      SIGNUP_FLOW_STORAGE_KEY,
-      JSON.stringify({
-        accountType: nextAccountType,
-        staffType: nextStaffType,
-        pendingGoogleAuth: true,
-      })
-    );
+    const selectedRole = getSignupRoleFromSelection(nextAccountType, nextStaffType);
+    const payload = JSON.stringify({
+      accountType: nextAccountType,
+      staffType: nextStaffType,
+      selectedRole,
+      accountCategory: selectedRole ? getAccountCategoryForRole(selectedRole) : null,
+      legacyRole: selectedRole ? getLegacyRoleForAccountRole(selectedRole) : null,
+      pendingGoogleAuth: true,
+    });
+
+    sessionStorage.setItem(SIGNUP_FLOW_STORAGE_KEY, payload);
+    localStorage.setItem(SIGNUP_FLOW_STORAGE_KEY, payload);
   };
 
   const clearSignupFlow = () => {
     sessionStorage.removeItem(SIGNUP_FLOW_STORAGE_KEY);
+    localStorage.removeItem(SIGNUP_FLOW_STORAGE_KEY);
   };
 
   useEffect(() => {
@@ -152,13 +243,14 @@ const AuthPage = () => {
   }, [authReason, toast]);
 
   useEffect(() => {
-    const savedFlow = sessionStorage.getItem(SIGNUP_FLOW_STORAGE_KEY);
+    const savedFlow = sessionStorage.getItem(SIGNUP_FLOW_STORAGE_KEY) || localStorage.getItem(SIGNUP_FLOW_STORAGE_KEY);
     if (!savedFlow) return;
 
     try {
       const parsed = JSON.parse(savedFlow) as {
         accountType?: AccountType | null;
         staffType?: StaffType | null;
+        selectedRole?: string | null;
         pendingGoogleAuth?: boolean;
       };
 
@@ -180,7 +272,6 @@ const AuthPage = () => {
         if (session && isLogin) navigate("/");
         if (session && !isLogin && pendingGoogleAuth) {
           setPendingGoogleAuth(false);
-          clearSignupFlow();
           setEmail(session.user.email || "");
           setSignupStep('profile_form');
         }
@@ -255,6 +346,16 @@ const AuthPage = () => {
   };
 
   const handleGoogleAuth = async () => {
+    const selectedRole = getSignupRoleFromSelection(accountType, staffType);
+    if (!selectedRole) {
+      toast({
+        title: "Choose account type",
+        description: "Please choose the account type you want before continuing with Google.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (embeddedBrowser) {
       toast({
         title: "Open Google sign-in in Safari",
@@ -323,6 +424,8 @@ const AuthPage = () => {
       let normalizedEmail = normalizeEmailValue(email);
       const normalizedUsername = normalizeUsername(profileData.username);
       const usernameValidationMessage = validateUsername(normalizedUsername);
+      const accountCategory = getAccountCategoryForRole(role);
+      const legacyRole = getLegacyRoleForAccountRole(role);
 
       if (usernameValidationMessage) {
         throw new Error(usernameValidationMessage);
@@ -360,6 +463,11 @@ const AuthPage = () => {
             data: {
               full_name: profileData.fullName || profileData.clubName || "",
               username: normalizedUsername,
+              account_category: accountCategory,
+              account_role: role,
+              account_type: role,
+              role: legacyRole,
+              selected_account_type: role,
               player_gender: role === "player" ? profileData.gender : null,
             },
           },
@@ -395,9 +503,25 @@ const AuthPage = () => {
       }
 
       const normalizedCity = [profileData.city, profileData.state].filter(Boolean).join(", ");
-      const accountCategory = getAccountCategoryForRole(role);
       const refereeProofFile = role === "referee" ? profileData.refereeCertificationProofFile as File | null : null;
       let refereeProofPath: string | null = null;
+
+      const metadataUpdate = await supabase.auth.updateUser({
+        data: {
+          full_name: profileData.fullName || profileData.clubName || "",
+          username: normalizedUsername,
+          account_category: accountCategory,
+          account_role: role,
+          account_type: role,
+          role: legacyRole,
+          selected_account_type: role,
+          player_gender: role === "player" ? profileData.gender : null,
+        },
+      });
+
+      if (metadataUpdate.error) {
+        console.warn("Could not update signup role metadata after account creation:", metadataUpdate.error);
+      }
 
       if (refereeProofFile) {
         const extension = refereeProofFile.name.split(".").pop() || "file";
@@ -412,7 +536,7 @@ const AuthPage = () => {
       const selectedStaffRole =
         role === "scout"
           ? profileData.scoutRoleTitle || "Scout"
-          : role !== "team_club" && role !== "player" && role !== "parent" && role !== "referee"
+          : role !== "team_club" && role !== "school_team" && role !== "player" && role !== "parent" && role !== "referee"
             ? formatRoleDisplayLabel(profileData.coachingRoleType || role, "Coach / Trainer")
             : null;
 
@@ -420,6 +544,7 @@ const AuthPage = () => {
         ...profileData,
         username: normalizedUsername,
         accountCategory,
+        accountType: role,
         accountRole: role,
         coachingRoleType: selectedStaffRole || profileData.coachingRoleType || null,
         contactEmail: profileData.contactEmail ? normalizeEmailValue(profileData.contactEmail) : null,
@@ -454,23 +579,22 @@ const AuthPage = () => {
           : profileData.fullName || profileData.clubName || "";
       const normalizedBio = profileData.bio ? String(profileData.bio).trim().slice(0, 100) : null;
 
-      await (supabase as any)
-        .from("profiles")
-        .update({
+      const profileRolePayload = {
           full_name: normalizedFullName,
           username: normalizedUsername,
           bio: normalizedBio,
-          club_name: role === "team_club" ? profileData.clubName || null : null,
+          club_name: role === "team_club" || role === "school_team" ? profileData.clubName || profileData.schoolName || null : null,
           email: normalizedEmail || normalizeEmailValue(profileData.contactEmail) || null,
           account_category: accountCategory,
+          account_type: role,
           account_role: role,
-          role: mapRoleForLegacyBackend(role),
+          role: legacyRole,
           coaching_role_type: selectedStaffRole,
-          teams_currently_coaching: role !== "team_club" && role !== "player" && role !== "parent" ? profileData.teamOrganizationName || null : null,
-          past_coaching_experience: role !== "team_club" && role !== "player" && role !== "parent" ? profileData.previousTeams || null : null,
-          coaching_licenses: role !== "team_club" && role !== "player" && role !== "parent" ? splitCommaValues(profileData.coachingLicenses) : null,
-          coaching_accolades: role !== "team_club" && role !== "player" && role !== "parent" ? profileData.notableAchievements || null : null,
-          coaching_location: role !== "team_club" && role !== "player" && role !== "parent" ? [profileData.city, profileData.country].filter(Boolean).join(", ") || null : null,
+          teams_currently_coaching: role !== "team_club" && role !== "school_team" && role !== "player" && role !== "parent" ? profileData.teamOrganizationName || null : null,
+          past_coaching_experience: role !== "team_club" && role !== "school_team" && role !== "player" && role !== "parent" ? profileData.previousTeams || null : null,
+          coaching_licenses: role !== "team_club" && role !== "school_team" && role !== "player" && role !== "parent" ? splitCommaValues(profileData.coachingLicenses) : null,
+          coaching_accolades: role !== "team_club" && role !== "school_team" && role !== "player" && role !== "parent" ? profileData.notableAchievements || null : null,
+          coaching_location: role !== "team_club" && role !== "school_team" && role !== "player" && role !== "parent" ? [profileData.city, profileData.country].filter(Boolean).join(", ") || null : null,
           scout_role_title: role === "scout" ? profileData.scoutRoleTitle || null : null,
           scout_organization: role === "scout" ? profileData.scoutOrganization || null : null,
           scouting_licenses: role === "scout" ? splitCommaValues(profileData.scoutingLicenses) : null,
@@ -491,10 +615,20 @@ const AuthPage = () => {
           referee_certification_proof_url: role === "referee" ? refereeProofPath : null,
           referee_accolades: role === "referee" ? profileData.refereeAccolades || null : null,
           referee_profile_public: role === "referee" ? Boolean(profileData.refereeProfilePublic) : null,
-        })
-        .eq("user_id", sessionUserId);
+        };
 
-      if (accountCategory === "team_staff" && role !== "team_club") {
+      const profileRoleUpdate = await stripMissingProfilesColumnsAndRetry(profileRolePayload, (nextPayload) =>
+        (supabase as any)
+          .from("profiles")
+          .update(nextPayload)
+          .eq("user_id", sessionUserId)
+      );
+
+      if (profileRoleUpdate.error) {
+        throw profileRoleUpdate.error;
+      }
+
+      if (accountCategory === "team_staff" && role !== "team_club" && role !== "school_team") {
         const staffProfileRole =
           role === "academy_director"
             ? "academy_director"
@@ -653,7 +787,7 @@ const AuthPage = () => {
           );
       }
 
-      if (role === "team_club") {
+      if (role === "team_club" || role === "school_team") {
         const teamType = profileData.teamType === "school" ? "school" : "club";
         const schoolLevel = profileData.schoolLevel || null;
         const teamDisplayName = teamType === "school" ? profileData.schoolName || profileData.clubName : profileData.clubName;
@@ -885,18 +1019,12 @@ const AuthPage = () => {
             social_links: teamType === "school" ? profileData.socialLinks || null : null,
           };
 
-          let updateResult = await (supabase as any)
-            .from("teams")
-            .update(teamPayload)
-            .eq("id", resolvedTeamId);
-
-          if (isMissingAgeGroupColumnError(updateResult.error)) {
-            const { age_group: _ignoredAgeGroup, ...fallbackPayload } = teamPayload;
-            updateResult = await (supabase as any)
+          await stripMissingTeamsColumnsAndRetry(teamPayload, (nextPayload) =>
+            (supabase as any)
               .from("teams")
-              .update(fallbackPayload)
-              .eq("id", resolvedTeamId);
-          }
+              .update(nextPayload)
+              .eq("id", resolvedTeamId)
+          );
         } else {
           const teamPayload = {
             name: teamDisplayName || "Team",
@@ -925,20 +1053,13 @@ const AuthPage = () => {
             social_links: teamType === "school" ? profileData.socialLinks || null : null,
           };
 
-          let insertResult = await (supabase as any)
-            .from("teams")
-            .insert(teamPayload)
-            .select("id")
-            .maybeSingle();
-
-          if (isMissingAgeGroupColumnError(insertResult.error)) {
-            const { age_group: _ignoredAgeGroup, ...fallbackPayload } = teamPayload;
-            insertResult = await (supabase as any)
+          const insertResult = await stripMissingTeamsColumnsAndRetry(teamPayload, (nextPayload) =>
+            (supabase as any)
               .from("teams")
-              .insert(fallbackPayload)
+              .insert(nextPayload)
               .select("id")
-              .maybeSingle();
-          }
+              .maybeSingle()
+          );
 
           resolvedTeamId = insertResult.data?.id || null;
         }
@@ -1012,7 +1133,7 @@ const AuthPage = () => {
   };
 
   const handlePlayerSubmit = (data: any) => createUserAndProfile(data, 'player');
-  const handleTeamSubmit = (data: any) => createUserAndProfile(data, 'team_club');
+  const handleTeamSubmit = (data: any) => createUserAndProfile(data, staffType === "school_team" ? "school_team" : "team_club");
   const handleStaffSubmit = (data: any) => createUserAndProfile(data, staffType!);
   const handleParentSubmit = (data: any) => createUserAndProfile(data, 'parent');
   const handleRefereeSubmit = (data: any) => createUserAndProfile(data, 'referee');

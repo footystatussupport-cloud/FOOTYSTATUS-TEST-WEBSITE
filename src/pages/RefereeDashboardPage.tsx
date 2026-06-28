@@ -4,8 +4,9 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/hooks/useAuth";
+import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { fetchRefereeClaimsForUser, refereeRoleLabel, RefereeMatchClaim } from "@/lib/referees";
+import { fetchRefereeClaimsForUser, refereeRoleLabel, RefereeMatchClaim, removeRefereeMatchAssignment } from "@/lib/referees";
 import { formatMatchDateTime } from "@/lib/matches";
 
 interface RefereeProfileDetails {
@@ -32,9 +33,11 @@ const statusIcon = {
 const RefereeDashboardPage = () => {
   const navigate = useNavigate();
   const { user, profile } = useAuth();
+  const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [details, setDetails] = useState<RefereeProfileDetails | null>(null);
   const [claims, setClaims] = useState<RefereeMatchClaim[]>([]);
+  const [leavingClaimId, setLeavingClaimId] = useState<string | null>(null);
 
   const isRefereeAccount = profile?.account_category === "referee" || profile?.account_role === "referee" || profile?.role === "referee";
 
@@ -70,6 +73,23 @@ const RefereeDashboardPage = () => {
     loadDashboard();
   }, [user?.id]);
 
+  const handleLeaveMatch = async (claim: RefereeMatchClaim) => {
+    const confirmed = window.confirm(
+      "Are you sure you want to leave this match? You will no longer be listed as a referee for this fixture."
+    );
+    if (!confirmed) return;
+
+    setLeavingClaimId(claim.id);
+    const { error } = await removeRefereeMatchAssignment({ claimId: claim.id, matchId: claim.match_id });
+    if (error) {
+      toast({ title: "Could not leave match", description: error.message, variant: "destructive" });
+    } else {
+      setClaims((current) => current.filter((item) => item.id !== claim.id));
+      toast({ title: "You left this match", description: "You are no longer linked to that fixture." });
+    }
+    setLeavingClaimId(null);
+  };
+
   const renderClaimList = (title: string, items: RefereeMatchClaim[], status: keyof typeof statusIcon) => {
     const Icon = statusIcon[status];
     return (
@@ -81,20 +101,32 @@ const RefereeDashboardPage = () => {
         {items.length ? (
           <div className="space-y-3">
             {items.map((claim) => (
-              <button
+              <div
                 key={claim.id}
-                type="button"
-                onClick={() => navigate(`/match/${claim.match_id}`)}
                 className="w-full rounded-lg border border-border p-3 text-left transition-colors hover:bg-muted/60"
               >
-                <p className="font-semibold text-foreground">
-                  {[claim.home_team_name, claim.away_team_name].filter(Boolean).join(" vs ") || "Match assignment"}
-                </p>
-                <p className="mt-1 text-sm text-muted-foreground">{claim.league_name || "League match"}</p>
-                <p className="mt-1 text-sm text-muted-foreground">
+                <button type="button" onClick={() => navigate(`/match/${claim.match_id}`)} className="w-full text-left">
+                  <p className="font-semibold text-foreground">
+                    {[claim.home_team_name, claim.away_team_name].filter(Boolean).join(" vs ") || "Match assignment"}
+                  </p>
+                  <p className="mt-1 text-sm text-muted-foreground">{claim.league_name || "League match"}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
                   {refereeRoleLabel(claim.referee_type)} • {formatMatchDateTime(claim.match_date)}
-                </p>
-              </button>
+                  </p>
+                </button>
+                {status === "approved" ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="mt-3 w-full"
+                    onClick={() => handleLeaveMatch(claim)}
+                    disabled={leavingClaimId === claim.id}
+                  >
+                    {leavingClaimId === claim.id ? "Leaving..." : "Leave Match"}
+                  </Button>
+                ) : null}
+              </div>
             ))}
           </div>
         ) : (
