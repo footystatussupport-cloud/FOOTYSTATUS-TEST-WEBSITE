@@ -61,6 +61,7 @@ import {
   reviewParentPlayerLink,
 } from "@/lib/parentLinks";
 import { getUsernameErrorMessage, normalizeUsername, validateUsername } from "@/lib/usernames";
+import { containsProfanityInFields } from "@/lib/profanityFilter";
 
 interface ProfileData {
   id: string;
@@ -3295,6 +3296,15 @@ const ProfilePage = () => {
 
     if (!clipTitle.trim()) {
       toast({ title: "Title required", description: "Please enter a clip title before posting.", variant: "destructive" });
+      return;
+    }
+
+    if (containsProfanityInFields([clipTitle, clipCaption])) {
+      toast({
+        title: "Post blocked",
+        description: "Your post contains inappropriate language. Please edit it and try again.",
+        variant: "destructive",
+      });
       return;
     }
 

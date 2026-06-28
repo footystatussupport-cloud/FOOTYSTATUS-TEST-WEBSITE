@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { containsProfanity } from "@/lib/profanityFilter";
 import { fetchActiveMembershipForUser } from "@/lib/teamMemberships";
 import { isFootyStatusSuperAdminEmail } from "@/lib/superAdmin";
 
@@ -585,15 +586,31 @@ export const addMatchEvent = async (payload: {
 export const deleteMatchEvent = async (eventId: string) =>
   (supabase as any).rpc("delete_match_event", { _event_id: eventId });
 
-export const createMatchComment = async (matchId: string, userId: string, body: string) =>
-  (supabase as any)
+export const createMatchComment = async (matchId: string, userId: string, body: string) => {
+  if (containsProfanity(body)) {
+    return {
+      data: null,
+      error: { message: "Your comment contains inappropriate language. Please edit it and try again." },
+    };
+  }
+
+  return (supabase as any)
     .from("match_comments")
     .insert({ match_id: matchId, user_id: userId, body: body.trim() })
     .select("*")
     .single();
+};
 
-export const updateMatchComment = async (commentId: string, body: string) =>
-  (supabase as any).from("match_comments").update({ body: body.trim() }).eq("id", commentId);
+export const updateMatchComment = async (commentId: string, body: string) => {
+  if (containsProfanity(body)) {
+    return {
+      data: null,
+      error: { message: "Your comment contains inappropriate language. Please edit it and try again." },
+    };
+  }
+
+  return (supabase as any).from("match_comments").update({ body: body.trim() }).eq("id", commentId);
+};
 
 export const deleteMatchComment = async (commentId: string) =>
   (supabase as any).from("match_comments").delete().eq("id", commentId);
