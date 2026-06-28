@@ -25,6 +25,19 @@ type SignupStep = 'account_type' | 'staff_type' | 'auth_method' | 'profile_form'
 type AccountType = 'player' | 'team_staff' | 'parent' | 'referee';
 type StaffType = 'team_club' | 'school_team' | 'head_coach_assistant' | 'scout' | 'academy_director';
 
+const VALID_SIGNUP_ROLES = new Set([
+  "player",
+  "parent",
+  "referee",
+  "team_club",
+  "school_team",
+  "head_coach_assistant",
+  "scout",
+  "trainer",
+  "academy_director",
+  "footy_status_official",
+]);
+
 const emailPasswordSchema = z.object({
   email: z.string().trim().email("Please enter a valid email address."),
   password: z.string().min(6, "Password must be at least 6 characters."),
@@ -418,6 +431,9 @@ const AuthPage = () => {
 
   const createUserAndProfile = async (profileData: any, role: string) => {
     setLoading(true);
+    let sessionUserIdForRecovery: string | null = null;
+    let coreProfileSaved = false;
+    const signupMethod = password ? "email" : "google";
 
     try {
       let sessionUserId: string | null = null;
@@ -426,6 +442,20 @@ const AuthPage = () => {
       const usernameValidationMessage = validateUsername(normalizedUsername);
       const accountCategory = getAccountCategoryForRole(role);
       const legacyRole = getLegacyRoleForAccountRole(role);
+
+      if (!role || !VALID_SIGNUP_ROLES.has(role)) {
+        throw new Error("Please choose an account type before creating your account.");
+      }
+
+      console.info("Footy Status signup started", {
+        method: signupMethod,
+        selectedAccountType: accountType,
+        selectedStaffType: staffType,
+        selectedRole: role,
+        accountCategory,
+        legacyRole,
+        onboardingPayloadKeys: Object.keys(profileData || {}),
+      });
 
       if (usernameValidationMessage) {
         throw new Error(usernameValidationMessage);
@@ -444,6 +474,12 @@ const AuthPage = () => {
       if (existingSession) {
         sessionUserId = existingSession.user.id;
         normalizedEmail = normalizeEmailValue(existingSession.user.email) || normalizedEmail;
+        sessionUserIdForRecovery = sessionUserId;
+        console.info("Footy Status signup using existing auth session", {
+          method: signupMethod,
+          authUserId: sessionUserId,
+          restoredRole: role,
+        });
         if (existingUsername && existingUsername.user_id !== sessionUserId) {
           throw new Error("Username is already taken");
         }
@@ -482,6 +518,12 @@ const AuthPage = () => {
         }
 
         sessionUserId = authData.user.id;
+        sessionUserIdForRecovery = sessionUserId;
+        console.info("Footy Status auth user created", {
+          method: "email",
+          authUserId: sessionUserId,
+          selectedRole: role,
+        });
 
         if (!authData.session) {
           const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
@@ -493,8 +535,10 @@ const AuthPage = () => {
           if (!signInData.session) throw new Error("Account created, but we could not sign you in automatically. Please sign in.");
 
           sessionUserId = signInData.session.user.id;
+          sessionUserIdForRecovery = sessionUserId;
         } else {
           sessionUserId = authData.session.user.id;
+          sessionUserIdForRecovery = sessionUserId;
         }
       }
 
@@ -521,6 +565,13 @@ const AuthPage = () => {
 
       if (metadataUpdate.error) {
         console.warn("Could not update signup role metadata after account creation:", metadataUpdate.error);
+      } else {
+        console.info("Footy Status auth metadata updated", {
+          authUserId: sessionUserId,
+          accountRole: role,
+          accountCategory,
+          legacyRole,
+        });
       }
 
       if (refereeProofFile) {
@@ -572,6 +623,10 @@ const AuthPage = () => {
       if (setupError) {
         throw new Error(setupError.message || "We couldn't finish setting up your profile.");
       }
+      console.info("Footy Status complete_account_setup saved", {
+        authUserId: sessionUserId,
+        selectedRole: role,
+      });
 
       const normalizedFullName =
         role === "team_club"
@@ -627,6 +682,46 @@ const AuthPage = () => {
       if (profileRoleUpdate.error) {
         throw profileRoleUpdate.error;
       }
+
+      const { data: savedRoleProfile, error: savedRoleError } = await (supabase as any)
+        .from("profiles")
+        .select("user_id, account_category, account_type, account_role, role")
+        .eq("user_id", sessionUserId)
+        .maybeSingle();
+
+      if (savedRoleError) {
+        throw savedRoleError;
+      }
+
+      if (savedRoleProfile?.account_role !== role || savedRoleProfile?.account_type !== role) {
+        console.warn("Signup role mismatch detected; repairing profile role fields", {
+          authUserId: sessionUserId,
+          expectedRole: role,
+          savedProfile: savedRoleProfile,
+        });
+
+        const repairRoleUpdate = await (supabase as any)
+          .from("profiles")
+          .update({
+            account_category: accountCategory,
+            account_type: role,
+            account_role: role,
+            role: legacyRole,
+          })
+          .eq("user_id", sessionUserId);
+
+        if (repairRoleUpdate.error) {
+          throw repairRoleUpdate.error;
+        }
+      }
+
+      coreProfileSaved = true;
+      console.info("Footy Status signup core profile saved", {
+        method: signupMethod,
+        authUserId: sessionUserId,
+        finalAccountType: role,
+        routingDestination: "/",
+      });
 
       if (accountCategory === "team_staff" && role !== "team_club" && role !== "school_team") {
         const staffProfileRole =
@@ -1121,7 +1216,25 @@ const AuthPage = () => {
       clearSignupFlow();
       navigate("/");
     } catch (error) {
-      console.error("Signup error:", error);
+      console.error("Signup error:", {
+        error,
+        method: signupMethod,
+        selectedAccountType: accountType,
+        selectedStaffType: staffType,
+        attemptedRole: role,
+        authUserId: sessionUserIdForRecovery,
+        coreProfileSaved,
+      });
+      if (coreProfileSaved && sessionUserIdForRecovery) {
+        toast({
+          title: "Welcome to Footy Status!",
+          description: "Your account was created. Some extra profile details may need to be refreshed or saved again.",
+        });
+        clearSignupFlow();
+        navigate("/");
+        return;
+      }
+
       toast({
         title: "Signup failed",
         description: getUsernameErrorMessage(getAuthErrorMessage(error)),

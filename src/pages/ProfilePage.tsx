@@ -80,6 +80,7 @@ interface ProfileData {
   weight: string | null;
   is_pro: boolean;
   account_category: "player" | "team_staff" | "parent" | "referee" | null;
+  account_type?: "player" | "team_club" | "school_team" | "head_coach_assistant" | "scout" | "trainer" | "academy_director" | "parent" | "referee" | null;
   account_role: "player" | "team_club" | "head_coach_assistant" | "scout" | "trainer" | "academy_director" | "parent" | "referee" | null;
   role: "player" | "team" | "coach" | "scout" | "trainer" | "academy_director" | "parent" | "referee" | null;
   account_tier?: "free" | "pro_annual" | "pro_lifetime" | null;
@@ -502,6 +503,8 @@ const ProfilePage = () => {
   const [coachClubTeamRoles, setCoachClubTeamRoles] = useState<Record<string, string>>({});
   const [coachGeneralClubRole, setCoachGeneralClubRole] = useState(false);
   const [teamAccessCode, setTeamAccessCode] = useState("");
+  const [directTeamAccessCode, setDirectTeamAccessCode] = useState("");
+  const [joiningByDirectCode, setJoiningByDirectCode] = useState(false);
   const [activeInviteClubTeamId, setActiveInviteClubTeamId] = useState<string | null>(null);
   const [clubTeamInviteSearch, setClubTeamInviteSearch] = useState("");
   const [clubTeamInviteResults, setClubTeamInviteResults] = useState<ClubInvitePlayerResult[]>([]);
@@ -720,6 +723,7 @@ const ProfilePage = () => {
 
   const normalizeAccountRole = (nextProfile?: ProfileData | null) =>
     nextProfile?.account_role ||
+    nextProfile?.account_type ||
     (nextProfile?.role === "team"
       ? "team_club"
       : nextProfile?.role === "coach"
@@ -1332,16 +1336,59 @@ const ProfilePage = () => {
         setSeasonStats([]);
       }
     } else if (error && error.code === 'PGRST116') {
-      // No profile yet, create one
+      const metadataRole =
+        user.user_metadata?.account_role ||
+        user.user_metadata?.account_type ||
+        user.user_metadata?.selected_account_type ||
+        user.user_metadata?.role ||
+        null;
+      const resolvedMissingAccountRole =
+        authProfile?.account_role ||
+        authProfile?.account_type ||
+        (metadataRole === "team"
+          ? "team_club"
+          : metadataRole === "coach"
+            ? "head_coach_assistant"
+            : metadataRole);
+      const resolvedMissingCategory =
+        authProfile?.account_category ||
+        (resolvedMissingAccountRole === "player"
+          ? "player"
+          : resolvedMissingAccountRole === "parent"
+            ? "parent"
+            : resolvedMissingAccountRole === "referee"
+              ? "referee"
+              : resolvedMissingAccountRole
+                ? "team_staff"
+                : null);
+      const resolvedMissingLegacyRole =
+        authProfile?.role ||
+        (resolvedMissingAccountRole === "team_club" || resolvedMissingAccountRole === "school_team"
+          ? "team"
+          : resolvedMissingAccountRole === "head_coach_assistant"
+            ? "coach"
+            : resolvedMissingAccountRole);
+
+      if (!resolvedMissingAccountRole || !resolvedMissingCategory || !resolvedMissingLegacyRole) {
+        toast({
+          title: "Profile setup incomplete",
+          description: "Your account type is missing. Please sign out and finish signup again.",
+          variant: "destructive",
+        });
+        setLoading(false);
+        return;
+      }
+
       const { data: newProfile } = await supabase
         .from('profiles')
         .insert({
           user_id: user.id,
           email: user.email,
           full_name: user.user_metadata?.full_name || '',
-          role: authProfile?.role || 'player',
-          account_category: authProfile?.account_category || 'player',
-          account_role: authProfile?.account_role || 'player',
+          role: resolvedMissingLegacyRole,
+          account_category: resolvedMissingCategory,
+          account_type: resolvedMissingAccountRole,
+          account_role: resolvedMissingAccountRole,
         })
         .select()
         .single();
@@ -3450,6 +3497,37 @@ const ProfilePage = () => {
     await Promise.all([fetchProfile(), fetchTeamConnectionData()]);
   };
 
+  const handleJoinTeamByDirectCode = async () => {
+    const normalizedCode = sanitizeClubTeamAccessCode(directTeamAccessCode);
+
+    if (normalizedCode.length !== 5) {
+      toast({ title: "Invalid access code", description: "Invalid access code. Please check the code and try again.", variant: "destructive" });
+      return;
+    }
+
+    setJoiningByDirectCode(true);
+    const { error } = await (supabase as any).rpc("join_club_team_with_access_code", {
+      _access_code: normalizedCode,
+    });
+
+    if (error) {
+      const lowerMessage = (error.message || "").toLowerCase();
+      const description = lowerMessage.includes("eligible")
+        ? "You are not eligible to join this team."
+        : lowerMessage.includes("invalid access code")
+          ? "Invalid access code. Please check the code and try again."
+          : error.message;
+      toast({ title: "Could not join team", description, variant: "destructive" });
+      setJoiningByDirectCode(false);
+      return;
+    }
+
+    toast({ title: "Joined team", description: "You were linked to that daughter team roster." });
+    setDirectTeamAccessCode("");
+    await Promise.all([fetchProfile(), fetchTeamConnectionData()]);
+    setJoiningByDirectCode(false);
+  };
+
   const handleCoachStaffRequestTeam = async () => {
     if (!user || !selectedJoinTeam) {
       toast({ title: "Select a team", description: "Choose the team you want to request first.", variant: "destructive" });
@@ -5161,6 +5239,29 @@ const ProfilePage = () => {
             <div className="bg-card border border-border rounded-xl p-4 space-y-4">
               {linkedMembershipsForDisplay.length > 0 ? null : (
                 <div className="space-y-3">
+                  <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 space-y-3">
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">Join with a 5-digit daughter team code</p>
+                      <p className="text-xs text-muted-foreground">Enter the code from your team to join that exact roster.</p>
+                    </div>
+                    <div className="grid grid-cols-[1fr_auto] gap-2">
+                      <Input
+                        value={directTeamAccessCode}
+                        onChange={(e) => setDirectTeamAccessCode(sanitizeClubTeamAccessCode(e.target.value))}
+                        inputMode="numeric"
+                        maxLength={5}
+                        placeholder="12345"
+                        className="text-center"
+                      />
+                      <Button
+                        type="button"
+                        onClick={handleJoinTeamByDirectCode}
+                        disabled={joiningByDirectCode || sanitizeClubTeamAccessCode(directTeamAccessCode).length !== 5}
+                      >
+                        {joiningByDirectCode ? "Joining..." : "Join"}
+                      </Button>
+                    </div>
+                  </div>
                   <p className="text-sm text-muted-foreground">Start by searching for the approved team you want to apply to.</p>
                   <div className="relative">
                     <Input

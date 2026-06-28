@@ -54,6 +54,8 @@ const ClubTeamProfile = () => {
   const [coachRoleSelections, setCoachRoleSelections] = useState<Record<string, string>>({});
   const [coachActionLoading, setCoachActionLoading] = useState<string | null>(null);
   const [reviewingRequestId, setReviewingRequestId] = useState<string | null>(null);
+  const [playerJoinState, setPlayerJoinState] = useState<"none" | "pending" | "member">("none");
+  const [requestingToJoin, setRequestingToJoin] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
@@ -121,18 +123,13 @@ const ClubTeamProfile = () => {
           viewerManagedClubId === club.id ||
           parentTeam.owner_user_id === user.id ||
           viewerManagedTeamId === parentTeam.id)));
-  const parentClubDestination =
-    user &&
-    profile?.account_role === "team_club" &&
-    (
-      parentTeam?.owner_user_id === user.id ||
-      viewerManagedTeamId === parentTeam?.id ||
-      viewerManagedClubId === club?.id
-    )
-      ? "/profile"
-      : parentTeam
-        ? `/team/${parentTeam.id}`
-        : "/?tab=explore";
+  const canRequestToJoinClubTeam =
+    !!user &&
+    profile?.account_role === "player" &&
+    playerJoinState === "none" &&
+    !!clubTeamGender &&
+    profile?.player_gender === clubTeamGender;
+  const parentClubDestination = parentTeam?.id ? `/team/${parentTeam.id}` : null;
   const rosterProfileIds = useMemo(() => new Set(roster.map((player) => player.player_profile_id)), [roster]);
   const linkedCoachUserIds = useMemo(() => new Set(linkedCoaches.map((coach) => coach.coach_user_id)), [linkedCoaches]);
   const assignableMotherTeamCoaches = useMemo(
@@ -294,6 +291,42 @@ const ClubTeamProfile = () => {
     fetchManagementData();
   }, [canManageClubTeam, id, parentTeam?.id]);
 
+  useEffect(() => {
+    const fetchPlayerJoinState = async () => {
+      if (!id || !user || profile?.account_role !== "player") {
+        setPlayerJoinState("none");
+        return;
+      }
+
+      const [membershipRes, requestRes] = await Promise.all([
+        (supabase as any)
+          .from("player_team_memberships")
+          .select("id")
+          .eq("player_user_id", user.id)
+          .eq("club_team_id", id)
+          .in("status", ["accepted", "approved"])
+          .maybeSingle(),
+        (supabase as any)
+          .from("team_join_requests")
+          .select("id")
+          .eq("player_user_id", user.id)
+          .eq("club_team_id", id)
+          .eq("status", "pending")
+          .maybeSingle(),
+      ]);
+
+      if (membershipRes.data?.id) {
+        setPlayerJoinState("member");
+      } else if (requestRes.data?.id) {
+        setPlayerJoinState("pending");
+      } else {
+        setPlayerJoinState("none");
+      }
+    };
+
+    fetchPlayerJoinState();
+  }, [id, user?.id, profile?.account_role, reloadToken]);
+
   if (loading) {
     return (
       <div className="min-h-screen bg-background max-w-md mx-auto border-x border-border p-4">
@@ -420,6 +453,27 @@ const ClubTeamProfile = () => {
     setReviewingRequestId(null);
   };
 
+  const handleRequestToJoinClubTeam = async () => {
+    if (!id) return;
+
+    setRequestingToJoin(true);
+    const { error } = await (supabase as any).rpc("request_join_club_team", {
+      _club_team_id: id,
+    });
+
+    if (error) {
+      const lowerMessage = (error.message || "").toLowerCase();
+      const description = lowerMessage.includes("eligible") ? "You are not eligible to join this team." : error.message;
+      toast({ title: "Could not request to join", description, variant: "destructive" });
+      setRequestingToJoin(false);
+      return;
+    }
+
+    toast({ title: "Request sent", description: "The team can approve your request from their daughter-team profile." });
+    setPlayerJoinState("pending");
+    setRequestingToJoin(false);
+  };
+
   const handleInviteCoach = async (coach: CoachStaffProfile) => {
     if (!canManageClubTeam || !id || !parentTeam?.id || !user) return;
 
@@ -483,10 +537,23 @@ const ClubTeamProfile = () => {
     setCoachActionLoading(null);
   };
 
+  const openMotherTeamProfile = () => {
+    if (!parentClubDestination) {
+      toast({
+        title: "Mother team profile missing",
+        description: "This daughter team is not linked to a mother team profile yet.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    navigate(parentClubDestination);
+  };
+
   return (
     <div className="min-h-screen bg-background max-w-md mx-auto border-x border-border">
       <header className="sticky top-0 z-10 border-b border-border bg-background px-4 py-3">
-        <button onClick={() => navigate(parentClubDestination)} className="flex items-center gap-2 text-muted-foreground hover:text-foreground">
+        <button onClick={openMotherTeamProfile} className="flex items-center gap-2 text-muted-foreground hover:text-foreground">
           <ArrowLeft className="h-5 w-5" />
           {clubTeam?.team_type === "school" || parentTeam?.team_type === "school" ? "Back to School" : "Back to Club"}
         </button>
@@ -495,17 +562,22 @@ const ClubTeamProfile = () => {
       <div className="space-y-6 p-4">
         <InlineProfileAdminControls targetUserId={parentTeam.owner_user_id} targetName={`${clubName} ${ageGroupLabel || ""}`.trim()} />
         <section className="rounded-xl border border-border bg-card p-6 text-center">
-          <div className="mx-auto mb-4 flex h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-navy">
+          <button
+            type="button"
+            onClick={openMotherTeamProfile}
+            className="mx-auto mb-4 flex h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-navy transition-transform hover:scale-[1.03] focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
+            aria-label="Open mother team profile"
+          >
             {parentTeam.logo_url ? (
               <img src={parentTeam.logo_url} alt={parentTeam.name} className="h-full w-full object-cover" />
             ) : (
               <Shield className="h-12 w-12 text-white" />
             )}
-          </div>
+          </button>
           <div className="grid w-full grid-cols-[1fr_auto_1fr] items-center">
             <button
               type="button"
-              onClick={() => navigate(parentClubDestination)}
+              onClick={openMotherTeamProfile}
               className="col-start-2 max-w-[14rem] break-words text-center text-2xl font-bold text-foreground transition-colors hover:text-primary"
             >
               {clubName}
@@ -548,6 +620,33 @@ const ClubTeamProfile = () => {
             </div>
           ) : null}
         </section>
+
+        {profile?.account_role === "player" && (canRequestToJoinClubTeam || playerJoinState === "pending" || playerJoinState === "member") ? (
+          <section className="rounded-xl border border-border bg-card p-4">
+            {canRequestToJoinClubTeam ? (
+              <div className="space-y-3">
+                <div>
+                  <p className="text-sm font-bold tracking-wide text-navy">JOIN THIS TEAM</p>
+                  <p className="mt-1 text-sm text-muted-foreground">Send a request to join this daughter team roster.</p>
+                </div>
+                <Button className="w-full" onClick={handleRequestToJoinClubTeam} disabled={requestingToJoin}>
+                  <UserPlus className="mr-2 h-4 w-4" />
+                  {requestingToJoin ? "Sending request..." : "Request to Join Team"}
+                </Button>
+              </div>
+            ) : playerJoinState === "pending" ? (
+              <div>
+                <p className="text-sm font-bold tracking-wide text-navy">JOIN REQUEST SENT</p>
+                <p className="mt-1 text-sm text-muted-foreground">Your request is waiting for team approval.</p>
+              </div>
+            ) : playerJoinState === "member" ? (
+              <div>
+                <p className="text-sm font-bold tracking-wide text-navy">TEAM MEMBER</p>
+                <p className="mt-1 text-sm text-muted-foreground">You are linked to this daughter team roster.</p>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
 
         <section className="rounded-xl border border-border bg-card p-4">
           <div className="flex items-start justify-between gap-3">
