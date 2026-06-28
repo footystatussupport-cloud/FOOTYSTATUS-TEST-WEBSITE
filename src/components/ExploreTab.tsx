@@ -289,9 +289,16 @@ const ExploreTab = () => {
 
       setAllPlayers(merged);
       setPlayers(merged);
-      const scoutProfiles = coachStaffProfiles.filter((staff) => staff.account_role === "scout");
-      const academyStaffProfiles = coachStaffProfiles.filter((staff) => staff.account_role === "academy_director");
-      const coachProfiles = coachStaffProfiles.filter((staff) => staff.account_role !== "scout" && staff.account_role !== "academy_director");
+      const nonTeamOrganizationStaff = coachStaffProfiles.filter(
+        (staff) => staff.account_role !== "team_club" && staff.account_role !== "school_team"
+      );
+      const scoutProfiles = nonTeamOrganizationStaff.filter((staff) => staff.account_role === "scout");
+      const academyStaffProfiles = nonTeamOrganizationStaff.filter(
+        (staff) => staff.account_role === "academy_director" || staff.account_role === "team_staff"
+      );
+      const coachProfiles = nonTeamOrganizationStaff.filter(
+        (staff) => staff.account_role !== "scout" && staff.account_role !== "academy_director" && staff.account_role !== "team_staff"
+      );
       setAllCoachStaff(coachProfiles);
       setCoachStaff(coachProfiles);
       setAllAcademyStaff(academyStaffProfiles);

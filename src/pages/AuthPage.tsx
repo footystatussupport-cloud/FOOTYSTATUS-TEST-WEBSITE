@@ -538,7 +538,7 @@ const AuthPage = () => {
           options: {
             emailRedirectTo: buildAppUrl("/"),
             data: {
-              full_name: profileData.fullName || profileData.clubName || "",
+              full_name: profileData.fullName || profileData.clubName || profileData.schoolName || "",
               username: normalizedUsername,
               account_category: accountCategory,
               account_role: role,
@@ -593,7 +593,7 @@ const AuthPage = () => {
 
       const metadataUpdate = await supabase.auth.updateUser({
         data: {
-          full_name: profileData.fullName || profileData.clubName || "",
+          full_name: profileData.fullName || profileData.clubName || profileData.schoolName || "",
           username: normalizedUsername,
           account_category: accountCategory,
           account_role: role,
@@ -678,7 +678,9 @@ const AuthPage = () => {
       const normalizedFullName =
         role === "team_club"
           ? profileData.clubName || ""
-          : profileData.fullName || profileData.clubName || "";
+          : role === "school_team"
+            ? profileData.schoolName || profileData.clubName || ""
+            : profileData.fullName || profileData.clubName || profileData.schoolName || "";
       const normalizedBio = profileData.bio ? String(profileData.bio).trim().slice(0, 100) : null;
 
       const profileRolePayload = {
@@ -934,6 +936,7 @@ const AuthPage = () => {
         const schoolLevel = profileData.schoolLevel || null;
         const teamDisplayName = teamType === "school" ? profileData.schoolName || profileData.clubName : profileData.clubName;
         const leagueConference = teamType === "school" ? profileData.leagueConference || null : null;
+        const teamContactEmail = profileData.contactEmail ? String(profileData.contactEmail).trim().toLowerCase() : normalizedEmail || null;
         const normalizedOfferedTeams = (profileData.offeredTeams || [])
           .map((team: any) => ({
             ...team,
@@ -967,7 +970,7 @@ const AuthPage = () => {
               away_jersey_color: profileData.awayJerseyColor || null,
               third_kit_color: profileData.thirdKitColor || null,
               age_groups_offered: ageGroupsOffered,
-              contact_email: profileData.contactEmail ? String(profileData.contactEmail).trim().toLowerCase() : null,
+              contact_email: teamContactEmail,
               contact_phone: profileData.contactPhone || null,
               team_type: teamType,
               school_level: schoolLevel,
@@ -993,7 +996,7 @@ const AuthPage = () => {
             _city: normalizedCity || null,
             _home_stadium: profileData.homeFieldAddress || null,
             _training_ground: profileData.trainingGroundAddress || null,
-            _contact_email: profileData.contactEmail ? String(profileData.contactEmail).trim().toLowerCase() : null,
+            _contact_email: teamContactEmail,
             _contact_phone: profileData.contactPhone || null,
           });
 
@@ -1008,7 +1011,7 @@ const AuthPage = () => {
           _founded_year: profileData.foundedYear ? Number(profileData.foundedYear) : null,
           _home_field_address: profileData.homeFieldAddress || null,
           _training_ground_address: profileData.trainingGroundAddress || null,
-          _contact_email: profileData.contactEmail ? String(profileData.contactEmail).trim().toLowerCase() : null,
+          _contact_email: teamContactEmail,
           _contact_phone: profileData.contactPhone || null,
           _offered_teams: normalizedOfferedTeams,
           _staff: (profileData.staffMembers || []).map((staff: any) => ({
@@ -1026,18 +1029,18 @@ const AuthPage = () => {
             _city: normalizedCity || null,
             _home_stadium: profileData.homeFieldAddress || null,
             _training_ground: profileData.trainingGroundAddress || null,
-            _contact_email: profileData.contactEmail ? String(profileData.contactEmail).trim().toLowerCase() : null,
+            _contact_email: teamContactEmail,
             _contact_phone: profileData.contactPhone || null,
           });
 
           if (!fallbackTeamProfile.error) {
             const retry = await (supabase as any).rpc("save_club_profile", {
-              _club_name: profileData.clubName || null,
+              _club_name: teamDisplayName || null,
               _city: normalizedCity || null,
               _founded_year: profileData.foundedYear ? Number(profileData.foundedYear) : null,
               _home_field_address: profileData.homeFieldAddress || null,
               _training_ground_address: profileData.trainingGroundAddress || null,
-              _contact_email: profileData.contactEmail ? String(profileData.contactEmail).trim().toLowerCase() : null,
+              _contact_email: teamContactEmail,
               _contact_phone: profileData.contactPhone || null,
               _offered_teams: normalizedOfferedTeams,
               _staff: (profileData.staffMembers || []).map((staff: any) => ({
@@ -1089,7 +1092,7 @@ const AuthPage = () => {
               away_jersey_color: profileData.awayJerseyColor || null,
               third_kit_color: profileData.thirdKitColor || null,
               age_groups_offered: ageGroupsOffered,
-              contact_email: profileData.contactEmail ? String(profileData.contactEmail).trim().toLowerCase() : null,
+              contact_email: teamContactEmail,
               contact_phone: profileData.contactPhone || null,
               team_type: teamType,
               school_level: schoolLevel,
@@ -1138,7 +1141,7 @@ const AuthPage = () => {
             name: teamDisplayName || null,
             league_id: leagueId,
             age_group: firstAgeGroup,
-            contact_email: profileData.contactEmail ? String(profileData.contactEmail).trim().toLowerCase() : null,
+            contact_email: teamContactEmail,
             contact_phone: profileData.contactPhone || null,
             founded_year: profileData.foundedYear ? Number(profileData.foundedYear) : null,
             stadium: profileData.homeFieldAddress || null,
@@ -1172,7 +1175,7 @@ const AuthPage = () => {
             name: teamDisplayName || "Team",
             league_id: leagueId,
             age_group: firstAgeGroup,
-            contact_email: profileData.contactEmail ? String(profileData.contactEmail).trim().toLowerCase() : null,
+            contact_email: teamContactEmail,
             contact_phone: profileData.contactPhone || null,
             founded_year: profileData.foundedYear ? Number(profileData.foundedYear) : null,
             stadium: profileData.homeFieldAddress || null,

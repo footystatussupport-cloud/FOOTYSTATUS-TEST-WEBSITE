@@ -794,7 +794,7 @@ const ProfilePage = () => {
       case "trainer":
         return formatRoleDisplayLabel(selectedStaffRole, "Coach / Trainer");
       case "academy_director":
-        return formatRoleDisplayLabel(selectedStaffRole, "Academy Director");
+        return formatRoleDisplayLabel(selectedStaffRole, "Team Staff");
       case "team_staff":
         return formatRoleDisplayLabel(selectedStaffRole, "Team Staff");
       case "parent":

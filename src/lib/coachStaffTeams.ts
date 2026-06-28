@@ -28,12 +28,14 @@ export interface CoachClubTeamAssignment {
 }
 
 const ROLE_DISPLAY_LABELS: Record<string, string> = {
-  academy_director: "Academy Director",
+  academy_director: "Team Staff",
   head_coach_assistant: "Coach / Trainer",
   head_coach: "Head Coach",
   assistant_coach: "Assistant Coach",
   coaching_staff: "Coaching Staff",
   team_club: "Team / Club",
+  school_team: "School Team",
+  team_staff: "Team Staff",
   scout: "Scout",
   trainer: "Trainer Coach",
   coach: "Coach",
@@ -153,12 +155,13 @@ export const fetchCoachStaffProfiles = async (query?: string) => {
     .select("user_id, full_name, avatar_url, username, account_role, coaching_role_type, teams_currently_coaching, past_coaching_experience, coaching_licenses, coaching_accolades, coaching_location, scout_role_title, scout_organization, scouting_licenses, scouting_experience, scouting_regions, scouting_age_groups, scouting_positions, scouting_accolades, bio")
     .eq("account_category", "team_staff")
     .neq("account_role", "team_club")
+    .neq("account_role", "school_team")
     .limit(20);
 
   const trimmed = query?.trim();
   if (trimmed) {
     const usernameQuery = trimmed.replace(/^@/, "");
-    request = request.or(`full_name.ilike.%${trimmed}%,username.ilike.%${usernameQuery}%,coaching_role_type.ilike.%${trimmed}%`);
+    request = request.or(`full_name.ilike.%${trimmed}%,username.ilike.%${usernameQuery}%,coaching_role_type.ilike.%${trimmed}%,teams_currently_coaching.ilike.%${trimmed}%,scout_organization.ilike.%${trimmed}%`);
   }
 
   const { data, error } = await request;
