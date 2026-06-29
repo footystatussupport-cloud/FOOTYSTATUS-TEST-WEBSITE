@@ -49,12 +49,17 @@ const forgotPasswordSchema = z.object({
 
 const getAuthErrorMessage = (error: unknown) => {
   const message = error instanceof Error ? error.message : "Something went wrong. Please try again.";
+  const lowerMessage = message.toLowerCase();
 
-  if (message.toLowerCase().includes("already") || message.toLowerCase().includes("registered") || message.toLowerCase().includes("exists")) {
+  if (lowerMessage.includes("username already taken") || lowerMessage.includes("username is already taken")) {
+    return "Username already taken. Please choose another.";
+  }
+
+  if (lowerMessage.includes("already") || lowerMessage.includes("registered") || lowerMessage.includes("exists")) {
     return "An account with this email already exists. Please sign in instead.";
   }
 
-  if (message.toLowerCase().includes("password")) {
+  if (lowerMessage.includes("password")) {
     return message;
   }
 
@@ -213,6 +218,169 @@ const getSignupSelectionFromRole = (role?: string | null): { accountType: Accoun
     default:
       return { accountType: null, staffType: null };
   }
+};
+
+const hasSignupValue = (value: unknown) => {
+  if (Array.isArray(value)) return value.length > 0;
+  return String(value ?? "").trim().length > 0;
+};
+
+const getSignupRequiredFieldLabel = (role: string, profileData: any, normalizedEmail: string, password: string, signupMethod: "email" | "google") => {
+  const missing: string[] = [];
+
+  if (!role || !VALID_SIGNUP_ROLES.has(role)) missing.push("Account type");
+  if (!hasSignupValue(profileData?.username)) missing.push("Username");
+  if (signupMethod === "email") {
+    if (!hasSignupValue(normalizedEmail)) missing.push("Email");
+    if (!hasSignupValue(password)) missing.push("Password");
+  }
+
+  const contactEmail = profileData?.contactEmail || normalizedEmail;
+
+  if (role === "player") {
+    if (!hasSignupValue(profileData?.fullName)) missing.push("Full name");
+    if (!hasSignupValue(profileData?.gender)) missing.push("Player gender");
+    if (!hasSignupValue(profileData?.dateOfBirth)) missing.push("Date of birth");
+    if (!hasSignupValue(contactEmail)) missing.push("Contact email");
+  } else if (role === "parent") {
+    if (!hasSignupValue(profileData?.fullName)) missing.push("Full name");
+    if (!hasSignupValue(profileData?.relationshipToPlayer)) missing.push("Relationship to player");
+    if (!hasSignupValue(contactEmail)) missing.push("Contact email");
+  } else if (role === "referee") {
+    if (!hasSignupValue(profileData?.fullName)) missing.push("Full name");
+    if (!hasSignupValue(profileData?.refereeCertificationLevel)) missing.push("Certification level");
+    if (!hasSignupValue(profileData?.refereeCertifyingOrganization)) missing.push("Certifying organization");
+    if (!hasSignupValue(profileData?.refereeYearsExperience)) missing.push("Years of experience");
+    if (!hasSignupValue(contactEmail)) missing.push("Contact email");
+  } else if (role === "team_club") {
+    if (!hasSignupValue(profileData?.clubName)) missing.push("Team or club name");
+    if (!hasSignupValue(contactEmail)) missing.push("Contact email");
+  } else if (role === "school_team") {
+    if (!hasSignupValue(profileData?.schoolName)) missing.push("School team name");
+    if (!hasSignupValue(profileData?.teamMascot)) missing.push("Mascot");
+    if (!hasSignupValue(profileData?.leagueConference)) missing.push("League or conference");
+    if (!hasSignupValue(contactEmail)) missing.push("Contact email");
+  } else if (role === "head_coach_assistant" || role === "coach" || role === "trainer" || role === "team_staff" || role === "academy_director") {
+    if (!hasSignupValue(profileData?.fullName)) missing.push("Full name");
+    if (!hasSignupValue(profileData?.coachingRoleType)) missing.push("Role");
+    if (!hasSignupValue(contactEmail)) missing.push("Contact email");
+  } else if (role === "scout") {
+    if (!hasSignupValue(profileData?.fullName)) missing.push("Full name");
+    if (!hasSignupValue(profileData?.scoutRoleTitle)) missing.push("Scout role");
+    if (!hasSignupValue(profileData?.scoutOrganization)) missing.push("Scout organization");
+    if (!hasSignupValue(contactEmail)) missing.push("Contact email");
+  }
+
+  return missing[0] || null;
+};
+
+const verifySignupAccountPersistence = async (
+  sessionUserId: string,
+  expectedRole: string,
+  expectedUsername?: string,
+  expectedContactEmail?: string | null
+) => {
+  const { data: savedProfile, error: profileError } = await (supabase as any)
+    .from("profiles")
+    .select("user_id, email, full_name, username, account_category, account_type, account_role, role, club_name, team_name, coaching_role_type, scout_role_title, referee_certification_level")
+    .eq("user_id", sessionUserId)
+    .maybeSingle();
+
+  if (profileError) throw profileError;
+  if (!savedProfile) throw new Error("Profile was not created after signup.");
+
+  const actualRole = savedProfile.account_role || savedProfile.account_type;
+  if (actualRole !== expectedRole) {
+    console.error("Footy Status signup role verification failed", {
+      authUserId: sessionUserId,
+      expectedRole,
+      savedProfile,
+    });
+    throw new Error(`Signup saved the wrong account type. Expected ${expectedRole}, got ${actualRole || "empty"}.`);
+  }
+
+  if (expectedUsername && savedProfile.username !== expectedUsername) {
+    console.error("Footy Status signup username verification failed", {
+      authUserId: sessionUserId,
+      expectedUsername,
+      savedUsername: savedProfile.username,
+      savedProfile,
+    });
+    throw new Error("Signup saved the wrong username. Please try again.");
+  }
+
+  let roleSpecificRow: any = null;
+  let roleSpecificError: any = null;
+
+  if (["head_coach_assistant", "coach", "scout", "academy_director", "team_staff", "trainer"].includes(expectedRole)) {
+    const result = await (supabase as any)
+      .from("staff_profiles")
+      .select("*")
+      .eq("user_id", sessionUserId)
+      .maybeSingle();
+    roleSpecificRow = result.data;
+    roleSpecificError = result.error;
+  } else if (expectedRole === "team_club" || expectedRole === "school_team") {
+    const result = await (supabase as any)
+      .from("team_profiles")
+      .select("*")
+      .eq("user_id", sessionUserId)
+      .maybeSingle();
+    roleSpecificRow = result.data;
+    roleSpecificError = result.error;
+  } else if (expectedRole === "parent") {
+    const result = await (supabase as any)
+      .from("parent_profiles")
+      .select("*")
+      .eq("user_id", sessionUserId)
+      .maybeSingle();
+    roleSpecificRow = result.data;
+    roleSpecificError = result.error;
+  } else if (expectedRole === "player") {
+    const result = await (supabase as any)
+      .from("player_profiles")
+      .select("*")
+      .eq("user_id", sessionUserId)
+      .maybeSingle();
+    roleSpecificRow = result.data;
+    roleSpecificError = result.error;
+  } else if (expectedRole === "referee") {
+    roleSpecificRow = savedProfile.referee_certification_level || savedProfile.account_role === "referee" ? savedProfile : null;
+  }
+
+  if (roleSpecificError) throw roleSpecificError;
+
+  if (expectedRole !== "referee" && !roleSpecificRow) {
+    console.error("Footy Status signup role-specific row missing", {
+      authUserId: sessionUserId,
+      expectedRole,
+      savedProfile,
+    });
+    throw new Error(`Signup did not create the ${expectedRole} profile record.`);
+  }
+
+  const normalizedExpectedContactEmail = normalizeEmailValue(expectedContactEmail);
+  if (normalizedExpectedContactEmail) {
+    const savedContactEmail = normalizeEmailValue(roleSpecificRow?.contact_email || savedProfile.email);
+    if (savedContactEmail !== normalizedExpectedContactEmail) {
+      console.error("Footy Status signup contact verification failed", {
+        authUserId: sessionUserId,
+        expectedRole,
+        expectedContactEmail: normalizedExpectedContactEmail,
+        savedContactEmail,
+        savedProfile,
+        roleSpecificRow,
+      });
+      throw new Error("Signup did not save the contact email correctly. Please try again.");
+    }
+  }
+
+  console.info("Footy Status signup persistence verified", {
+    authUserId: sessionUserId,
+    expectedRole,
+    savedProfile,
+    roleSpecificRow,
+  });
 };
 
 const AuthShell = ({ children, backAction }: { children: React.ReactNode; backAction: () => void }) => (
@@ -469,6 +637,7 @@ const AuthPage = () => {
     setLoading(true);
     let sessionUserIdForRecovery: string | null = null;
     let coreProfileSaved = false;
+    let rolePersistenceVerified = false;
     const signupMethod = password ? "email" : "google";
 
     try {
@@ -486,6 +655,11 @@ const AuthPage = () => {
       const selectedRoleFromFlow = getSignupRoleFromSelection(accountType, staffType);
       if (selectedRoleFromFlow && selectedRoleFromFlow !== role) {
         throw new Error("Your signup account type changed unexpectedly. Please go back and choose the account type again.");
+      }
+
+      const missingRequiredField = getSignupRequiredFieldLabel(role, profileData, normalizedEmail, password, signupMethod);
+      if (missingRequiredField) {
+        throw new Error(`Missing required field: ${missingRequiredField}`);
       }
 
       console.info("Footy Status signup started", {
@@ -522,10 +696,10 @@ const AuthPage = () => {
           restoredRole: role,
         });
         if (existingUsername && existingUsername.user_id !== sessionUserId) {
-          throw new Error("Username is already taken");
+          throw new Error("Username already taken. Please choose another.");
         }
       } else {
-        if (existingUsername) throw new Error("Username is already taken");
+        if (existingUsername) throw new Error("Username already taken. Please choose another.");
 
         const parsed = emailPasswordSchema.safeParse({ email: normalizedEmail, password });
         if (!parsed.success) {
@@ -1076,7 +1250,7 @@ const AuthPage = () => {
           leagueId = matchedLeague?.id || null;
         }
 
-        await (supabase as any)
+        const finalTeamProfileUpsert = await (supabase as any)
           .from("team_profiles")
           .upsert(
             {
@@ -1109,6 +1283,9 @@ const AuthPage = () => {
             },
             { onConflict: "user_id" }
           );
+        if (finalTeamProfileUpsert.error) {
+          throw finalTeamProfileUpsert.error;
+        }
 
         const { data: refreshedTeamProfileRow } = await (supabase as any)
           .from("team_profiles")
@@ -1164,12 +1341,15 @@ const AuthPage = () => {
             social_links: teamType === "school" ? profileData.socialLinks || null : null,
           };
 
-          await stripMissingTeamsColumnsAndRetry(teamPayload, (nextPayload) =>
+          const updateTeamResult = await stripMissingTeamsColumnsAndRetry(teamPayload, (nextPayload) =>
             (supabase as any)
               .from("teams")
               .update(nextPayload)
               .eq("id", resolvedTeamId)
           );
+          if (updateTeamResult.error) {
+            throw updateTeamResult.error;
+          }
         } else {
           const teamPayload = {
             name: teamDisplayName || "Team",
@@ -1205,18 +1385,24 @@ const AuthPage = () => {
               .select("id")
               .maybeSingle()
           );
+          if (insertResult.error) {
+            throw insertResult.error;
+          }
 
           resolvedTeamId = insertResult.data?.id || null;
         }
 
         if (refreshedTeamProfileRow?.id && resolvedTeamId) {
-          await (supabase as any)
+          const linkTeamProfileResult = await (supabase as any)
             .from("team_profiles")
             .update({ team_id: resolvedTeamId })
             .eq("id", refreshedTeamProfileRow.id);
+          if (linkTeamProfileResult.error) {
+            throw linkTeamProfileResult.error;
+          }
 
           if (teamType === "school") {
-            await Promise.all(
+            const daughterTypeUpdates = await Promise.all(
               normalizedOfferedTeams.map((team: any) =>
                 (supabase as any)
                   .from("club_teams")
@@ -1229,11 +1415,18 @@ const AuthPage = () => {
                   .eq("league_name", team.league_name)
               )
             );
+            const daughterTypeError = daughterTypeUpdates.find((result: any) => result?.error)?.error;
+            if (daughterTypeError) {
+              throw daughterTypeError;
+            }
           }
         }
 
         if (refreshedTeamProfileRow?.id) {
-          await (supabase as any).from("team_staff").delete().eq("team_profile_id", refreshedTeamProfileRow.id);
+          const deleteStaffResult = await (supabase as any).from("team_staff").delete().eq("team_profile_id", refreshedTeamProfileRow.id);
+          if (deleteStaffResult.error) {
+            throw deleteStaffResult.error;
+          }
 
           const staffRows = (profileData.staffMembers || [])
             .filter((staff: any) => staff?.name?.trim() || staff?.role?.trim() || staff?.personalEmail?.trim())
@@ -1248,7 +1441,7 @@ const AuthPage = () => {
             const staffInsert = await (supabase as any).from("team_staff").insert(staffRows);
 
             if (staffInsert.error?.message?.includes("personal_email")) {
-              await (supabase as any)
+              const basicStaffInsert = await (supabase as any)
                 .from("team_staff")
                 .insert(
                   staffRows.map(({ team_profile_id, staff_name, staff_role }: any) => ({
@@ -1257,10 +1450,30 @@ const AuthPage = () => {
                     staff_role,
                   }))
                 );
+              if (basicStaffInsert.error) {
+                throw basicStaffInsert.error;
+              }
+            } else if (staffInsert.error) {
+              throw staffInsert.error;
             }
           }
         }
       }
+
+      await verifySignupAccountPersistence(
+        sessionUserId,
+        role,
+        normalizedUsername,
+        profileData.contactEmail || normalizedEmail
+      );
+      rolePersistenceVerified = true;
+      window.dispatchEvent(new CustomEvent("footy-status-profile-refresh", {
+        detail: {
+          authUserId: sessionUserId,
+          accountRole: role,
+          method: signupMethod,
+        },
+      }));
 
       toast({ title: "Welcome to Footy Status!", description: "Your account has been created successfully." });
       clearSignupFlow();
@@ -1274,20 +1487,47 @@ const AuthPage = () => {
         attemptedRole: role,
         authUserId: sessionUserIdForRecovery,
         coreProfileSaved,
+        rolePersistenceVerified,
       });
-      if (coreProfileSaved && sessionUserIdForRecovery) {
+      if (coreProfileSaved && rolePersistenceVerified && sessionUserIdForRecovery) {
         toast({
           title: "Welcome to Footy Status!",
           description: "Your account has been created successfully.",
         });
+        window.dispatchEvent(new CustomEvent("footy-status-profile-refresh", {
+          detail: {
+            authUserId: sessionUserIdForRecovery,
+            accountRole: role,
+            method: signupMethod,
+          },
+        }));
         clearSignupFlow();
         navigate("/", { replace: true });
         return;
       }
 
+      if (sessionUserIdForRecovery && !rolePersistenceVerified) {
+        try {
+          await supabase.auth.signOut({ scope: "global" });
+        } catch (signOutError) {
+          console.warn("Footy Status could not fully sign out after failed profile setup", signOutError);
+        }
+        clearStoredAuthSession();
+      }
+
+      const errorMessage = getUsernameErrorMessage(getAuthErrorMessage(error));
+      const toastTitle =
+        errorMessage === "Username already taken. Please choose another."
+          ? "Username already taken"
+          : errorMessage.startsWith("Missing required field:")
+            ? "Missing required field"
+            : coreProfileSaved
+              ? "Profile setup failed"
+              : "Signup failed";
+
       toast({
-        title: "Signup failed",
-        description: getUsernameErrorMessage(getAuthErrorMessage(error)),
+        title: toastTitle,
+        description: errorMessage,
         variant: "destructive",
       });
     } finally {

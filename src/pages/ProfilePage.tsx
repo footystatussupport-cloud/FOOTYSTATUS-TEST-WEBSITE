@@ -876,6 +876,30 @@ const ProfilePage = () => {
       };
     }
 
+    if (isRefereeAccount) {
+      const refereePhone =
+        contactForm.player_phone ||
+        contacts.find((contact) => contact.contact_type === "player_phone")?.value ||
+        "";
+      return {
+        full_name: profile?.full_name || "",
+        username: profile?.username || "",
+        bio: profile?.bio || "",
+        contact_email: profile?.email || contactForm.player_email || "",
+        contact_phone: refereePhone,
+        referee_certification_level: profile?.referee_certification_level || "",
+        referee_license_number: profile?.referee_license_number || "",
+        referee_certifying_organization: profile?.referee_certifying_organization || "",
+        referee_years_experience:
+          profile?.referee_years_experience != null ? String(profile.referee_years_experience) : "",
+        referee_main_experience: profile?.referee_main_experience || "",
+        referee_assistant_experience: profile?.referee_assistant_experience || "",
+        referee_leagues_tournaments: profile?.referee_leagues_tournaments || "",
+        referee_availability: profile?.referee_availability || "",
+        referee_accolades: profile?.referee_accolades || "",
+      };
+    }
+
     if (isParentAccount) {
       return {
         full_name: parentAccountData?.full_name || profile?.full_name || "",
@@ -912,10 +936,11 @@ const ProfilePage = () => {
     if (!user) return emptyContactForm();
 
     const nextForm = emptyContactForm();
-    const [{ data: playerDetails }, { data: teamDetails }, { data: staffDetails }] = await Promise.all([
+    const [{ data: playerDetails }, { data: teamDetails }, { data: staffDetails }, { data: parentDetails }] = await Promise.all([
       supabase.from("player_profiles").select("contact_email, contact_phone, coach_email").eq("user_id", user.id).maybeSingle(),
       supabase.from("team_profiles").select("contact_email, contact_phone").eq("user_id", user.id).maybeSingle(),
       supabase.from("staff_profiles").select("contact_email, contact_phone").eq("user_id", user.id).maybeSingle(),
+      (supabase as any).from("parent_profiles").select("contact_email, contact_phone").eq("user_id", user.id).maybeSingle(),
     ]);
 
     if (profile?.email) nextForm.player_email = profile.email;
@@ -926,6 +951,8 @@ const ProfilePage = () => {
     if (teamDetails?.contact_phone) nextForm.player_phone = teamDetails.contact_phone;
     if (staffDetails?.contact_email) nextForm.player_email = staffDetails.contact_email;
     if (staffDetails?.contact_phone) nextForm.player_phone = staffDetails.contact_phone;
+    if (parentDetails?.contact_email) nextForm.player_email = parentDetails.contact_email;
+    if (parentDetails?.contact_phone) nextForm.player_phone = parentDetails.contact_phone;
 
     return nextForm;
   };
@@ -1412,7 +1439,11 @@ const ProfilePage = () => {
         };
         setProfile(normalizedProfile);
         setEditForm(normalizedProfile);
-        fetchSeasonStats();
+        if (normalizeAccountRole(normalizedProfile) === "player") {
+          fetchSeasonStats();
+        } else {
+          setSeasonStats([]);
+        }
       }
     }
     await fetchRoleSpecificAccountData(
@@ -1434,7 +1465,7 @@ const ProfilePage = () => {
     const accountRole = normalizeAccountRole(activeProfile);
     const accountCategory = normalizeAccountCategory(activeProfile);
 
-    if (accountRole === "team_club") {
+    if (accountRole === "team_club" || accountRole === "school_team") {
       const { data } = await (supabase as any)
         .from("team_profiles")
         .select("id, team_id, club_id, club_name, leagues_offered, founded_year, country, city, home_stadium, training_ground, home_jersey_color, away_jersey_color, third_kit_color, age_groups_offered, contact_email, contact_phone, team_type, school_level")
@@ -2395,7 +2426,7 @@ const ProfilePage = () => {
   };
 
   const fetchContacts = async () => {
-    if (!user || !isPlayerAccount) {
+    if (!user || isTeamAccount) {
       setContacts([]);
       setContactForm(emptyContactForm());
       return;
@@ -2481,6 +2512,51 @@ const ProfilePage = () => {
     }
   };
 
+  const persistBasicContactRows = async (email?: string | null, phone?: string | null) => {
+    if (!user) return;
+
+    const nextForm = {
+      ...contactForm,
+      player_email: email?.trim().toLowerCase() || "",
+      player_phone: phone?.trim() || "",
+    };
+    const existingByType = new Map(contacts.map((contact) => [contact.contact_type, contact]));
+    const entries: Array<[keyof ContactFormState, string]> = [
+      ["player_email", nextForm.player_email],
+      ["player_phone", nextForm.player_phone],
+    ];
+
+    for (const [contactType, rawValue] of entries) {
+      const value = rawValue.trim();
+      const existing = existingByType.get(contactType);
+
+      if (!value) {
+        if (existing) {
+          const { error } = await supabase.from("user_contacts").delete().eq("id", existing.id);
+          if (error) throw error;
+        }
+        continue;
+      }
+
+      const payload = {
+        user_id: user.id,
+        contact_type: contactType,
+        value,
+        visibility: mapContactVisibility(settings.showContactInfo),
+      };
+
+      if (existing) {
+        const { error } = await supabase.from("user_contacts").update(payload).eq("id", existing.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from("user_contacts").insert(payload);
+        if (error) throw error;
+      }
+    }
+
+    setContactForm(nextForm);
+  };
+
   const handleContactVisibilityChange = async (value: string) => {
     if (!user) return;
 
@@ -2551,12 +2627,27 @@ const ProfilePage = () => {
       weight: editForm.weight as any,
     };
 
+    console.info("Footy Status profile edit started", {
+      authUserId: user.id,
+      accountCategory: resolvedAccountCategory,
+      accountRole: resolvedAccountRole,
+      editingSection,
+      profileUpdate,
+      editForm,
+    });
+
     const { error } = await supabase
       .from('profiles')
       .update(profileUpdate)
       .eq('user_id', user.id);
 
     if (error) {
+      console.error("Footy Status profile base update failed", {
+        authUserId: user.id,
+        accountRole: resolvedAccountRole,
+        profileUpdate,
+        error,
+      });
       toast({ title: "Error", description: error.message, variant: "destructive" });
     } else {
       if (isPlayerAccount) {
@@ -2756,23 +2847,25 @@ const ProfilePage = () => {
         }
       } else if (isParentAccount) {
         const parentDisplayName = editForm.full_name?.trim() || null;
+        const parentPayload = {
+          user_id: user.id,
+          full_name: parentDisplayName || "",
+          relationship_to_player: editForm.relationship_to_player?.trim() || null,
+          contact_email: editForm.contact_email?.trim().toLowerCase() || null,
+          contact_phone: editForm.contact_phone?.trim() || null,
+          emergency_contact: editForm.emergency_contact?.trim() || null,
+          child_full_name: editForm.child_full_name?.trim() || null,
+          child_where_plays: editForm.child_where_plays?.trim() || null,
+          child_team: editForm.child_team?.trim() || parentAccountData?.child_team || null,
+          child_league: editForm.child_league?.trim() || null,
+          child_age_group: editForm.child_age_group?.trim() || null,
+          parent_notes: editForm.parent_notes?.trim() || null,
+        };
+        console.info("Footy Status parent profile save payload", parentPayload);
         const { data: savedParentProfile, error: parentProfileError } = await (supabase as any)
           .from("parent_profiles")
           .upsert(
-            {
-              user_id: user.id,
-              full_name: parentDisplayName || "",
-              relationship_to_player: editForm.relationship_to_player?.trim() || null,
-              contact_email: editForm.contact_email?.trim().toLowerCase() || null,
-              contact_phone: editForm.contact_phone?.trim() || null,
-              emergency_contact: editForm.emergency_contact?.trim() || null,
-              child_full_name: editForm.child_full_name?.trim() || null,
-              child_where_plays: editForm.child_where_plays?.trim() || null,
-              child_team: editForm.child_team?.trim() || parentAccountData?.child_team || null,
-              child_league: editForm.child_league?.trim() || null,
-              child_age_group: editForm.child_age_group?.trim() || null,
-              parent_notes: editForm.parent_notes?.trim() || null,
-            },
+            parentPayload,
             { onConflict: "user_id" }
           )
           .select("*")
@@ -2785,6 +2878,14 @@ const ProfilePage = () => {
         }
 
         if (savedParentProfile) setParentAccountData(savedParentProfile as ParentProfileDetails);
+        try {
+          await persistBasicContactRows(parentPayload.contact_email, parentPayload.contact_phone);
+        } catch (contactError: any) {
+          console.error("Footy Status parent contact row save failed", contactError);
+          toast({ title: "Error", description: contactError.message, variant: "destructive" });
+          setSaving(false);
+          return;
+        }
 
         const { error: profilePersistError } = await supabase
           .from("profiles")
@@ -2796,6 +2897,46 @@ const ProfilePage = () => {
 
         if (profilePersistError) {
           toast({ title: "Error", description: profilePersistError.message, variant: "destructive" });
+          setSaving(false);
+          return;
+        }
+      } else if (isRefereeAccount) {
+        const refereePayload = {
+          full_name: editForm.full_name?.trim() || null,
+          email: editForm.contact_email?.trim().toLowerCase() || null,
+          bio: normalizedBio,
+          referee_certification_level: editForm.referee_certification_level?.trim() || null,
+          referee_license_number: editForm.referee_license_number?.trim() || null,
+          referee_certifying_organization: editForm.referee_certifying_organization?.trim() || null,
+          referee_years_experience: editForm.referee_years_experience ? Number(editForm.referee_years_experience) : null,
+          referee_main_experience: editForm.referee_main_experience?.trim() || null,
+          referee_assistant_experience: editForm.referee_assistant_experience?.trim() || null,
+          referee_leagues_tournaments: editForm.referee_leagues_tournaments?.trim() || null,
+          referee_availability: editForm.referee_availability?.trim() || null,
+          referee_accolades: editForm.referee_accolades?.trim() || null,
+        };
+        console.info("Footy Status referee profile save payload", {
+          authUserId: user.id,
+          refereePayload,
+        });
+
+        const { error: refereeProfileError } = await (supabase as any)
+          .from("profiles")
+          .update(refereePayload)
+          .eq("user_id", user.id);
+
+        if (refereeProfileError) {
+          console.error("Footy Status referee profile save failed", refereeProfileError);
+          toast({ title: "Error", description: refereeProfileError.message, variant: "destructive" });
+          setSaving(false);
+          return;
+        }
+
+        try {
+          await persistBasicContactRows(refereePayload.email, editForm.contact_phone);
+        } catch (contactError: any) {
+          console.error("Footy Status referee contact row save failed", contactError);
+          toast({ title: "Error", description: contactError.message, variant: "destructive" });
           setSaving(false);
           return;
         }
@@ -2944,9 +3085,15 @@ const ProfilePage = () => {
       }
 
       toast({ title: "Profile updated!" });
+      console.info("Footy Status profile edit saved", {
+        authUserId: user.id,
+        accountCategory: resolvedAccountCategory,
+        accountRole: resolvedAccountRole,
+        editingSection,
+      });
       setEditingSection(null);
       fetchProfile();
-      if (isPlayerAccount) fetchContacts();
+      if (!isTeamAccount) fetchContacts();
     }
     setSaving(false);
   };
@@ -4431,6 +4578,42 @@ const ProfilePage = () => {
                     <p className="text-xs text-muted-foreground text-right">{(editForm.bio || "").length}/{BIO_MAX_LENGTH}</p>
                   </div>
                 </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Certification Level</label>
+                  <Input value={editForm.referee_certification_level || ""} onChange={(e) => setEditForm({ ...editForm, referee_certification_level: e.target.value })} placeholder="Grassroots, Regional, National..." />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">License Number</label>
+                  <Input value={editForm.referee_license_number || ""} onChange={(e) => setEditForm({ ...editForm, referee_license_number: e.target.value })} placeholder="License number" />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Certifying Organization</label>
+                  <Input value={editForm.referee_certifying_organization || ""} onChange={(e) => setEditForm({ ...editForm, referee_certifying_organization: e.target.value })} placeholder="US Soccer, state association..." />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Years Experience</label>
+                  <Input type="number" value={editForm.referee_years_experience != null ? String(editForm.referee_years_experience) : ""} onChange={(e) => setEditForm({ ...editForm, referee_years_experience: e.target.value as any })} placeholder="Years" />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Main Referee Experience</label>
+                  <Input value={editForm.referee_main_experience || ""} onChange={(e) => setEditForm({ ...editForm, referee_main_experience: e.target.value })} placeholder="Main referee experience" />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Assistant Referee Experience</label>
+                  <Input value={editForm.referee_assistant_experience || ""} onChange={(e) => setEditForm({ ...editForm, referee_assistant_experience: e.target.value })} placeholder="Assistant referee experience" />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Leagues / Tournaments</label>
+                  <Input value={editForm.referee_leagues_tournaments || ""} onChange={(e) => setEditForm({ ...editForm, referee_leagues_tournaments: e.target.value })} placeholder="Leagues or tournaments" />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Availability</label>
+                  <Input value={editForm.referee_availability || ""} onChange={(e) => setEditForm({ ...editForm, referee_availability: e.target.value })} placeholder="Weekends, evenings..." />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Accolades / Notable Matches</label>
+                  <Input value={editForm.referee_accolades || ""} onChange={(e) => setEditForm({ ...editForm, referee_accolades: e.target.value })} placeholder="Notable matches or achievements" />
+                </div>
                 <Button className="w-full mt-4" onClick={handleSaveProfile} disabled={saving}>
                   <Save className="h-4 w-4 mr-2" /> {saving ? "Saving..." : "Save"}
                 </Button>
@@ -5826,6 +6009,62 @@ const ProfilePage = () => {
                 </div>
                 <div>
                   <label className="text-sm text-muted-foreground">Contact Phone</label>
+                  <Input
+                    type="tel"
+                    value={editForm.contact_phone || ""}
+                    onChange={(e) => setEditForm({ ...editForm, contact_phone: e.target.value })}
+                    placeholder="(555) 123-4567"
+                  />
+                </div>
+                <Button className="w-full mt-2" onClick={handleSaveProfile} disabled={saving}>
+                  <Save className="h-4 w-4 mr-2" /> {saving ? "Saving..." : "Save"}
+                </Button>
+              </div>
+            ) : isEditingContact && isParentAccount ? (
+              <div className="p-4 space-y-3">
+                <div>
+                  <label className="text-sm text-muted-foreground">Email</label>
+                  <Input
+                    type="email"
+                    value={editForm.contact_email || ""}
+                    onChange={(e) => setEditForm({ ...editForm, contact_email: e.target.value })}
+                    placeholder="parent@email.com"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Phone Number</label>
+                  <Input
+                    type="tel"
+                    value={editForm.contact_phone || ""}
+                    onChange={(e) => setEditForm({ ...editForm, contact_phone: e.target.value })}
+                    placeholder="(555) 123-4567"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Emergency Contact</label>
+                  <Input
+                    value={editForm.emergency_contact || ""}
+                    onChange={(e) => setEditForm({ ...editForm, emergency_contact: e.target.value })}
+                    placeholder="Emergency contact"
+                  />
+                </div>
+                <Button className="w-full mt-2" onClick={handleSaveProfile} disabled={saving}>
+                  <Save className="h-4 w-4 mr-2" /> {saving ? "Saving..." : "Save"}
+                </Button>
+              </div>
+            ) : isEditingContact && isRefereeAccount ? (
+              <div className="p-4 space-y-3">
+                <div>
+                  <label className="text-sm text-muted-foreground">Email</label>
+                  <Input
+                    type="email"
+                    value={editForm.contact_email || ""}
+                    onChange={(e) => setEditForm({ ...editForm, contact_email: e.target.value })}
+                    placeholder="referee@email.com"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Phone Number</label>
                   <Input
                     type="tel"
                     value={editForm.contact_phone || ""}

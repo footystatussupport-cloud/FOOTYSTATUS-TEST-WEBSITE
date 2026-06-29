@@ -14,6 +14,7 @@ interface AuthContextType {
     player_gender: "boy" | "girl" | null;
   } | null;
   loading: boolean;
+  refreshProfile: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -21,6 +22,7 @@ const AuthContext = createContext<AuthContextType>({
   session: null,
   profile: null,
   loading: true,
+  refreshProfile: async () => undefined,
 });
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
@@ -29,8 +31,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [profile, setProfile] = useState<AuthContextType["profile"]>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const loadProfile = async (nextUser: User | null) => {
+  const loadProfile = async (nextUser: User | null) => {
       if (!nextUser) {
         setProfile(null);
         return;
@@ -74,7 +75,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             .maybeSingle()
         : { data: null };
 
-      setProfile(
+      const nextProfile =
         data
           ? {
               user_id: data.user_id,
@@ -92,9 +93,33 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
               role: data.role,
               player_gender: playerProfile?.player_gender || null,
             }
-          : null
-      );
+          : null;
+
+      console.info("Footy Status auth profile loaded", {
+        authUserId: nextUser.id,
+        accountCategory: nextProfile?.account_category || null,
+        accountType: nextProfile?.account_type || null,
+        accountRole: nextProfile?.account_role || null,
+        legacyRole: nextProfile?.role || null,
+      });
+
+      setProfile(nextProfile);
+  };
+
+  const refreshProfile = async () => {
+    await loadProfile(user);
+  };
+
+  useEffect(() => {
+    const handleProfileRefresh = () => {
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        setSession(session);
+        setUser(session?.user ?? null);
+        loadProfile(session?.user ?? null).finally(() => setLoading(false));
+      });
     };
+
+    window.addEventListener("footy-status-profile-refresh", handleProfileRefresh);
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
@@ -110,11 +135,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       loadProfile(session?.user ?? null).finally(() => setLoading(false));
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      window.removeEventListener("footy-status-profile-refresh", handleProfileRefresh);
+      subscription.unsubscribe();
+    };
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, session, profile, loading }}>
+    <AuthContext.Provider value={{ user, session, profile, loading, refreshProfile }}>
       {children}
     </AuthContext.Provider>
   );
