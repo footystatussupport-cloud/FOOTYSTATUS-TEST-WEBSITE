@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -48,7 +48,18 @@ const forgotPasswordSchema = z.object({
 });
 
 const getAuthErrorMessage = (error: unknown) => {
-  const message = error instanceof Error ? error.message : "Something went wrong. Please try again.";
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : typeof (error as any)?.message === "string"
+          ? (error as any).message
+          : typeof (error as any)?.error_description === "string"
+            ? (error as any).error_description
+            : typeof (error as any)?.details === "string"
+              ? (error as any).details
+              : "Something went wrong. Please try again.";
   const lowerMessage = message.toLowerCase();
 
   if (lowerMessage.includes("username already taken") || lowerMessage.includes("username is already taken")) {
@@ -67,6 +78,8 @@ const getAuthErrorMessage = (error: unknown) => {
 };
 
 const SIGNUP_FLOW_STORAGE_KEY = "footystatus_signup_flow";
+
+const GOOGLE_SESSION_MISSING_MESSAGE = "Google sign-up did not finish correctly. Please go back, choose your account type, and continue with Google again.";
 
 const clearStoredAuthSession = () => {
   Object.keys(localStorage)
@@ -220,6 +233,22 @@ const getSignupSelectionFromRole = (role?: string | null): { accountType: Accoun
   }
 };
 
+const getStoredSignupFlow = () => {
+  const savedFlow = sessionStorage.getItem(SIGNUP_FLOW_STORAGE_KEY) || localStorage.getItem(SIGNUP_FLOW_STORAGE_KEY);
+  if (!savedFlow) return null;
+
+  try {
+    return JSON.parse(savedFlow) as {
+      accountType?: AccountType | null;
+      staffType?: StaffType | null;
+      selectedRole?: string | null;
+      pendingGoogleAuth?: boolean;
+    };
+  } catch {
+    return null;
+  }
+};
+
 const hasSignupValue = (value: unknown) => {
   if (Array.isArray(value)) return value.length > 0;
   return String(value ?? "").trim().length > 0;
@@ -278,11 +307,12 @@ const verifySignupAccountPersistence = async (
   sessionUserId: string,
   expectedRole: string,
   expectedUsername?: string,
-  expectedContactEmail?: string | null
+  expectedContactEmail?: string | null,
+  expectedProfileData?: any
 ) => {
   const { data: savedProfile, error: profileError } = await (supabase as any)
     .from("profiles")
-    .select("user_id, email, full_name, username, account_category, account_type, account_role, role, club_name, team_name, coaching_role_type, scout_role_title, referee_certification_level")
+    .select("user_id, email, full_name, username, account_category, account_type, account_role, role, club_name, team_name, coaching_role_type, scout_role_title, referee_certification_level, referee_license_number, referee_certifying_organization, referee_years_experience, referee_main_experience, referee_assistant_experience, referee_leagues_tournaments, referee_availability, referee_accolades, referee_profile_public")
     .eq("user_id", sessionUserId)
     .maybeSingle();
 
@@ -375,12 +405,164 @@ const verifySignupAccountPersistence = async (
     }
   }
 
+  if (expectedRole === "referee") {
+    const expectedYears = expectedProfileData?.refereeYearsExperience ? Number(expectedProfileData.refereeYearsExperience) : null;
+    const refereeChecks: Array<[string, unknown, unknown]> = [
+      ["Certification level", expectedProfileData?.refereeCertificationLevel || null, savedProfile.referee_certification_level || null],
+      ["License number", expectedProfileData?.refereeLicenseNumber || null, savedProfile.referee_license_number || null],
+      ["Certifying organization", expectedProfileData?.refereeCertifyingOrganization || null, savedProfile.referee_certifying_organization || null],
+      ["Years experience", expectedYears, savedProfile.referee_years_experience ?? null],
+      ["Main referee experience", expectedProfileData?.refereeMainExperience || null, savedProfile.referee_main_experience || null],
+      ["Assistant referee experience", expectedProfileData?.refereeAssistantExperience || null, savedProfile.referee_assistant_experience || null],
+      ["Leagues / tournaments", expectedProfileData?.refereeLeaguesTournaments || null, savedProfile.referee_leagues_tournaments || null],
+      ["Availability", expectedProfileData?.refereeAvailability || null, savedProfile.referee_availability || null],
+      ["Accolades", expectedProfileData?.refereeAccolades || null, savedProfile.referee_accolades || null],
+    ];
+
+    const failedRefereeCheck = refereeChecks.find(([, expected, actual]) => {
+      if (expected === null || expected === undefined || expected === "") return false;
+      return String(expected).trim() !== String(actual ?? "").trim();
+    });
+
+    if (failedRefereeCheck) {
+      console.error("Footy Status referee signup verification failed", {
+        authUserId: sessionUserId,
+        field: failedRefereeCheck[0],
+        expected: failedRefereeCheck[1],
+        actual: failedRefereeCheck[2],
+        savedProfile,
+      });
+      throw new Error(`Signup did not save referee ${failedRefereeCheck[0].toLowerCase()} correctly. Please try again.`);
+    }
+  }
+
   console.info("Footy Status signup persistence verified", {
     authUserId: sessionUserId,
     expectedRole,
     savedProfile,
     roleSpecificRow,
   });
+};
+
+const saveSignupContactRows = async (
+  userId: string,
+  contactEmail?: string | null,
+  contactPhone?: string | null
+) => {
+  const entries: Array<[string, string]> = [
+    ["player_email", contactEmail?.trim().toLowerCase() || ""],
+    ["player_phone", contactPhone?.trim() || ""],
+  ].filter(([, value]) => value.length > 0);
+
+  for (const [contactType, value] of entries) {
+    const existing = await (supabase as any)
+      .from("user_contacts")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("contact_type", contactType)
+      .maybeSingle();
+
+    if (existing.error) throw existing.error;
+
+    const payload = {
+      user_id: userId,
+      contact_type: contactType,
+      value,
+      visibility: "public",
+    };
+
+    const saveResult = existing.data?.id
+      ? await (supabase as any).from("user_contacts").update(payload).eq("id", existing.data.id)
+      : await (supabase as any).from("user_contacts").insert(payload);
+
+    if (saveResult.error) throw saveResult.error;
+  }
+};
+
+const getTakenUsernameOwner = async (username: string, currentUserId?: string | null) => {
+  const { data, error } = await (supabase as any)
+    .from("profiles")
+    .select("id, user_id, email, full_name, account_category, account_type, account_role, role, created_at, referee_certification_level, referee_certifying_organization, referee_years_experience")
+    .eq("username", username)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data || data.user_id === currentUserId) return null;
+  return data;
+};
+
+const isIncompleteSignupProfile = (profile: any) =>
+  Boolean(
+    profile &&
+      (
+        !profile.account_category ||
+        !profile.account_role ||
+        !profile.account_type ||
+        (
+          (profile.account_role === "referee" || profile.account_type === "referee" || profile.role === "referee") &&
+          (!profile.referee_certification_level ||
+            !profile.referee_certifying_organization ||
+            profile.referee_years_experience == null)
+        )
+      )
+  );
+
+const ensureUsernameAvailableForSignup = async (username: string, currentUserId?: string | null) => {
+  let usernameOwner = await getTakenUsernameOwner(username, currentUserId);
+  if (!usernameOwner) return;
+
+  if (currentUserId && isIncompleteSignupProfile(usernameOwner)) {
+    const releaseResult = await (supabase as any).rpc("release_incomplete_signup_username", {
+      _username: username,
+    });
+
+    if (releaseResult.error) {
+      console.warn("Could not release incomplete signup username", {
+        attemptedUsername: username,
+        currentAuthUserId: currentUserId,
+        ownerUserId: usernameOwner.user_id,
+        error: releaseResult.error,
+      });
+    } else if (releaseResult.data) {
+      console.info("Released incomplete signup username and retrying signup", {
+        attemptedUsername: username,
+        currentAuthUserId: currentUserId,
+        releasedOwnerUserId: usernameOwner.user_id,
+      });
+      usernameOwner = await getTakenUsernameOwner(username, currentUserId);
+      if (!usernameOwner) return;
+    }
+  }
+
+  console.warn("Footy Status signup username is already owned by another profile", {
+    attemptedUsername: username,
+    currentAuthUserId: currentUserId,
+    ownerUserId: usernameOwner.user_id,
+    ownerEmail: usernameOwner.email,
+    ownerRole: usernameOwner.account_role || usernameOwner.account_type || usernameOwner.role,
+    ownerLooksIncomplete: isIncompleteSignupProfile(usernameOwner),
+  });
+  throw new Error("Username already taken. Please choose another.");
+};
+
+const isUsernameTakenError = (error: any) =>
+  String(error?.message || error || "").toLowerCase().includes("username is already taken") ||
+  String(error?.message || error || "").toLowerCase().includes("username already taken");
+
+const releaseUsernameConflictForSignup = async (username: string) => {
+  const releaseResult = await (supabase as any).rpc("release_incomplete_signup_username", {
+    _username: username,
+  });
+
+  if (releaseResult.error) {
+    console.warn("Could not release username conflict during signup save", {
+      attemptedUsername: username,
+      error: releaseResult.error,
+    });
+    return false;
+  }
+
+  return Boolean(releaseResult.data);
 };
 
 const AuthShell = ({ children, backAction }: { children: React.ReactNode; backAction: () => void }) => (
@@ -415,6 +597,20 @@ const AuthPage = () => {
   const embeddedGoogleAuthMessage =
     "Google sign-in opens in Safari and does not carry the session back into this in-app browser. Use email/password here, or open Footy Status directly in Safari before using Google.";
 
+  // Refs so the single onAuthStateChange subscription can read current values
+  // without needing to re-subscribe on every state change.
+  const isLoginRef = useRef(isLogin);
+  const pendingGoogleAuthRef = useRef(pendingGoogleAuth);
+  const accountTypeRef = useRef(accountType);
+  const staffTypeRef = useRef(staffType);
+  const modeRef = useRef(mode);
+
+  useEffect(() => { isLoginRef.current = isLogin; }, [isLogin]);
+  useEffect(() => { pendingGoogleAuthRef.current = pendingGoogleAuth; }, [pendingGoogleAuth]);
+  useEffect(() => { accountTypeRef.current = accountType; }, [accountType]);
+  useEffect(() => { staffTypeRef.current = staffType; }, [staffType]);
+  useEffect(() => { modeRef.current = mode; }, [mode]);
+
   const persistSignupFlow = (nextAccountType: AccountType | null, nextStaffType: StaffType | null) => {
     const selectedRole = getSignupRoleFromSelection(nextAccountType, nextStaffType);
     const payload = JSON.stringify({
@@ -435,6 +631,87 @@ const AuthPage = () => {
     localStorage.removeItem(SIGNUP_FLOW_STORAGE_KEY);
   };
 
+  const prepareGoogleSignupSession = (session: any, selectedRole: string) => {
+    if (!session?.user || !selectedRole || !VALID_SIGNUP_ROLES.has(selectedRole)) return;
+
+    const restoredSelection = getSignupSelectionFromRole(selectedRole);
+
+    console.info("Footy Status Google signup session restored", {
+      authUserId: session.user.id,
+      selectedRole,
+      waitingForCreateAccount: true,
+    });
+
+    setAccountType(restoredSelection.accountType);
+    setStaffType(restoredSelection.staffType);
+    setEmail(session.user.email || "");
+    setIsLogin(false);
+    setPendingGoogleAuth(false);
+    setSignupStep("profile_form");
+  };
+
+  const getSignupRoleFromSessionMetadata = (session: any) => {
+    const metadataRole =
+      session?.user?.user_metadata?.account_role ||
+      session?.user?.user_metadata?.account_type ||
+      session?.user?.user_metadata?.selected_account_type ||
+      session?.user?.user_metadata?.role ||
+      null;
+    if (!metadataRole) return null;
+    const normalizedRole =
+      metadataRole === "team"
+        ? "team_club"
+        : metadataRole === "school"
+          ? "school_team"
+          : metadataRole === "coach"
+            ? "head_coach_assistant"
+            : metadataRole;
+    return VALID_SIGNUP_ROLES.has(normalizedRole) ? normalizedRole : null;
+  };
+
+  // Checks if an existing auth session has an incomplete signup in the database,
+  // and if so, restores the signup flow so the user can finish it.
+  // Handles ALL account types, not just referee.
+  const restoreIncompleteSignupFromMetadata = async (session: any): Promise<boolean> => {
+    if (!session?.user) return false;
+
+    const selectedRole = getSignupRoleFromSessionMetadata(session);
+    if (!selectedRole || !VALID_SIGNUP_ROLES.has(selectedRole)) return false;
+
+    const { data } = await (supabase as any)
+      .from("profiles")
+      .select("username, account_role, account_type, account_category, referee_certification_level, referee_certifying_organization, referee_years_experience")
+      .eq("user_id", session.user.id)
+      .maybeSingle();
+
+    // Check if the signup is already complete for this role
+    const hasBasicProfile = Boolean(
+      data?.username &&
+      data?.account_role &&
+      data?.account_type &&
+      data?.account_category
+    );
+
+    const isRefereeComplete = selectedRole === "referee"
+      ? Boolean(
+          data?.referee_certification_level &&
+          data?.referee_certifying_organization &&
+          data?.referee_years_experience != null
+        )
+      : true;
+
+    if (hasBasicProfile && isRefereeComplete) {
+      // Signup is already complete - do not restore
+      return false;
+    }
+
+    // Incomplete signup found - restore the flow
+    const restoredSelection = getSignupSelectionFromRole(selectedRole);
+    persistSignupFlow(restoredSelection.accountType, restoredSelection.staffType);
+    prepareGoogleSignupSession(session, selectedRole);
+    return true;
+  };
+
   useEffect(() => {
     if (mode === "signup") setIsLogin(false);
     else if (mode === "login") setIsLogin(true);
@@ -449,17 +726,12 @@ const AuthPage = () => {
     }
   }, [authReason, toast]);
 
+  // Restore signup flow state if returning from Google OAuth redirect
   useEffect(() => {
-    const savedFlow = sessionStorage.getItem(SIGNUP_FLOW_STORAGE_KEY) || localStorage.getItem(SIGNUP_FLOW_STORAGE_KEY);
-    if (!savedFlow) return;
+    const parsed = getStoredSignupFlow();
+    if (!parsed) return;
 
     try {
-      const parsed = JSON.parse(savedFlow) as {
-        accountType?: AccountType | null;
-        staffType?: StaffType | null;
-        selectedRole?: string | null;
-        pendingGoogleAuth?: boolean;
-      };
       const restoredSelection = getSignupSelectionFromRole(parsed.selectedRole);
 
       if (parsed.accountType || restoredSelection.accountType) setAccountType(parsed.accountType || restoredSelection.accountType);
@@ -483,22 +755,73 @@ const AuthPage = () => {
     }
   }, []);
 
+  // Single auth state subscription - runs once with empty deps to avoid
+  // race conditions from stale closures on isLogin/pendingGoogleAuth changes.
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        if (session && isLogin) navigate("/");
-        if (session && !isLogin && pendingGoogleAuth) {
+    const handleIncomingSession = async (session: any) => {
+      if (!session) return;
+
+      const storedFlow = getStoredSignupFlow();
+      const selectedRole =
+        storedFlow?.selectedRole ||
+        getSignupRoleFromSelection(accountTypeRef.current, staffTypeRef.current);
+
+      // Priority 1: Returning from Google OAuth - show the questionnaire.
+      // Tag the session as "onboarding in progress" so the gate blocks the user
+      // from accessing the app until they press Create Account.
+      if (storedFlow?.pendingGoogleAuth && selectedRole) {
+        try {
+          await supabase.auth.updateUser({
+            data: { onboarding_complete: false, selected_account_type: selectedRole },
+          });
+        } catch (err) {
+          console.warn("OnboardingFlag: could not set onboarding_complete=false", err);
+        }
+        prepareGoogleSignupSession(session, selectedRole);
+        return;
+      }
+
+      // Priority 2: In signup mode - check if the user has an incomplete signup
+      // (handles cases where Google auth metadata is set but stored flow was lost)
+      if (!isLoginRef.current && modeRef.current === "signup") {
+        const restored = await restoreIncompleteSignupFromMetadata(session);
+        if (!restored && pendingGoogleAuthRef.current) {
           setPendingGoogleAuth(false);
           setEmail(session.user.email || "");
-          setSignupStep('profile_form');
+          setSignupStep("profile_form");
+        }
+        return;
+      }
+
+      // Priority 3: Login mode - navigate to home.
+      // If onboarding_complete is explicitly false this session belongs to an
+      // incomplete signup; redirect to the signup flow instead of home.
+      if (isLoginRef.current) {
+        const onboardingComplete = session.user?.user_metadata?.onboarding_complete;
+        if (onboardingComplete === false) {
+          navigate("/auth?mode=signup", { replace: true });
+        } else {
+          navigate("/");
+        }
+      }
+    };
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        // Only act on sign-in events, not sign-out or token refresh
+        if (event === "SIGNED_IN" || event === "INITIAL_SESSION") {
+          handleIncomingSession(session);
         }
       }
     );
+
+    // Also check the current session immediately (for page reloads / direct navigation)
     supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session && isLogin) navigate("/");
+      handleIncomingSession(session);
     });
+
     return () => subscription.unsubscribe();
-  }, [navigate, isLogin, pendingGoogleAuth]);
+  }, []); // Empty deps - subscribes once, uses refs for mutable state
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -517,6 +840,7 @@ const AuthPage = () => {
       });
       if (error) throw error;
       toast({ title: "Welcome back!", description: "Successfully logged in." });
+      navigate("/");
     } catch (error: any) {
       toast({ title: "Error", description: getAuthErrorMessage(error), variant: "destructive" });
     } finally {
@@ -590,7 +914,7 @@ const AuthPage = () => {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: buildAppUrl("/auth?mode=signup"),
+          redirectTo: buildAppUrl("/"),
           queryParams: {
             prompt: "select_account",
             include_granted_scopes: "true",
@@ -676,15 +1000,13 @@ const AuthPage = () => {
         throw new Error(usernameValidationMessage);
       }
 
-      const { data: existingUsername, error: usernameCheckError } = await (supabase as any)
-        .from("profiles")
-        .select("user_id")
-        .eq("username", normalizedUsername)
-        .maybeSingle();
-
-      if (usernameCheckError) throw usernameCheckError;
-
       const { data: { session: existingSession } } = await supabase.auth.getSession();
+      const existingGoogleUser = existingSession
+        ? null
+        : signupMethod === "google"
+          ? await supabase.auth.getUser()
+          : null;
+      const recoveredGoogleUser = existingGoogleUser?.data?.user || null;
 
       if (existingSession) {
         sessionUserId = existingSession.user.id;
@@ -695,16 +1017,28 @@ const AuthPage = () => {
           authUserId: sessionUserId,
           restoredRole: role,
         });
-        if (existingUsername && existingUsername.user_id !== sessionUserId) {
-          throw new Error("Username already taken. Please choose another.");
-        }
+        await ensureUsernameAvailableForSignup(normalizedUsername, sessionUserId);
+      } else if (recoveredGoogleUser) {
+        sessionUserId = recoveredGoogleUser.id;
+        normalizedEmail = normalizeEmailValue(recoveredGoogleUser.email) || normalizedEmail;
+        sessionUserIdForRecovery = sessionUserId;
+        console.info("Footy Status signup recovered Google auth user without session object", {
+          method: signupMethod,
+          authUserId: sessionUserId,
+          restoredRole: role,
+        });
+        await ensureUsernameAvailableForSignup(normalizedUsername, sessionUserId);
       } else {
-        if (existingUsername) throw new Error("Username already taken. Please choose another.");
+        if (signupMethod === "google") {
+          throw new Error(GOOGLE_SESSION_MISSING_MESSAGE);
+        }
 
         const parsed = emailPasswordSchema.safeParse({ email: normalizedEmail, password });
         if (!parsed.success) {
           throw new Error(parsed.error.issues[0]?.message || "Please enter a valid email and password.");
         }
+
+        await ensureUsernameAvailableForSignup(normalizedUsername, null);
 
         const { data: authData, error: signUpError } = await supabase.auth.signUp({
           email: parsed.data.email,
@@ -720,6 +1054,7 @@ const AuthPage = () => {
               role: legacyRole,
               selected_account_type: role,
               player_gender: role === "player" ? profileData.gender : null,
+              onboarding_complete: false,
             },
           },
         });
@@ -819,35 +1154,39 @@ const AuthPage = () => {
         country: profileData.country || null,
         homeStadium: profileData.homeFieldAddress || profileData.homeStadium || null,
         trainingGround: profileData.trainingGroundAddress || profileData.trainingGround || null,
+        refereeCertificationProofUrl: refereeProofPath,
       };
 
-      let { error: setupError } = await (supabase as any).rpc('complete_account_setup', {
+      let { error: setupError } = await (supabase as any).rpc('finish_account_onboarding', {
         _role: role,
         _profile: setupPayload,
       });
 
-      if (setupError?.message?.includes('invalid input value for enum account_type')) {
-        const legacyRole = mapRoleForLegacyBackend(role);
-        const retry = await (supabase as any).rpc('complete_account_setup', {
-          _role: legacyRole,
-          _profile: setupPayload,
-        });
-        setupError = retry.error;
+      if (isUsernameTakenError(setupError)) {
+        const released = await releaseUsernameConflictForSignup(normalizedUsername);
+        if (released) {
+          const retryAfterRelease = await (supabase as any).rpc('finish_account_onboarding', {
+            _role: role,
+            _profile: setupPayload,
+          });
+          setupError = retryAfterRelease.error;
+        }
       }
 
       if (setupError) {
-        console.warn("complete_account_setup failed; continuing with direct profile save fallback", {
+        console.error("finish_account_onboarding failed", {
           method: signupMethod,
           authUserId: sessionUserId,
           selectedRole: role,
           error: setupError,
         });
-      } else {
-        console.info("Footy Status complete_account_setup saved", {
-          authUserId: sessionUserId,
-          selectedRole: role,
-        });
+        throw setupError;
       }
+
+      console.info("Footy Status onboarding transaction saved", {
+        authUserId: sessionUserId,
+        selectedRole: role,
+      });
 
       const normalizedFullName =
         role === "team_club"
@@ -855,56 +1194,6 @@ const AuthPage = () => {
           : role === "school_team"
             ? profileData.schoolName || profileData.clubName || ""
             : profileData.fullName || profileData.clubName || profileData.schoolName || "";
-      const normalizedBio = profileData.bio ? String(profileData.bio).trim().slice(0, 100) : null;
-
-      const profileRolePayload = {
-          user_id: sessionUserId,
-          full_name: normalizedFullName,
-          username: normalizedUsername,
-          bio: normalizedBio,
-          club_name: role === "team_club" || role === "school_team" ? profileData.clubName || profileData.schoolName || null : null,
-          email: normalizedEmail || normalizeEmailValue(profileData.contactEmail) || null,
-          account_category: accountCategory,
-          account_type: role,
-          account_role: role,
-          role: legacyRole,
-          coaching_role_type: selectedStaffRole,
-          teams_currently_coaching: role !== "team_club" && role !== "school_team" && role !== "player" && role !== "parent" ? profileData.teamOrganizationName || null : null,
-          past_coaching_experience: role !== "team_club" && role !== "school_team" && role !== "player" && role !== "parent" ? profileData.previousTeams || null : null,
-          coaching_licenses: role !== "team_club" && role !== "school_team" && role !== "player" && role !== "parent" ? splitCommaValues(profileData.coachingLicenses) : null,
-          coaching_accolades: role !== "team_club" && role !== "school_team" && role !== "player" && role !== "parent" ? profileData.notableAchievements || null : null,
-          coaching_location: role !== "team_club" && role !== "school_team" && role !== "player" && role !== "parent" ? [profileData.city, profileData.country].filter(Boolean).join(", ") || null : null,
-          scout_role_title: role === "scout" ? profileData.scoutRoleTitle || null : null,
-          scout_organization: role === "scout" ? profileData.scoutOrganization || null : null,
-          scouting_licenses: role === "scout" ? splitCommaValues(profileData.scoutingLicenses) : null,
-          scouting_experience: role === "scout" ? profileData.scoutingExperience || null : null,
-          scouting_regions: role === "scout" ? profileData.scoutingRegions || null : null,
-          scouting_age_groups: role === "scout" ? splitCommaValues(profileData.scoutingAgeGroups) : null,
-          scouting_positions: role === "scout" ? splitCommaValues(profileData.scoutingPositions) : null,
-          scouting_accolades: role === "scout" ? profileData.scoutingAccolades || null : null,
-          referee_certification_level: role === "referee" ? profileData.refereeCertificationLevel || null : null,
-          referee_license_number: role === "referee" ? profileData.refereeLicenseNumber || null : null,
-          referee_certifying_organization: role === "referee" ? profileData.refereeCertifyingOrganization || null : null,
-          referee_years_experience:
-            role === "referee" && profileData.refereeYearsExperience ? Number(profileData.refereeYearsExperience) : null,
-          referee_main_experience: role === "referee" ? profileData.refereeMainExperience || null : null,
-          referee_assistant_experience: role === "referee" ? profileData.refereeAssistantExperience || null : null,
-          referee_leagues_tournaments: role === "referee" ? profileData.refereeLeaguesTournaments || null : null,
-          referee_availability: role === "referee" ? profileData.refereeAvailability || null : null,
-          referee_certification_proof_url: role === "referee" ? refereeProofPath : null,
-          referee_accolades: role === "referee" ? profileData.refereeAccolades || null : null,
-          referee_profile_public: role === "referee" ? Boolean(profileData.refereeProfilePublic) : null,
-        };
-
-      const profileRoleUpdate = await stripMissingProfilesColumnsAndRetry(profileRolePayload, (nextPayload) =>
-        (supabase as any)
-          .from("profiles")
-          .upsert(nextPayload, { onConflict: "user_id" })
-      );
-
-      if (profileRoleUpdate.error) {
-        throw profileRoleUpdate.error;
-      }
 
       const { data: savedRoleProfile, error: savedRoleError } = await (supabase as any)
         .from("profiles")
@@ -1103,6 +1392,14 @@ const AuthPage = () => {
             },
             { onConflict: "user_id" }
           );
+      }
+
+      if (role === "referee") {
+        await saveSignupContactRows(
+          sessionUserId,
+          profileData.contactEmail || normalizedEmail,
+          profileData.contactPhone || null
+        );
       }
 
       if (role === "team_club" || role === "school_team") {
@@ -1464,9 +1761,18 @@ const AuthPage = () => {
         sessionUserId,
         role,
         normalizedUsername,
-        profileData.contactEmail || normalizedEmail
+        normalizedEmail || profileData.contactEmail,
+        profileData
       );
       rolePersistenceVerified = true;
+
+      // Mark onboarding as complete BEFORE navigating so the gate lets the user through.
+      // If this call fails the gate falls back to the DB profile completeness check.
+      const completionFlag = await supabase.auth.updateUser({ data: { onboarding_complete: true } });
+      if (completionFlag.error) {
+        console.warn("Could not set onboarding_complete: true; gate will fall back to DB check", completionFlag.error);
+      }
+
       window.dispatchEvent(new CustomEvent("footy-status-profile-refresh", {
         detail: {
           authUserId: sessionUserId,
@@ -1490,6 +1796,7 @@ const AuthPage = () => {
         rolePersistenceVerified,
       });
       if (coreProfileSaved && rolePersistenceVerified && sessionUserIdForRecovery) {
+        await supabase.auth.updateUser({ data: { onboarding_complete: true } }).catch(() => {});
         toast({
           title: "Welcome to Footy Status!",
           description: "Your account has been created successfully.",
@@ -1519,6 +1826,8 @@ const AuthPage = () => {
       const toastTitle =
         errorMessage === "Username already taken. Please choose another."
           ? "Username already taken"
+          : errorMessage === GOOGLE_SESSION_MISSING_MESSAGE
+            ? "Google signup failed"
           : errorMessage.startsWith("Missing required field:")
             ? "Missing required field"
             : coreProfileSaved
@@ -1571,14 +1880,44 @@ const AuthPage = () => {
     }
   };
 
-  const goBack = () => {
-    clearSignupFlow();
-    if (signupStep === 'profile_form') setSignupStep('auth_method');
-    else if (signupStep === 'auth_method') {
+  // Signs out the temporary Google auth session when the user goes back before
+  // completing signup. This prevents a dangling auth session without a profile.
+  const discardTemporaryGoogleSignupSession = async () => {
+    if (password) return; // email/password flow - nothing to discard
+
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) return;
+
+    console.info("Footy Status discarding temporary Google signup session before account creation", {
+      authUserId: session.user.id,
+      signupStep,
+    });
+
+    await supabase.auth.signOut({ scope: "local" });
+    clearStoredAuthSession();
+    setPendingGoogleAuth(false);
+  };
+
+  const goBack = async () => {
+    if (signupStep === 'profile_form') {
+      await discardTemporaryGoogleSignupSession();
+      clearSignupFlow();
+      setSignupStep('auth_method');
+    } else if (signupStep === 'auth_method') {
+      await discardTemporaryGoogleSignupSession();
+      clearSignupFlow();
+      setEmail("");
+      setPassword("");
       if (accountType === 'team_staff') setSignupStep('staff_type');
       else setSignupStep('account_type');
-    } else if (signupStep === 'staff_type') setSignupStep('account_type');
-    else if (signupStep === 'account_type') setIsLogin(true);
+    } else if (signupStep === 'staff_type') {
+      clearSignupFlow();
+      setStaffType(null);
+      setSignupStep('account_type');
+    } else if (signupStep === 'account_type') {
+      clearSignupFlow();
+      setIsLogin(true);
+    }
   };
 
   // Profile form step

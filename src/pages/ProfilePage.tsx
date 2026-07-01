@@ -45,7 +45,6 @@ import {
   FREE_DELETION_LIMIT,
   FREE_VISIBLE_CLIP_LIMIT,
   canDeleteClip,
-  canUploadVisibleClip,
   getDaysRemaining,
   getIsPro,
 } from "@/lib/subscriptions";
@@ -113,6 +112,71 @@ interface ProfileData {
   referee_accolades?: string | null;
   referee_profile_public?: boolean | null;
 }
+
+const SIGNUP_FLOW_STORAGE_KEY = "footystatus_signup_flow";
+
+const VALID_PROFILE_ACCOUNT_ROLES = new Set([
+  "player",
+  "parent",
+  "referee",
+  "team_club",
+  "school_team",
+  "head_coach_assistant",
+  "coach",
+  "scout",
+  "trainer",
+  "academy_director",
+  "team_staff",
+  "footy_status_official",
+  "admin",
+  "official",
+]);
+
+const normalizeStoredSignupRole = (value?: string | null) => {
+  if (!value) return null;
+  const role = String(value).trim();
+  if (role === "team") return "team_club";
+  if (role === "club") return "team_club";
+  if (role === "school") return "school_team";
+  if (role === "coach") return "head_coach_assistant";
+  return VALID_PROFILE_ACCOUNT_ROLES.has(role) ? role : null;
+};
+
+const getStoredPendingSignupRole = () => {
+  if (typeof window === "undefined") return null;
+  const savedFlow = window.sessionStorage.getItem(SIGNUP_FLOW_STORAGE_KEY) || window.localStorage.getItem(SIGNUP_FLOW_STORAGE_KEY);
+  if (!savedFlow) return null;
+
+  try {
+    const parsed = JSON.parse(savedFlow);
+    return parsed?.pendingGoogleAuth ? normalizeStoredSignupRole(parsed.selectedRole) : null;
+  } catch {
+    return null;
+  }
+};
+
+const getAccountCategoryForProfileRole = (role?: string | null) => {
+  if (role === "player") return "player";
+  if (role === "parent") return "parent";
+  if (role === "referee") return "referee";
+  return role ? "team_staff" : null;
+};
+
+const getLegacyRoleForProfileRole = (role?: string | null) => {
+  if (role === "team_club" || role === "school_team") return "team";
+  if (role === "head_coach_assistant") return "coach";
+  return role || null;
+};
+
+const isRefereeSetupIncomplete = (nextProfile?: ProfileData | null) =>
+  Boolean(
+    nextProfile &&
+      normalizeStoredSignupRole(nextProfile.account_role || nextProfile.account_type || nextProfile.role) === "referee" &&
+      (!nextProfile.username ||
+        !nextProfile.referee_certification_level ||
+        !nextProfile.referee_certifying_organization ||
+        nextProfile.referee_years_experience == null)
+  );
 
 interface ClipData {
   id: string;
@@ -384,6 +448,9 @@ interface EditFormState extends Partial<ProfileData> {
 const MAX_FREE_CLIPS = FREE_VISIBLE_CLIP_LIMIT;
 const MAX_FREE_CLIP_DURATION_SECONDS = 25;
 const MAX_PRO_CLIP_DURATION_SECONDS = 45;
+const FREE_CLIP_DURATION_ERROR = "Free accounts can upload clips up to 25 seconds.";
+const FREE_CLIP_COUNT_ERROR = "Free accounts can only have 3 active clips. Upgrade to Pro or delete a clip to upload another.";
+const PRO_CLIP_DURATION_ERROR = "Pro accounts can upload clips up to 45 seconds.";
 const CONTACT_LABELS: Record<keyof ContactFormState, string> = {
   player_email: "Player Email",
   player_phone: "Player Phone",
@@ -752,8 +819,10 @@ const ProfilePage = () => {
       : profile?.full_name || "No name set";
   const isActivePro = getIsPro(profile);
   const maxClipDurationSeconds = isActivePro ? MAX_PRO_CLIP_DURATION_SECONDS : MAX_FREE_CLIP_DURATION_SECONDS;
-  const editedClipDurationSeconds = Math.max(0, Math.round(clipTrimEnd - clipTrimStart));
-  const visibleClipCount = clips.filter((clip) => clip.visibility !== "inactive" && clip.visibility !== "private").length;
+  const getClipDurationLimitMessage = () => (isActivePro ? PRO_CLIP_DURATION_ERROR : FREE_CLIP_DURATION_ERROR);
+  const editedClipDurationSeconds = Math.max(0, Math.ceil((clipTrimEnd - clipTrimStart) * 100) / 100);
+  const activeClipCount = clips.filter((clip) => clip.visibility !== "inactive").length;
+  const canUploadAnotherActiveClip = isActivePro || activeClipCount < MAX_FREE_CLIPS;
   const daysRemaining = getDaysRemaining(profile);
   const profileDetailValues = [
     profile?.team_name,
@@ -779,11 +848,10 @@ const ProfilePage = () => {
       formatSpecificRoleDisplayLabel(profile?.coaching_role_type) ||
       formatRoleDisplayLabel(resolvedAccountRole, null);
     const selectedScoutRole = formatSpecificRoleDisplayLabel(profile?.scout_role_title, "Scout");
-    const selectedRefereeRole = formatSpecificRoleDisplayLabel(profile?.referee_certification_level, "Referee");
 
     switch (resolvedAccountRole) {
       case "team_club":
-        return "Team / Club";
+        return "Club Team";
       case "school_team":
         return "School Team";
       case "head_coach_assistant":
@@ -800,7 +868,7 @@ const ProfilePage = () => {
       case "parent":
         return "Parent";
       case "referee":
-        return formatRoleDisplayLabel(selectedRefereeRole, "Referee");
+        return "Referee";
       case "footy_status_official":
       case "admin":
       case "official":
@@ -824,6 +892,7 @@ const ProfilePage = () => {
   const buildEditFormFromCurrentState = (): EditFormState => {
     if (isTeamAccount) {
       return {
+        username: profile?.username || "",
         display_name: teamAccountData?.club_name || profile?.club_name || profile?.full_name || "",
         full_name: profile?.full_name || "",
         bio: profile?.bio || "",
@@ -897,6 +966,7 @@ const ProfilePage = () => {
         referee_leagues_tournaments: profile?.referee_leagues_tournaments || "",
         referee_availability: profile?.referee_availability || "",
         referee_accolades: profile?.referee_accolades || "",
+        referee_profile_public: Boolean(profile?.referee_profile_public),
       };
     }
 
@@ -936,6 +1006,7 @@ const ProfilePage = () => {
     if (!user) return emptyContactForm();
 
     const nextForm = emptyContactForm();
+    if (profile?.email) nextForm.player_email = profile.email;
     const [{ data: playerDetails }, { data: teamDetails }, { data: staffDetails }, { data: parentDetails }] = await Promise.all([
       supabase.from("player_profiles").select("contact_email, contact_phone, coach_email").eq("user_id", user.id).maybeSingle(),
       supabase.from("team_profiles").select("contact_email, contact_phone").eq("user_id", user.id).maybeSingle(),
@@ -1360,13 +1431,103 @@ const ProfilePage = () => {
       .select('*')
       .eq('user_id', user.id)
       .single();
+    let fetchedProfileForRoleSpecific: ProfileData | null = null;
 
     if (data) {
+      const metadataRole = normalizeStoredSignupRole(
+        user.user_metadata?.account_role ||
+        user.user_metadata?.account_type ||
+        user.user_metadata?.selected_account_type ||
+        user.user_metadata?.role ||
+        null
+      );
+      const pendingSignupRole = getStoredPendingSignupRole();
+      const savedProfileRole = normalizeStoredSignupRole(
+        (data as unknown as ProfileData).account_role ||
+        (data as unknown as ProfileData).account_type ||
+        (data as unknown as ProfileData).role ||
+        null
+      );
+      const repairedProfileRole = savedProfileRole || pendingSignupRole || metadataRole;
+      const repairedProfileCategory =
+        (data as unknown as ProfileData).account_category ||
+        authProfile?.account_category ||
+        getAccountCategoryForProfileRole(repairedProfileRole);
+      const repairedLegacyRole =
+        (data as unknown as ProfileData).role ||
+        authProfile?.role ||
+        getLegacyRoleForProfileRole(repairedProfileRole);
+
+      let profileData = data as unknown as ProfileData;
+
+      if (
+        repairedProfileRole &&
+        (!profileData.account_role ||
+          !profileData.account_type ||
+          !profileData.account_category ||
+          !profileData.role ||
+          profileData.account_role !== repairedProfileRole ||
+          profileData.account_type !== repairedProfileRole)
+      ) {
+        console.info("Footy Status repairing incomplete profile role", {
+          authUserId: user.id,
+          savedRole: savedProfileRole,
+          pendingSignupRole,
+          metadataRole,
+          repairedProfileRole,
+          repairedProfileCategory,
+          repairedLegacyRole,
+        });
+
+        const { data: repairedProfile, error: repairError } = await (supabase as any)
+          .from("profiles")
+          .update({
+            account_category: repairedProfileCategory,
+            account_type: repairedProfileRole,
+            account_role: repairedProfileRole,
+            role: repairedLegacyRole,
+          })
+          .eq("user_id", user.id)
+          .select("*")
+          .maybeSingle();
+
+        if (repairError) {
+          console.warn("Could not repair incomplete profile role", repairError);
+        } else if (repairedProfile) {
+          profileData = repairedProfile as ProfileData;
+        } else {
+          profileData = {
+            ...profileData,
+            account_category: repairedProfileCategory as ProfileData["account_category"],
+            account_type: repairedProfileRole as ProfileData["account_type"],
+            account_role: repairedProfileRole as ProfileData["account_role"],
+            role: repairedLegacyRole as ProfileData["role"],
+          };
+        }
+      }
+
       const normalizedProfile = {
-        ...(data as unknown as ProfileData),
-        account_category: normalizeAccountCategory(data as unknown as ProfileData) as ProfileData["account_category"],
-        account_role: normalizeAccountRole(data as unknown as ProfileData) as ProfileData["account_role"],
+        ...profileData,
+        account_category: normalizeAccountCategory(profileData) as ProfileData["account_category"],
+        account_role: normalizeAccountRole(profileData) as ProfileData["account_role"],
       };
+
+      if ((pendingSignupRole === "referee" || metadataRole === "referee") && isRefereeSetupIncomplete(normalizedProfile)) {
+        console.info("Footy Status redirecting unfinished Google Referee signup to Referee form", {
+          authUserId: user.id,
+          pendingSignupRole,
+          metadataRole,
+        });
+        toast({
+          title: "Finish Referee signup",
+          description: "Please complete your Referee details so your account can be set up correctly.",
+        });
+        navigate("/auth?mode=signup", { replace: true });
+        setLoading(false);
+        return;
+      }
+
+      fetchedProfileForRoleSpecific = normalizedProfile;
       setProfile(normalizedProfile);
       setEditForm(normalizedProfile);
       if (normalizeAccountRole(normalizedProfile) === "player") {
@@ -1444,17 +1605,23 @@ const ProfilePage = () => {
         } else {
           setSeasonStats([]);
         }
+        if (resolvedMissingAccountRole === "referee" && isRefereeSetupIncomplete(normalizedProfile)) {
+          console.info("Footy Status redirecting missing Referee profile setup to Referee form", {
+            authUserId: user.id,
+            resolvedMissingAccountRole,
+          });
+          toast({
+            title: "Finish Referee signup",
+            description: "Please complete your Referee details so your account can be set up correctly.",
+          });
+          navigate("/auth?mode=signup", { replace: true });
+          setLoading(false);
+          return;
+        }
+        fetchedProfileForRoleSpecific = normalizedProfile;
       }
     }
-    await fetchRoleSpecificAccountData(
-      data
-        ? ({
-            ...(data as unknown as ProfileData),
-            account_category: normalizeAccountCategory(data as unknown as ProfileData) as ProfileData["account_category"],
-            account_role: normalizeAccountRole(data as unknown as ProfileData) as ProfileData["account_role"],
-          } as ProfileData)
-        : null
-    );
+    await fetchRoleSpecificAccountData(fetchedProfileForRoleSpecific);
     setLoading(false);
   };
 
@@ -2521,10 +2688,7 @@ const ProfilePage = () => {
       player_phone: phone?.trim() || "",
     };
     const existingByType = new Map(contacts.map((contact) => [contact.contact_type, contact]));
-    const entries: Array<[keyof ContactFormState, string]> = [
-      ["player_email", nextForm.player_email],
-      ["player_phone", nextForm.player_phone],
-    ];
+    const entries = Object.entries(nextForm) as Array<[keyof ContactFormState, string]>;
 
     for (const [contactType, rawValue] of entries) {
       const value = rawValue.trim();
@@ -2583,8 +2747,10 @@ const ProfilePage = () => {
     const normalizedBio = editForm.bio?.trim().slice(0, BIO_MAX_LENGTH) || null;
     const normalizedUsername = normalizeUsername(editForm.username);
     const currentUsername = normalizeUsername(profile.username);
+    const usernameWasEntered = String(editForm.username ?? "").trim().length > 0;
+    const preservedUsername = usernameWasEntered ? normalizedUsername : currentUsername;
 
-    if (normalizedUsername !== currentUsername) {
+    if (usernameWasEntered && normalizedUsername !== currentUsername) {
       const usernameValidationMessage = validateUsername(normalizedUsername);
 
       if (usernameValidationMessage) {
@@ -2618,6 +2784,7 @@ const ProfilePage = () => {
       null;
 
     const profileUpdate = {
+      username: preservedUsername || profile.username,
       full_name: editForm.full_name,
       bio: normalizedBio as any,
       age_birth_year: editForm.age_birth_year as any,
@@ -2914,6 +3081,7 @@ const ProfilePage = () => {
           referee_leagues_tournaments: editForm.referee_leagues_tournaments?.trim() || null,
           referee_availability: editForm.referee_availability?.trim() || null,
           referee_accolades: editForm.referee_accolades?.trim() || null,
+          referee_profile_public: Boolean(editForm.referee_profile_public),
         };
         console.info("Footy Status referee profile save payload", {
           authUserId: user.id,
@@ -3072,9 +3240,18 @@ const ProfilePage = () => {
           setSaving(false);
           return;
         }
+
+        try {
+          await persistBasicContactRows(editForm.contact_email?.trim().toLowerCase() || null, editForm.contact_phone?.trim() || null);
+        } catch (contactError: any) {
+          console.error("Footy Status staff contact row save failed", contactError);
+          toast({ title: "Error", description: contactError.message, variant: "destructive" });
+          setSaving(false);
+          return;
+        }
       }
 
-      if (isPlayerAccount) {
+      if (isPlayerAccount || isOfficialFootyStatusAccount) {
         try {
           await persistContacts();
         } catch (contactError: any) {
@@ -3425,10 +3602,10 @@ const ProfilePage = () => {
       return;
     }
 
-    if (!canUploadVisibleClip(profile, visibleClipCount)) {
+    if (!canUploadAnotherActiveClip) {
       toast({
         title: "Clip limit reached",
-        description: "Upgrade to FootyStatus Pro for unlimited visible clips.",
+        description: FREE_CLIP_COUNT_ERROR,
         variant: "destructive",
       });
       navigate("/pro");
@@ -3438,11 +3615,22 @@ const ProfilePage = () => {
 
     try {
       const duration = await getVideoDuration(file);
+      const safeDurationSeconds = Math.ceil(duration * 100) / 100;
+
+      if (safeDurationSeconds > maxClipDurationSeconds) {
+        toast({
+          title: "Clip is too long",
+          description: getClipDurationLimitMessage(),
+          variant: "destructive",
+        });
+        resetSelectedClip();
+        return;
+      }
 
       setSelectedVideoFile(file);
-      setSelectedVideoDuration(duration);
+      setSelectedVideoDuration(safeDurationSeconds);
       setClipTrimStart(0);
-      setClipTrimEnd(Math.min(Math.round(duration), maxClipDurationSeconds));
+      setClipTrimEnd(Math.min(safeDurationSeconds, maxClipDurationSeconds));
       setClipPlaybackVolume(1);
       setClipFitMode("cover");
       toast({ title: "Video ready", description: "Trim it, adjust volume, choose sizing, then post." });
@@ -3469,10 +3657,10 @@ const ProfilePage = () => {
       return;
     }
 
-    if (clipVisibility !== "private" && !canUploadVisibleClip(profile, visibleClipCount)) {
+    if (!canUploadAnotherActiveClip) {
       toast({
         title: "Clip limit reached",
-        description: "Upgrade to FootyStatus Pro for unlimited visible clips.",
+        description: FREE_CLIP_COUNT_ERROR,
         variant: "destructive",
       });
       navigate("/pro");
@@ -3487,7 +3675,7 @@ const ProfilePage = () => {
     if (editedClipDurationSeconds > maxClipDurationSeconds) {
       toast({
         title: "Clip is too long",
-        description: `${isActivePro ? "Pro" : "Free"} clips can be up to ${maxClipDurationSeconds} seconds.`,
+        description: getClipDurationLimitMessage(),
         variant: "destructive",
       });
       return;
@@ -4247,7 +4435,7 @@ const ProfilePage = () => {
     if (editedClipDurationSeconds <= 0 || editedClipDurationSeconds > maxClipDurationSeconds) {
       toast({
         title: "Adjust clip length",
-        description: `${isActivePro ? "Pro" : "Free"} clips can be up to ${maxClipDurationSeconds} seconds.`,
+        description: getClipDurationLimitMessage(),
         variant: "destructive",
       });
       return;
@@ -4263,6 +4451,11 @@ const ProfilePage = () => {
         CONTACT_DISPLAY_ORDER.indexOf(a.contact_type as keyof ContactFormState) -
         CONTACT_DISPLAY_ORDER.indexOf(b.contact_type as keyof ContactFormState)
     );
+  const getContactLabel = (contactType: string) => {
+    if (!isPlayerAccount && contactType === "player_email") return "Email";
+    if (!isPlayerAccount && contactType === "player_phone") return "Phone Number";
+    return CONTACT_LABELS[contactType as keyof ContactFormState] || "Contact";
+  };
 
   const linkedMembershipsForDisplay = activeMemberships.length ? activeMemberships : activeMembership ? [activeMembership] : [];
   const teamStaffContacts = [
@@ -4303,6 +4496,13 @@ const ProfilePage = () => {
         ]
       : []),
   ].filter((contact) => contact.value);
+  const sharedNonPlayerContacts = !isPlayerAccount && !isTeamAccount
+    ? visibleContacts.filter((contact) =>
+        isTeamStaffAccount || isOfficialFootyStatusAccount
+          ? !["player_email", "player_phone"].includes(contact.contact_type)
+          : true
+      )
+    : [];
 
   if (authLoading || loading) {
     return (
@@ -4391,7 +4591,7 @@ const ProfilePage = () => {
               </div>
               {isTeamAccount && !isOfficialFootyStatusAccount ? (
                 <span className="mt-2 inline-flex items-center rounded-full bg-muted px-3 py-1 text-xs font-medium text-muted-foreground">
-                  Team / Club Account
+                  {getAccountRoleLabel()}
                 </span>
               ) : null}
               {isTeamAccount && teamAccountData?.club_name && !isOfficialFootyStatusAccount ? (
@@ -4403,11 +4603,14 @@ const ProfilePage = () => {
                   {profile?.username ? <span className="break-all text-muted-foreground">@{profile.username}</span> : null}
                 </div>
               ) : null}
+              {!isTeamAccount && !isOfficialFootyStatusAccount && !isPlayerAccount ? (
+                <div className="mt-1 flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm">
+                  <span className="font-bold text-foreground">{getAccountRoleLabel()}</span>
+                  {profile?.username ? <span className="break-all text-muted-foreground">@{profile.username}</span> : null}
+                </div>
+              ) : null}
               {displayProfileBio && <p className="mx-auto mt-1 w-full max-w-xs break-words whitespace-pre-wrap text-center text-sm text-muted-foreground" style={{ textAlign: "center" }}>{displayProfileBio}</p>}
             </>
-          )}
-          {!isTeamAccount && !isOfficialFootyStatusAccount && !isPlayerAccount && (
-            <p className="text-sm text-muted-foreground mt-1">{getAccountRoleLabel()}</p>
           )}
           {isActivePro && !isPlayerAccount && <ProBadge className="mt-2" />}
           {isActivePro && daysRemaining !== null ? (
@@ -4577,42 +4780,6 @@ const ProfilePage = () => {
                     />
                     <p className="text-xs text-muted-foreground text-right">{(editForm.bio || "").length}/{BIO_MAX_LENGTH}</p>
                   </div>
-                </div>
-                <div>
-                  <label className="text-sm text-muted-foreground">Certification Level</label>
-                  <Input value={editForm.referee_certification_level || ""} onChange={(e) => setEditForm({ ...editForm, referee_certification_level: e.target.value })} placeholder="Grassroots, Regional, National..." />
-                </div>
-                <div>
-                  <label className="text-sm text-muted-foreground">License Number</label>
-                  <Input value={editForm.referee_license_number || ""} onChange={(e) => setEditForm({ ...editForm, referee_license_number: e.target.value })} placeholder="License number" />
-                </div>
-                <div>
-                  <label className="text-sm text-muted-foreground">Certifying Organization</label>
-                  <Input value={editForm.referee_certifying_organization || ""} onChange={(e) => setEditForm({ ...editForm, referee_certifying_organization: e.target.value })} placeholder="US Soccer, state association..." />
-                </div>
-                <div>
-                  <label className="text-sm text-muted-foreground">Years Experience</label>
-                  <Input type="number" value={editForm.referee_years_experience != null ? String(editForm.referee_years_experience) : ""} onChange={(e) => setEditForm({ ...editForm, referee_years_experience: e.target.value as any })} placeholder="Years" />
-                </div>
-                <div>
-                  <label className="text-sm text-muted-foreground">Main Referee Experience</label>
-                  <Input value={editForm.referee_main_experience || ""} onChange={(e) => setEditForm({ ...editForm, referee_main_experience: e.target.value })} placeholder="Main referee experience" />
-                </div>
-                <div>
-                  <label className="text-sm text-muted-foreground">Assistant Referee Experience</label>
-                  <Input value={editForm.referee_assistant_experience || ""} onChange={(e) => setEditForm({ ...editForm, referee_assistant_experience: e.target.value })} placeholder="Assistant referee experience" />
-                </div>
-                <div>
-                  <label className="text-sm text-muted-foreground">Leagues / Tournaments</label>
-                  <Input value={editForm.referee_leagues_tournaments || ""} onChange={(e) => setEditForm({ ...editForm, referee_leagues_tournaments: e.target.value })} placeholder="Leagues or tournaments" />
-                </div>
-                <div>
-                  <label className="text-sm text-muted-foreground">Availability</label>
-                  <Input value={editForm.referee_availability || ""} onChange={(e) => setEditForm({ ...editForm, referee_availability: e.target.value })} placeholder="Weekends, evenings..." />
-                </div>
-                <div>
-                  <label className="text-sm text-muted-foreground">Accolades / Notable Matches</label>
-                  <Input value={editForm.referee_accolades || ""} onChange={(e) => setEditForm({ ...editForm, referee_accolades: e.target.value })} placeholder="Notable matches or achievements" />
                 </div>
                 <Button className="w-full mt-4" onClick={handleSaveProfile} disabled={saving}>
                   <Save className="h-4 w-4 mr-2" /> {saving ? "Saving..." : "Save"}
@@ -4882,7 +5049,14 @@ const ProfilePage = () => {
                 </div>
                 <div>
                   <label className="text-sm text-muted-foreground">Username</label>
-                  <Input value={editForm.username || ""} onChange={(e) => setEditForm({ ...editForm, username: e.target.value })} placeholder="username" />
+                  <Input
+                    value={editForm.username || ""}
+                    onChange={(e) => setEditForm({ ...editForm, username: normalizeUsername(e.target.value) })}
+                    placeholder="username"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                  />
                 </div>
                 <div>
                   <label className="text-sm text-muted-foreground">Bio</label>
@@ -4898,6 +5072,54 @@ const ProfilePage = () => {
                     <p className="text-xs text-muted-foreground text-right">{(editForm.bio || "").length}/{BIO_MAX_LENGTH}</p>
                   </div>
                 </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Certification Level</label>
+                  <Input value={editForm.referee_certification_level || ""} onChange={(e) => setEditForm({ ...editForm, referee_certification_level: e.target.value })} placeholder="Grassroots, Regional, National..." />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">License Number</label>
+                  <Input value={editForm.referee_license_number || ""} onChange={(e) => setEditForm({ ...editForm, referee_license_number: e.target.value })} placeholder="License number" />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Certifying Organization</label>
+                  <Input value={editForm.referee_certifying_organization || ""} onChange={(e) => setEditForm({ ...editForm, referee_certifying_organization: e.target.value })} placeholder="US Soccer, state association..." />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Years Experience</label>
+                  <Input type="number" value={editForm.referee_years_experience != null ? String(editForm.referee_years_experience) : ""} onChange={(e) => setEditForm({ ...editForm, referee_years_experience: e.target.value as any })} placeholder="Years" min="0" />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Main Referee Experience</label>
+                  <Input value={editForm.referee_main_experience || ""} onChange={(e) => setEditForm({ ...editForm, referee_main_experience: e.target.value })} placeholder="Main referee experience" />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Assistant Referee Experience</label>
+                  <Input value={editForm.referee_assistant_experience || ""} onChange={(e) => setEditForm({ ...editForm, referee_assistant_experience: e.target.value })} placeholder="Assistant referee experience" />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Leagues / Tournaments</label>
+                  <Input value={editForm.referee_leagues_tournaments || ""} onChange={(e) => setEditForm({ ...editForm, referee_leagues_tournaments: e.target.value })} placeholder="Leagues or tournaments" />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Availability</label>
+                  <Input value={editForm.referee_availability || ""} onChange={(e) => setEditForm({ ...editForm, referee_availability: e.target.value })} placeholder="Weekends, evenings..." />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Accolades / Notable Matches</label>
+                  <Input value={editForm.referee_accolades || ""} onChange={(e) => setEditForm({ ...editForm, referee_accolades: e.target.value })} placeholder="Notable matches or achievements" />
+                </div>
+                <label className="flex items-center gap-3 rounded-lg border border-border p-3 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(editForm.referee_profile_public)}
+                    onChange={(e) => setEditForm({ ...editForm, referee_profile_public: e.target.checked })}
+                    className="h-4 w-4"
+                  />
+                  <span>
+                    <span className="block font-medium text-foreground">Public Referee Profile</span>
+                    <span className="block text-xs text-muted-foreground">Allow your referee profile to be visible where referee profiles are shown.</span>
+                  </span>
+                </label>
                 <Button className="w-full mt-4" onClick={handleSaveProfile} disabled={saving}>
                   <Save className="h-4 w-4 mr-2" /> {saving ? "Saving..." : "Save"}
                 </Button>
@@ -4924,6 +5146,12 @@ const ProfilePage = () => {
                   <div className="flex items-center gap-3 p-4">
                     <Building2 className="h-5 w-5 text-muted-foreground" />
                     <div><p className="text-sm text-muted-foreground">Certifying Organization</p><p className="font-medium">{profile.referee_certifying_organization}</p></div>
+                  </div>
+                ) : null}
+                {profile?.referee_license_number ? (
+                  <div className="flex items-center gap-3 p-4">
+                    <Shield className="h-5 w-5 text-muted-foreground" />
+                    <div><p className="text-sm text-muted-foreground">License Number</p><p className="font-medium">{profile.referee_license_number}</p></div>
                   </div>
                 ) : null}
                 {profile?.referee_years_experience != null ? (
@@ -5865,7 +6093,7 @@ const ProfilePage = () => {
         <section className="mb-6">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-lg font-semibold text-navy">{isPlayerAccount ? "My Contacts / Links" : "Contact Information"}</h3>
-            {!isEditingDetails && !isOfficialFootyStatusAccount && (
+            {!isEditingDetails && (
               <Button variant="outline" size="sm" className="gap-2" onClick={() => startEditingSection("contact")}>
                 <Edit className="h-4 w-4" /> {isEditingContact ? "Editing" : "Edit"}
               </Button>
@@ -5996,6 +6224,41 @@ const ProfilePage = () => {
                   <Save className="h-4 w-4 mr-2" /> {saving ? "Saving..." : "Save"}
                 </Button>
               </div>
+            ) : isEditingContact && isOfficialFootyStatusAccount ? (
+              <div className="p-4 space-y-3">
+                <div>
+                  <label className="text-sm text-muted-foreground">Email</label>
+                  <Input
+                    type="email"
+                    value={contactForm.player_email}
+                    onChange={(e) => setContactForm((prev) => ({ ...prev, player_email: e.target.value }))}
+                    placeholder="official@email.com"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Phone Number</label>
+                  <Input
+                    type="tel"
+                    value={contactForm.player_phone}
+                    onChange={(e) => setContactForm((prev) => ({ ...prev, player_phone: e.target.value }))}
+                    placeholder="(555) 123-4567"
+                  />
+                </div>
+                {SOCIAL_CONTACTS.map((contactType) => (
+                  <div key={contactType}>
+                    <label className="text-sm text-muted-foreground">{CONTACT_LABELS[contactType]}</label>
+                    <Input
+                      type={contactType === "website" ? "url" : "text"}
+                      value={contactForm[contactType]}
+                      onChange={(e) => setContactForm((prev) => ({ ...prev, [contactType]: e.target.value }))}
+                      placeholder={CONTACT_LABELS[contactType]}
+                    />
+                  </div>
+                ))}
+                <Button className="w-full mt-2" onClick={handleSaveProfile} disabled={saving}>
+                  <Save className="h-4 w-4 mr-2" /> {saving ? "Saving..." : "Save"}
+                </Button>
+              </div>
             ) : isEditingContact && isTeamStaffAccount ? (
               <div className="p-4 space-y-3">
                 <div>
@@ -6016,6 +6279,17 @@ const ProfilePage = () => {
                     placeholder="(555) 123-4567"
                   />
                 </div>
+                {SOCIAL_CONTACTS.map((contactType) => (
+                  <div key={contactType}>
+                    <label className="text-sm text-muted-foreground">{CONTACT_LABELS[contactType]}</label>
+                    <Input
+                      type={contactType === "website" ? "url" : "text"}
+                      value={contactForm[contactType]}
+                      onChange={(e) => setContactForm((prev) => ({ ...prev, [contactType]: e.target.value }))}
+                      placeholder={CONTACT_LABELS[contactType]}
+                    />
+                  </div>
+                ))}
                 <Button className="w-full mt-2" onClick={handleSaveProfile} disabled={saving}>
                   <Save className="h-4 w-4 mr-2" /> {saving ? "Saving..." : "Save"}
                 </Button>
@@ -6048,6 +6322,17 @@ const ProfilePage = () => {
                     placeholder="Emergency contact"
                   />
                 </div>
+                {SOCIAL_CONTACTS.map((contactType) => (
+                  <div key={contactType}>
+                    <label className="text-sm text-muted-foreground">{CONTACT_LABELS[contactType]}</label>
+                    <Input
+                      type={contactType === "website" ? "url" : "text"}
+                      value={contactForm[contactType]}
+                      onChange={(e) => setContactForm((prev) => ({ ...prev, [contactType]: e.target.value }))}
+                      placeholder={CONTACT_LABELS[contactType]}
+                    />
+                  </div>
+                ))}
                 <Button className="w-full mt-2" onClick={handleSaveProfile} disabled={saving}>
                   <Save className="h-4 w-4 mr-2" /> {saving ? "Saving..." : "Save"}
                 </Button>
@@ -6072,6 +6357,17 @@ const ProfilePage = () => {
                     placeholder="(555) 123-4567"
                   />
                 </div>
+                {SOCIAL_CONTACTS.map((contactType) => (
+                  <div key={contactType}>
+                    <label className="text-sm text-muted-foreground">{CONTACT_LABELS[contactType]}</label>
+                    <Input
+                      type={contactType === "website" ? "url" : "text"}
+                      value={contactForm[contactType]}
+                      onChange={(e) => setContactForm((prev) => ({ ...prev, [contactType]: e.target.value }))}
+                      placeholder={CONTACT_LABELS[contactType]}
+                    />
+                  </div>
+                ))}
                 <Button className="w-full mt-2" onClick={handleSaveProfile} disabled={saving}>
                   <Save className="h-4 w-4 mr-2" /> {saving ? "Saving..." : "Save"}
                 </Button>
@@ -6088,7 +6384,7 @@ const ProfilePage = () => {
                   )}
                   <div>
                     <p className="text-sm text-muted-foreground">
-                      {CONTACT_LABELS[contact.contact_type as keyof ContactFormState]}
+                      {getContactLabel(contact.contact_type)}
                     </p>
                     {contact.contact_type.includes("phone") ? (
                       <a href={`tel:${contact.value}`} className="font-medium text-navy hover:underline">
@@ -6111,7 +6407,7 @@ const ProfilePage = () => {
                   </div>
                 </div>
               ))
-            ) : !isPlayerAccount && (teamStaffContacts.length > 0 || (!isOfficialFootyStatusAccount && (teamStaffMembers.length > 0 || sortedLinkedTeamClubStaff.length > 0))) ? (
+            ) : !isPlayerAccount && (teamStaffContacts.length > 0 || sharedNonPlayerContacts.length > 0 || (!isOfficialFootyStatusAccount && (teamStaffMembers.length > 0 || sortedLinkedTeamClubStaff.length > 0))) ? (
               <>
                 {teamStaffContacts.map((contact) => (
                   <div key={contact.label} className="flex items-center gap-3 p-4">
@@ -6128,6 +6424,38 @@ const ProfilePage = () => {
                         </a>
                       ) : (
                         <a href={`mailto:${contact.value}`} className="font-medium text-navy hover:underline">
+                          {contact.value}
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {sharedNonPlayerContacts.map((contact) => (
+                  <div key={contact.id} className="flex items-center gap-3 p-4">
+                    {contact.contact_type.includes("phone") ? (
+                      <Phone className="h-5 w-5 text-muted-foreground" />
+                    ) : contact.contact_type.includes("email") ? (
+                      <Mail className="h-5 w-5 text-muted-foreground" />
+                    ) : (
+                      <LinkIcon className="h-5 w-5 text-muted-foreground" />
+                    )}
+                    <div>
+                      <p className="text-sm text-muted-foreground">{getContactLabel(contact.contact_type)}</p>
+                      {contact.contact_type.includes("phone") ? (
+                        <a href={`tel:${contact.value}`} className="font-medium text-navy hover:underline">
+                          {contact.value}
+                        </a>
+                      ) : contact.contact_type.includes("email") ? (
+                        <a href={`mailto:${contact.value}`} className="font-medium text-navy hover:underline">
+                          {contact.value}
+                        </a>
+                      ) : (
+                        <a
+                          href={contact.value.startsWith("http") ? contact.value : `https://${contact.value}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-medium text-navy hover:underline"
+                        >
                           {contact.value}
                         </a>
                       )}
@@ -6256,7 +6584,7 @@ const ProfilePage = () => {
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-lg font-semibold text-navy">My Clips</h3>
             <span className="text-sm text-muted-foreground">
-              {!isActivePro ? `${visibleClipCount}/${MAX_FREE_CLIPS} visible clips` : `${clipCount} clips`}
+              {!isActivePro ? `${activeClipCount}/${MAX_FREE_CLIPS} active clips` : `${clipCount} clips`}
             </span>
           </div>
           <div className="mb-3 flex gap-2">
@@ -6272,11 +6600,11 @@ const ProfilePage = () => {
 
           {/* Upload Form */}
           <div className="bg-card border border-border rounded-xl p-4 mb-4">
-            {!canUploadVisibleClip(profile, visibleClipCount) ? (
+            {!canUploadAnotherActiveClip ? (
               <div className="text-center py-4">
                 <Lock className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
                 <p className="font-medium">Clip limit reached</p>
-                <p className="text-sm text-muted-foreground mt-1">Upgrade to FootyStatus Pro for unlimited clips</p>
+                <p className="text-sm text-muted-foreground mt-1">{FREE_CLIP_COUNT_ERROR}</p>
                 <Button className="mt-3 gap-2" size="sm" onClick={() => navigate("/pro")}>
                   <Crown className="h-4 w-4" /> Upgrade to Pro
                 </Button>

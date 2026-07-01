@@ -31,6 +31,7 @@ import RefereeDashboardPage from "./pages/RefereeDashboardPage";
 import RefereeProfilePage from "./pages/RefereeProfilePage";
 import PlayerGenderCompletionGate from "./components/PlayerGenderCompletionGate";
 import AccountModerationGate from "./components/AccountModerationGate";
+import RefereeOnboardingGate from "./components/RefereeOnboardingGate";
 import ClipSharePage from "./pages/ClipSharePage";
 
 const queryClient = new QueryClient();
@@ -44,6 +45,7 @@ const App = () => (
           <Sonner />
           <PlayerGenderCompletionGate />
           <BrowserRouter>
+            <RefereeOnboardingGate>
             <AccountModerationGate>
             <Routes>
               <Route path="/" element={<Index />} />
@@ -75,6 +77,7 @@ const App = () => (
               <Route path="*" element={<NotFound />} />
             </Routes>
             </AccountModerationGate>
+            </RefereeOnboardingGate>
           </BrowserRouter>
         </TooltipProvider>
       </SettingsProvider>

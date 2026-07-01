@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -48,6 +48,14 @@ const PlayerProfileForm = ({ email, onSubmit, onBack, loading }: PlayerProfileFo
     coachEmail: "",
     gender: "",
   });
+
+  useEffect(() => {
+    if (!email) return;
+    setFormData((prev) => ({
+      ...prev,
+      contactEmail: prev.contactEmail || email,
+    }));
+  }, [email]);
 
   const handleChange = (field: keyof PlayerProfileData, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));

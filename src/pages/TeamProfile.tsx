@@ -46,6 +46,7 @@ interface Team {
   points: number;
   age_group: string | null;
   approval_status: string;
+  team_type: string | null;
   owner_user_id: string | null;
   access_code_last4: string | null;
 }
@@ -99,6 +100,7 @@ interface TeamProfileDetails {
   age_groups_offered: string[] | null;
   contact_email: string | null;
   contact_phone: string | null;
+  team_type: string | null;
 }
 
 interface TeamStaffMember {
@@ -145,6 +147,10 @@ const TeamProfile = () => {
 
   const isOfficialFootyStatusAccount = isFootyStatusSuperAdminEmail(user?.email);
   const isTeamOrganizationAccount = profile?.account_role === "team_club" || profile?.account_role === "school_team";
+  const teamAccountLabel =
+    teamProfileDetails?.team_type === "school" || team?.team_type === "school"
+      ? "School Team"
+      : "Club Team";
   const userOwnsTeam = !!user && !!team && team.owner_user_id === user.id;
   const canManageTeam = !!(
     user &&
@@ -294,7 +300,7 @@ const TeamProfile = () => {
       fetchRosterForTeam(teamData.id),
       (supabase as any)
         .from("team_profiles")
-        .select("id, club_name, logo_url, leagues_offered, founded_year, city, home_stadium, training_ground, home_jersey_color, away_jersey_color, third_kit_color, age_groups_offered, contact_email, contact_phone")
+        .select("id, club_name, logo_url, leagues_offered, founded_year, city, home_stadium, training_ground, home_jersey_color, away_jersey_color, third_kit_color, age_groups_offered, contact_email, contact_phone, team_type")
         .eq("team_id", teamData.id)
         .maybeSingle(),
       club ? fetchClubTeams(club.id) : Promise.resolve([]),
@@ -838,7 +844,7 @@ const TeamProfile = () => {
             </div>
           </div>
           <span className="mt-2 inline-flex items-center rounded-full bg-muted px-3 py-1 text-xs font-medium text-muted-foreground">
-            Team / Club Account
+            {teamAccountLabel}
           </span>
           {teamBio ? <p className="mx-auto mt-2 w-full max-w-xs break-words whitespace-pre-wrap text-center text-sm text-muted-foreground" style={{ textAlign: "center" }}>{teamBio}</p> : null}
         </div>

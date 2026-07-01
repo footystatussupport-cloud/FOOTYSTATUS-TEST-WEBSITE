@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -100,6 +100,14 @@ const TeamProfileForm = ({ email, teamType = "club", onSubmit, onBack, loading }
     teamColors: "",
     socialLinks: "",
   });
+
+  useEffect(() => {
+    if (!email) return;
+    setFormData((prev) => ({
+      ...prev,
+      contactEmail: prev.contactEmail || email,
+    }));
+  }, [email]);
 
   const handleChange = (field: keyof TeamProfileData, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));

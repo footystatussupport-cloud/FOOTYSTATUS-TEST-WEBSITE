@@ -114,6 +114,14 @@ const StaffProfileForm = ({ email, staffType, onSubmit, onBack, loading }: Staff
   const [teamSearchResults, setTeamSearchResults] = useState<CoachingTeamSelection[]>([]);
   const [teamSearchLoading, setTeamSearchLoading] = useState(false);
 
+  useEffect(() => {
+    if (!email) return;
+    setFormData((prev) => ({
+      ...prev,
+      contactEmail: prev.contactEmail || email,
+    }));
+  }, [email]);
+
   const handleChange = (field: keyof StaffProfileData, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };

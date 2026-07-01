@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -44,6 +44,14 @@ const ParentProfileForm = ({ email, onSubmit, onBack, loading }: ParentProfileFo
     childAgeGroup: "",
     parentNotes: "",
   });
+
+  useEffect(() => {
+    if (!email) return;
+    setFormData((prev) => ({
+      ...prev,
+      contactEmail: prev.contactEmail || email,
+    }));
+  }, [email]);
 
   const handleChange = (field: keyof ParentProfileData, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));

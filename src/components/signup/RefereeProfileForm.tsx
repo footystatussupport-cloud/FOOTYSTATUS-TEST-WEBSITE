@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowLeft, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -51,6 +51,14 @@ const RefereeProfileForm = ({ email, onSubmit, onBack, loading }: RefereeProfile
     refereeProfilePublic: false,
     refereeCertificationProofFile: null,
   });
+
+  useEffect(() => {
+    if (!email) return;
+    setFormData((prev) => ({
+      ...prev,
+      contactEmail: prev.contactEmail || email,
+    }));
+  }, [email]);
 
   const handleChange = <K extends keyof RefereeProfileFormData>(field: K, value: RefereeProfileFormData[K]) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
