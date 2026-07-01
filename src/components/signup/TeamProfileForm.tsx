@@ -47,6 +47,7 @@ interface TeamProfileData {
   sport: string;
   schoolLevel: string;
   schoolLevels: string[];
+  teamGender: "" | "boy" | "girl";
   leagueConference: string;
   schoolWebsite: string;
   schoolLogoUrl: string;
@@ -91,6 +92,7 @@ const TeamProfileForm = ({ email, teamType = "club", onSubmit, onBack, loading }
     sport: "Soccer",
     schoolLevel: "",
     schoolLevels: [],
+    teamGender: "",
     leagueConference: "",
     schoolWebsite: "",
     schoolLogoUrl: "",
@@ -154,6 +156,15 @@ const TeamProfileForm = ({ email, teamType = "club", onSubmit, onBack, loading }
     setFormError("");
 
     if (!isSchoolTeam) {
+      const hasIncompleteTeamGender = formData.offeredTeams.some(
+        (team) => team.age_group.trim() && team.league_name.trim() && !team.gender
+      );
+
+      if (hasIncompleteTeamGender) {
+        setFormError("Choose Boys or Girls for each team you're adding.");
+        return;
+      }
+
       onSubmit({ ...formData, contactEmail: cleanEmail(formData.contactEmail), teamType: "club" });
       return;
     }
@@ -172,6 +183,11 @@ const TeamProfileForm = ({ email, teamType = "club", onSubmit, onBack, loading }
       return;
     }
 
+    if (!formData.teamGender) {
+      setFormError("Choose Boys or Girls.");
+      return;
+    }
+
     onSubmit({
       ...formData,
       contactEmail: cleanedSchoolEmail,
@@ -185,7 +201,7 @@ const TeamProfileForm = ({ email, teamType = "club", onSubmit, onBack, loading }
         return {
           age_group: schoolLevelLabel,
           league_name: formData.leagueConference,
-          gender: "",
+          gender: formData.teamGender,
           season: "",
           level,
           coach_name: formData.headCoachName,
@@ -255,6 +271,22 @@ const TeamProfileForm = ({ email, teamType = "club", onSubmit, onBack, loading }
                 ))}
               </div>
               <input value={formData.schoolLevels.join(",")} required readOnly className="sr-only" tabIndex={-1} />
+            </div>
+
+            <div className="col-span-2 space-y-2">
+              <Label>Boys or Girls Team? *</Label>
+              <Select
+                value={formData.teamGender}
+                onValueChange={(value) => setFormData((prev) => ({ ...prev, teamGender: value as TeamProfileData["teamGender"] }))}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Choose Boys or Girls" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="boy">Boys</SelectItem>
+                  <SelectItem value="girl">Girls</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="col-span-2 space-y-2">

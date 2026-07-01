@@ -604,6 +604,7 @@ const AuthPage = () => {
   const accountTypeRef = useRef(accountType);
   const staffTypeRef = useRef(staffType);
   const modeRef = useRef(mode);
+  const staleGoogleFlowHandledRef = useRef(false);
 
   useEffect(() => { isLoginRef.current = isLogin; }, [isLogin]);
   useEffect(() => { pendingGoogleAuthRef.current = pendingGoogleAuth; }, [pendingGoogleAuth]);
@@ -726,7 +727,15 @@ const AuthPage = () => {
     }
   }, [authReason, toast]);
 
-  // Restore signup flow state if returning from Google OAuth redirect
+  // Restore the account type / staff type the user picked before leaving for
+  // Google OAuth. This only primes local state - it must NOT advance to
+  // profile_form on its own. Jumping straight to the form based on this
+  // localStorage flag alone (without a real Supabase session) let a stale
+  // flag from an earlier, abandoned Google attempt show the signup form with
+  // no session behind it, so submitting always failed with "Google sign-up
+  // did not finish correctly" after the user had already filled everything
+  // in. Advancing to profile_form now only happens once the auth-state
+  // effect below confirms a real session exists.
   useEffect(() => {
     const parsed = getStoredSignupFlow();
     if (!parsed) return;
@@ -739,16 +748,6 @@ const AuthPage = () => {
       if (parsed.pendingGoogleAuth) {
         setPendingGoogleAuth(true);
         setIsLogin(false);
-        if (parsed.accountType || restoredSelection.accountType) {
-          setSignupStep("profile_form");
-        } else {
-          setSignupStep("account_type");
-          toast({
-            title: "Signup session expired",
-            description: "Please choose your account type again before creating your account.",
-            variant: "destructive",
-          });
-        }
       }
     } catch {
       clearSignupFlow();
@@ -759,8 +758,27 @@ const AuthPage = () => {
   // race conditions from stale closures on isLogin/pendingGoogleAuth changes.
   useEffect(() => {
     const handleIncomingSession = async (session: any) => {
-      if (!session) return;
+      if (!session) {
+        // A pendingGoogleAuth flag with no real session behind it means the
+        // earlier Google attempt was abandoned or failed (or this is a stale
+        // flag left over from a previous visit). Clear it and send the user
+        // back to pick their account type instead of leaving them able to
+        // fill out the whole signup form only to fail on submit.
+        if (pendingGoogleAuthRef.current && !staleGoogleFlowHandledRef.current) {
+          staleGoogleFlowHandledRef.current = true;
+          clearSignupFlow();
+          setPendingGoogleAuth(false);
+          setSignupStep("account_type");
+          toast({
+            title: "Signup session expired",
+            description: "Please choose your account type again before continuing with Google.",
+            variant: "destructive",
+          });
+        }
+        return;
+      }
 
+      staleGoogleFlowHandledRef.current = false;
       const storedFlow = getStoredSignupFlow();
       const selectedRole =
         storedFlow?.selectedRole ||

@@ -912,6 +912,7 @@ const ProfilePage = () => {
 
     if (isTeamStaffAccount) {
       return {
+        username: profile?.username || "",
         display_name: staffAccountData?.full_name || profile?.full_name || "",
         full_name: staffAccountData?.full_name || profile?.full_name || "",
         bio: profile?.bio || "",
@@ -2748,7 +2749,6 @@ const ProfilePage = () => {
     const normalizedUsername = normalizeUsername(editForm.username);
     const currentUsername = normalizeUsername(profile.username);
     const usernameWasEntered = String(editForm.username ?? "").trim().length > 0;
-    const preservedUsername = usernameWasEntered ? normalizedUsername : currentUsername;
 
     if (usernameWasEntered && normalizedUsername !== currentUsername) {
       const usernameValidationMessage = validateUsername(normalizedUsername);
@@ -2784,7 +2784,6 @@ const ProfilePage = () => {
       null;
 
     const profileUpdate = {
-      username: preservedUsername || profile.username,
       full_name: editForm.full_name,
       bio: normalizedBio as any,
       age_birth_year: editForm.age_birth_year as any,
