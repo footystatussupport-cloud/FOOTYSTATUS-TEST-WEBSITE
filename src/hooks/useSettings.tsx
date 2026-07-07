@@ -89,7 +89,7 @@ const defaultSettings: UserSettings = {
   timezone: "auto",
   dateFormat: "mdy",
   profileVisibility: "public",
-  showContactInfo: "everyone",
+  showContactInfo: "staff_only",
   showActivityStatus: true,
   allowDirectMessages: "everyone",
   allowProfileViews: true,

@@ -18,6 +18,21 @@ export const CLUB_COACH_REQUEST_ROLE_OPTIONS = [
   "Other Staff / Coach",
 ] as const;
 
+// Team Staff (academy_director) position options. Single source of truth shared
+// by the signup questionnaire and the Edit Profile "Team Staff Position" dropdown.
+export const TEAM_STAFF_POSITION_OPTIONS = [
+  "Club Director",
+  "Academy Director",
+  "Technical Director",
+  "Operations Director",
+  "Team Manager",
+  "Team Administrator",
+  "Team Coordinator",
+  "Media Staff",
+  "Equipment Manager",
+  "Other Team Staff",
+] as const;
+
 export interface CoachClubTeamAssignment {
   club_team_id: string;
   role: string;

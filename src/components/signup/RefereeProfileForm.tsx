@@ -4,7 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { normalizeUsername } from "@/lib/usernames";
+import { USERNAME_MAX_LENGTH, normalizeUsername } from "@/lib/usernames";
+import { UsernameAvailabilityHint, useUsernameAvailability } from "@/components/UsernameAvailability";
+import { REFEREE_PROOF_ACCEPT, validateRefereeProofFile } from "@/lib/referees";
 
 export interface RefereeProfileFormData {
   fullName: string;
@@ -60,12 +62,36 @@ const RefereeProfileForm = ({ email, onSubmit, onBack, loading }: RefereeProfile
     }));
   }, [email]);
 
+  const usernameAvailability = useUsernameAvailability(formData.username);
+  const [proofError, setProofError] = useState<string | null>(null);
+
   const handleChange = <K extends keyof RefereeProfileFormData>(field: K, value: RefereeProfileFormData[K]) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
+  const handleProofFileChange = (file: File | null) => {
+    if (!file) {
+      setProofError(null);
+      handleChange("refereeCertificationProofFile", null);
+      return;
+    }
+    const validationError = validateRefereeProofFile(file);
+    if (validationError && !validationError.includes("required")) {
+      setProofError(validationError);
+      handleChange("refereeCertificationProofFile", null);
+      return;
+    }
+    setProofError(null);
+    handleChange("refereeCertificationProofFile", file);
+  };
+
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
+    const proofValidation = validateRefereeProofFile(formData.refereeCertificationProofFile);
+    if (proofValidation) {
+      setProofError(proofValidation);
+      return;
+    }
     onSubmit(formData);
   };
 
@@ -89,10 +115,12 @@ const RefereeProfileForm = ({ email, onSubmit, onBack, loading }: RefereeProfile
           onChange={(e) => handleChange("username", normalizeUsername(e.target.value))}
           placeholder="refsmith"
           required
+          maxLength={USERNAME_MAX_LENGTH}
           autoCapitalize="none"
           autoCorrect="off"
           spellCheck={false}
         />
+        <UsernameAvailabilityHint state={usernameAvailability} />
       </div>
 
       <div className="grid grid-cols-2 gap-3">
@@ -172,14 +200,17 @@ const RefereeProfileForm = ({ email, onSubmit, onBack, loading }: RefereeProfile
 
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-2">
-          <Label htmlFor="contactEmail">Contact Information</Label>
-          <Input id="contactEmail" type="email" value={formData.contactEmail} onChange={(e) => handleChange("contactEmail", e.target.value)} />
+          <Label htmlFor="contactEmail">Email *</Label>
+          <Input id="contactEmail" type="email" value={formData.contactEmail} onChange={(e) => handleChange("contactEmail", e.target.value)} required />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="contactPhone">Phone</Label>
-          <Input id="contactPhone" value={formData.contactPhone} onChange={(e) => handleChange("contactPhone", e.target.value)} />
+          <Label htmlFor="contactPhone">Phone Number *</Label>
+          <Input id="contactPhone" type="tel" value={formData.contactPhone} onChange={(e) => handleChange("contactPhone", e.target.value)} required />
         </div>
       </div>
+      <p className="text-xs text-muted-foreground">
+        Your phone number is required so clubs, coaches, and Footy Status can reach you about fixtures.
+      </p>
 
       <div className="space-y-2">
         <Label htmlFor="refereeAvailability">Availability</Label>
@@ -210,17 +241,28 @@ const RefereeProfileForm = ({ email, onSubmit, onBack, loading }: RefereeProfile
       <div className="space-y-2 rounded-xl border border-dashed border-border p-4">
         <Label htmlFor="proof" className="flex items-center gap-2">
           <Upload className="h-4 w-4" />
-          Upload proof of certification / license
+          Upload proof of certification / license *
         </Label>
         <Input
           id="proof"
           type="file"
-          accept="image/*,.pdf"
-          onChange={(e) => handleChange("refereeCertificationProofFile", e.target.files?.[0] || null)}
+          accept={REFEREE_PROOF_ACCEPT}
+          onChange={(e) => handleProofFileChange(e.target.files?.[0] || null)}
         />
+        <p className="text-xs text-muted-foreground">PDF, JPG, JPEG, or PNG. Maximum 10 MB.</p>
         {formData.refereeCertificationProofFile ? (
           <p className="text-xs text-muted-foreground">{formData.refereeCertificationProofFile.name}</p>
         ) : null}
+        {proofError ? (
+          <p className="text-xs font-medium text-destructive">{proofError}</p>
+        ) : !formData.refereeCertificationProofFile ? (
+          <p className="text-xs font-medium text-destructive">
+            Proof of referee certification is required before creating a Referee account.
+          </p>
+        ) : null}
+        <p className="text-xs text-muted-foreground">
+          New referee accounts start as <span className="font-semibold">Pending Verification</span> until Footy Status reviews your certification.
+        </p>
       </div>
 
       <label className="flex items-start gap-3 rounded-xl border border-border p-4 text-sm">
@@ -241,7 +283,7 @@ const RefereeProfileForm = ({ email, onSubmit, onBack, loading }: RefereeProfile
           <ArrowLeft className="mr-2 h-4 w-4" />
           Back
         </Button>
-        <Button type="submit" className="flex-1" disabled={loading}>
+        <Button type="submit" className="flex-1" disabled={loading || !usernameAvailability.canSubmit || !formData.refereeCertificationProofFile}>
           {loading ? "Creating..." : "Create Referee Profile"}
         </Button>
       </div>

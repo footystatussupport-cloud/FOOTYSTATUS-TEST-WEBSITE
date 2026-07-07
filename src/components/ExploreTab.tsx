@@ -89,9 +89,6 @@ interface ParentExploreProfile {
   avatar_url: string | null;
   bio: string | null;
   relationship_to_player?: string | null;
-  child_team?: string | null;
-  child_league?: string | null;
-  child_age_group?: string | null;
 }
 
 const ExploreTab = () => {
@@ -135,7 +132,7 @@ const ExploreTab = () => {
           .eq("account_category", "referee"),
         (supabase as any)
           .from("profiles")
-          .select("user_id, full_name, username, avatar_url, bio, parent_profiles(relationship_to_player, child_team, child_league, child_age_group)")
+          .select("user_id, full_name, username, avatar_url, bio, parent_profiles(relationship_to_player)")
           .eq("account_category", "parent"),
       ]);
 
@@ -314,9 +311,6 @@ const ExploreTab = () => {
         avatar_url: parent.avatar_url,
         bio: parent.bio,
         relationship_to_player: (Array.isArray(parent.parent_profiles) ? parent.parent_profiles[0] : parent.parent_profiles)?.relationship_to_player || null,
-        child_team: (Array.isArray(parent.parent_profiles) ? parent.parent_profiles[0] : parent.parent_profiles)?.child_team || null,
-        child_league: (Array.isArray(parent.parent_profiles) ? parent.parent_profiles[0] : parent.parent_profiles)?.child_league || null,
-        child_age_group: (Array.isArray(parent.parent_profiles) ? parent.parent_profiles[0] : parent.parent_profiles)?.child_age_group || null,
       }));
       setAllParents(parentProfiles);
       setParents(parentProfiles);
@@ -475,9 +469,6 @@ const ExploreTab = () => {
             parent.full_name,
             parent.username,
             parent.relationship_to_player,
-            parent.child_team,
-            parent.child_league,
-            parent.child_age_group,
             parent.bio,
           ]
             .filter(Boolean)
@@ -856,7 +847,7 @@ const ExploreTab = () => {
               <div className="min-w-0">
                 <p className="font-semibold text-foreground truncate">{parent.full_name || "Parent / Guardian"}</p>
                 <p className="text-sm text-muted-foreground truncate">
-                  {[parent.relationship_to_player || "Parent / Guardian", parent.child_team, parent.child_league, parent.child_age_group].filter(Boolean).join(" - ")}
+                  {parent.relationship_to_player || "Parent / Guardian"}
                 </p>
               </div>
             </button>

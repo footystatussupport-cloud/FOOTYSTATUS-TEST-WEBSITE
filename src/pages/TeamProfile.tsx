@@ -92,6 +92,7 @@ interface TeamProfileDetails {
   leagues_offered: string[] | null;
   founded_year: number | null;
   city: string | null;
+  country: string | null;
   home_stadium: string | null;
   training_ground: string | null;
   home_jersey_color: string | null;
@@ -101,6 +102,17 @@ interface TeamProfileDetails {
   contact_email: string | null;
   contact_phone: string | null;
   team_type: string | null;
+  school_name: string | null;
+  school_level: string | null;
+  team_mascot: string | null;
+  sport: string | null;
+  league_conference: string | null;
+  school_website: string | null;
+  head_coach_name: string | null;
+  head_coach_email: string | null;
+  head_coach_phone: string | null;
+  team_colors: string | null;
+  social_links: string | null;
 }
 
 interface TeamStaffMember {
@@ -130,6 +142,7 @@ const TeamProfile = () => {
   const [coachStaffRequests, setCoachStaffRequests] = useState<any[]>([]);
   const [coachStaffInvites, setCoachStaffInvites] = useState<any[]>([]);
   const [teamBio, setTeamBio] = useState<string | null>(null);
+  const [teamUsername, setTeamUsername] = useState<string | null>(null);
   const [clubId, setClubId] = useState<string | null>(null);
   const [clubTeams, setClubTeams] = useState<ClubTeamRecord[]>([]);
   const [clubTeamRosters, setClubTeamRosters] = useState<Record<string, TeamRosterPlayer[]>>({});
@@ -300,12 +313,12 @@ const TeamProfile = () => {
       fetchRosterForTeam(teamData.id),
       (supabase as any)
         .from("team_profiles")
-        .select("id, club_name, logo_url, leagues_offered, founded_year, city, home_stadium, training_ground, home_jersey_color, away_jersey_color, third_kit_color, age_groups_offered, contact_email, contact_phone, team_type")
+        .select("id, club_name, logo_url, leagues_offered, founded_year, city, country, home_stadium, training_ground, home_jersey_color, away_jersey_color, third_kit_color, age_groups_offered, contact_email, contact_phone, team_type, school_name, school_level, team_mascot, sport, league_conference, school_website, head_coach_name, head_coach_email, head_coach_phone, team_colors, social_links")
         .eq("team_id", teamData.id)
         .maybeSingle(),
       club ? fetchClubTeams(club.id) : Promise.resolve([]),
       teamData.owner_user_id
-        ? (supabase as any).from("profiles").select("bio").eq("user_id", teamData.owner_user_id).maybeSingle()
+        ? (supabase as any).from("profiles").select("bio, username").eq("user_id", teamData.owner_user_id).maybeSingle()
         : Promise.resolve({ data: null }),
     ]);
     const [linkedStaffRows, staffRequestsInitialRes, staffInvitesInitialRes] = await Promise.all([
@@ -365,6 +378,7 @@ const TeamProfile = () => {
     setCoachStaffInvites(staffInvites);
     setTeamProfileDetails((teamProfileRes.data || null) as TeamProfileDetails | null);
     setTeamBio(profileRes.data?.bio || null);
+    setTeamUsername(profileRes.data?.username || null);
     if (!teamData.logo_url && teamProfileRes.data?.logo_url) {
       setTeam({
         ...(teamData as Team),
@@ -843,10 +857,11 @@ const TeamProfile = () => {
               ) : null}
             </div>
           </div>
-          <span className="mt-2 inline-flex items-center rounded-full bg-muted px-3 py-1 text-xs font-medium text-muted-foreground">
-            {teamAccountLabel}
-          </span>
-          {teamBio ? <p className="mx-auto mt-2 w-full max-w-xs break-words whitespace-pre-wrap text-center text-sm text-muted-foreground" style={{ textAlign: "center" }}>{teamBio}</p> : null}
+          <div className="mt-1 flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm">
+            {teamUsername ? <span className="break-all text-muted-foreground">@{teamUsername}</span> : null}
+            <span className="font-bold text-foreground">{teamUsername ? "— " : ""}{teamAccountLabel}</span>
+          </div>
+          {teamBio ? <p className="mx-auto mt-2 w-full max-w-xs break-words whitespace-pre-wrap text-center text-sm font-normal text-foreground" style={{ textAlign: "center" }}>{teamBio}</p> : null}
         </div>
         </div>
 
@@ -862,13 +877,6 @@ const TeamProfile = () => {
         <section className="mb-6">
           <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-lg font-semibold text-navy">Details</h2><InlineProfileAdminControls targetUserId={team.owner_user_id} targetName={team.name} section="profile" label="Edit team details" /></div>
           <div className="bg-card border border-border rounded-xl divide-y divide-border">
-            <div className="flex items-center gap-3 p-4">
-              <Shield className="h-5 w-5 text-muted-foreground" />
-              <div>
-                <p className="text-sm text-muted-foreground">Club / Organization</p>
-                <p className="font-medium">{teamProfileDetails?.club_name || team.name}</p>
-              </div>
-            </div>
             {teamProfileDetails?.leagues_offered?.length ? (
               <div className="flex items-center gap-3 p-4">
                 <Trophy className="h-5 w-5 text-muted-foreground" />
@@ -914,8 +922,104 @@ const TeamProfile = () => {
                 </div>
               </div>
             ) : null}
+            {teamProfileDetails?.country ? (
+              <div className="flex items-center gap-3 p-4">
+                <MapPin className="h-5 w-5 text-muted-foreground" />
+                <div>
+                  <p className="text-sm text-muted-foreground">Country</p>
+                  <p className="font-medium">{teamProfileDetails.country}</p>
+                </div>
+              </div>
+            ) : null}
+            {teamProfileDetails?.team_mascot ? (
+              <div className="flex items-center gap-3 p-4">
+                <Shield className="h-5 w-5 text-muted-foreground" />
+                <div>
+                  <p className="text-sm text-muted-foreground">Mascot</p>
+                  <p className="font-medium">{teamProfileDetails.team_mascot}</p>
+                </div>
+              </div>
+            ) : null}
+            {teamProfileDetails?.sport ? (
+              <div className="flex items-center gap-3 p-4">
+                <Trophy className="h-5 w-5 text-muted-foreground" />
+                <div>
+                  <p className="text-sm text-muted-foreground">Sport</p>
+                  <p className="font-medium">{teamProfileDetails.sport}</p>
+                </div>
+              </div>
+            ) : null}
+            {teamProfileDetails?.school_level ? (
+              <div className="flex items-center gap-3 p-4">
+                <Users className="h-5 w-5 text-muted-foreground" />
+                <div>
+                  <p className="text-sm text-muted-foreground">School Level</p>
+                  <p className="font-medium capitalize">{teamProfileDetails.school_level.replaceAll("_", " ")}</p>
+                </div>
+              </div>
+            ) : null}
+            {teamProfileDetails?.league_conference ? (
+              <div className="flex items-center gap-3 p-4">
+                <Trophy className="h-5 w-5 text-muted-foreground" />
+                <div>
+                  <p className="text-sm text-muted-foreground">League / Conference</p>
+                  <p className="font-medium">{teamProfileDetails.league_conference}</p>
+                </div>
+              </div>
+            ) : null}
+            {teamProfileDetails?.team_colors ? (
+              <div className="flex items-center gap-3 p-4">
+                <Shield className="h-5 w-5 text-muted-foreground" />
+                <div>
+                  <p className="text-sm text-muted-foreground">Team Colors</p>
+                  <p className="font-medium">{teamProfileDetails.team_colors}</p>
+                </div>
+              </div>
+            ) : null}
+            {teamProfileDetails?.head_coach_name ? (
+              <div className="flex items-center gap-3 p-4">
+                <Users className="h-5 w-5 text-muted-foreground" />
+                <div>
+                  <p className="text-sm text-muted-foreground">Head Coach</p>
+                  <p className="font-medium">{teamProfileDetails.head_coach_name}</p>
+                </div>
+              </div>
+            ) : null}
           </div>
         </section>
+
+        {teamProfileDetails?.school_website || teamProfileDetails?.social_links ? (
+          <section className="mb-6">
+            <h2 className="text-lg font-semibold text-navy mb-3">Website & Social Links</h2>
+            <div className="bg-card border border-border rounded-xl divide-y divide-border">
+              {teamProfileDetails?.school_website ? (
+                <div className="flex items-center gap-3 min-w-0 p-4">
+                  <Trophy className="h-5 w-5 text-muted-foreground" />
+                  <div className="min-w-0">
+                    <p className="text-sm text-muted-foreground">Website</p>
+                    <a
+                      href={teamProfileDetails.school_website.startsWith("http") ? teamProfileDetails.school_website : `https://${teamProfileDetails.school_website}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-medium text-navy hover:underline break-all"
+                    >
+                      {teamProfileDetails.school_website}
+                    </a>
+                  </div>
+                </div>
+              ) : null}
+              {teamProfileDetails?.social_links ? (
+                <div className="flex items-center gap-3 min-w-0 p-4">
+                  <Users className="h-5 w-5 text-muted-foreground" />
+                  <div className="min-w-0">
+                    <p className="text-sm text-muted-foreground">Social Media</p>
+                    <p className="font-medium break-all">{teamProfileDetails.social_links}</p>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </section>
+        ) : null}
 
         <section className="mb-6">
           <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-lg font-semibold text-navy">Contact Information</h2><InlineProfileAdminControls targetUserId={team.owner_user_id} targetName={team.name} section="profile" label="Edit team contact information" /></div>
@@ -942,7 +1046,29 @@ const TeamProfile = () => {
                   </div>
                 </div>
               )}
-              {!team.contact_email && !team.contact_phone ? (
+              {teamProfileDetails?.head_coach_email ? (
+                <div className="flex items-center gap-3 min-w-0 p-4">
+                  <Mail className="h-5 w-5 text-muted-foreground" />
+                  <div>
+                    <p className="text-sm text-muted-foreground">Head Coach Email</p>
+                    <a href={`mailto:${teamProfileDetails.head_coach_email}`} className="font-medium text-navy hover:underline break-all">
+                      {teamProfileDetails.head_coach_email}
+                    </a>
+                  </div>
+                </div>
+              ) : null}
+              {teamProfileDetails?.head_coach_phone ? (
+                <div className="flex items-center gap-3 p-4">
+                  <Phone className="h-5 w-5 text-muted-foreground" />
+                  <div>
+                    <p className="text-sm text-muted-foreground">Head Coach Phone</p>
+                    <a href={`tel:${teamProfileDetails.head_coach_phone}`} className="font-medium text-navy hover:underline">
+                      {teamProfileDetails.head_coach_phone}
+                    </a>
+                  </div>
+                </div>
+              ) : null}
+              {!team.contact_email && !team.contact_phone && !teamProfileDetails?.head_coach_email && !teamProfileDetails?.head_coach_phone ? (
                 <div className="p-4 text-sm text-muted-foreground">No contact information added yet.</div>
               ) : null}
             </div>

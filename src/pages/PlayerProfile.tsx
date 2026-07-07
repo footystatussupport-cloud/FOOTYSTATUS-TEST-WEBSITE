@@ -468,7 +468,7 @@ const PlayerProfile = () => {
             <span className="font-bold text-foreground">Player</span>
             {player.username ? <span className="break-all text-muted-foreground">@{player.username}</span> : null}
           </div>
-          {displayBio && <p className="mx-auto mt-2 w-full max-w-xs break-words whitespace-pre-wrap text-center text-sm text-muted-foreground" style={{ textAlign: "center" }}>{displayBio}</p>}
+          {displayBio && <p className="mx-auto mt-2 w-full max-w-xs break-words whitespace-pre-wrap text-center text-sm font-normal text-foreground" style={{ textAlign: "center" }}>{displayBio}</p>}
         </div>
 
         <section className="mb-6">
@@ -565,7 +565,7 @@ const PlayerProfile = () => {
 
         {parentContacts.length > 0 && (
           <section className="mb-6">
-            <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-sm font-bold tracking-wide">PRIVATE PARENT / CONTACT SECTION</h2><InlineProfileAdminControls targetUserId={player.user_id} targetName={player.name} section="parents" label="Manage parent links" onChanged={() => setReloadToken((value) => value + 1)} /></div>
+            <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-sm font-bold tracking-wide">PARENT / GUARDIAN CONTACTS</h2><InlineProfileAdminControls targetUserId={player.user_id} targetName={player.name} section="parents" label="Manage parent links" onChanged={() => setReloadToken((value) => value + 1)} /></div>
             <div className="bg-card border border-border rounded-lg p-4 space-y-3">
               {parentContacts.map((parentContact) => (
                 <div key={parentContact.link_id} className="rounded-lg border border-border p-3">

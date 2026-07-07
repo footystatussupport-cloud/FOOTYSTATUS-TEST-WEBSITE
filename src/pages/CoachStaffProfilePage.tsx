@@ -1,34 +1,70 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, Briefcase, MapPin, Shield, Star, Trophy, User, Users } from "lucide-react";
+import { ArrowLeft, Briefcase, Link as LinkIcon, Mail, MapPin, Phone, Shield, Star, Trophy, User, Users } from "lucide-react";
 import Header from "@/components/Header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { supabase } from "@/integrations/supabase/client";
 import { CoachStaffProfile, CoachStaffTeamLink, fetchCoachStaffTeamLinksForUser, formatRoleDisplayLabel } from "@/lib/coachStaffTeams";
 import InlineProfileAdminControls from "@/components/admin/InlineProfileAdminControls";
 
+interface ContactItem {
+  id: string;
+  contact_type: string;
+  value: string;
+  visibility: string;
+}
+
+const CONTACT_TYPE_LABELS: Record<string, string> = {
+  player_email: "Email",
+  player_phone: "Phone",
+  coach_email: "Email",
+  coach_phone: "Phone",
+  instagram: "Instagram",
+  tiktok: "TikTok",
+  youtube: "YouTube",
+  website: "Website",
+};
+
+interface StaffRecordDetails {
+  country: string | null;
+  city: string | null;
+  years_experience: number | null;
+}
+
 const CoachStaffProfilePage = () => {
   const { userId } = useParams<{ userId: string }>();
   const navigate = useNavigate();
   const [profile, setProfile] = useState<CoachStaffProfile | null>(null);
   const [teams, setTeams] = useState<CoachStaffTeamLink[]>([]);
+  const [contacts, setContacts] = useState<ContactItem[]>([]);
+  const [staffRecord, setStaffRecord] = useState<StaffRecordDetails | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const loadProfile = async () => {
       if (!userId) return;
 
-      const [{ data }, linkedTeams] = await Promise.all([
+      const [{ data }, linkedTeams, contactRes, staffRes] = await Promise.all([
         (supabase as any)
           .from("profiles")
           .select("user_id, full_name, avatar_url, username, account_category, account_role, coaching_role_type, teams_currently_coaching, past_coaching_experience, coaching_licenses, coaching_accolades, coaching_location, scout_role_title, scout_organization, scouting_licenses, scouting_experience, scouting_regions, scouting_age_groups, scouting_positions, scouting_accolades, bio")
           .eq("user_id", userId)
           .maybeSingle(),
         fetchCoachStaffTeamLinksForUser(userId).catch(() => []),
+        // Contact information lives only in the Contact Information section and
+        // is enforced server-side by the account's contact privacy setting.
+        (supabase as any).rpc("get_profile_contact_info", { _target_user_id: userId }),
+        (supabase as any)
+          .from("staff_profiles")
+          .select("country, city, years_experience")
+          .eq("user_id", userId)
+          .maybeSingle(),
       ]);
 
       setProfile((data || null) as CoachStaffProfile | null);
       setTeams(linkedTeams);
+      setContacts((contactRes?.data || []) as ContactItem[]);
+      setStaffRecord((staffRes?.data || null) as StaffRecordDetails | null);
       setLoading(false);
     };
 
@@ -83,17 +119,28 @@ const CoachStaffProfilePage = () => {
               )}
             </div>
             <h1 className="text-center text-2xl font-bold text-foreground">{profile.full_name || (isParent ? "Parent / Guardian" : isScout ? "Scout" : isAcademyStaff ? "Team Staff" : "Coach / Staff")}</h1>
-            <p className="mt-1 text-sm font-medium text-navy">
-              {isParent
-                ? "Parent / Guardian"
-                : isScout
-                  ? formatRoleDisplayLabel(profile.scout_role_title, "Scout")
-                  : isAcademyStaff
-                    ? formatRoleDisplayLabel(profile.coaching_role_type || profile.account_role, "Club Director / Team Staff")
-                    : formatRoleDisplayLabel(profile.coaching_role_type || profile.account_role, "Coaching Staff")}
-            </p>
-            {profile.username ? <p className="text-sm text-muted-foreground">@{profile.username}</p> : null}
-            {profile.bio ? <p className="mx-auto mt-2 max-w-xs whitespace-pre-wrap text-center text-sm text-muted-foreground">{profile.bio}</p> : null}
+            {isAcademyStaff ? (
+              // Team Staff lead with their selected position, then the username.
+              <p className="mt-1 max-w-full break-words text-center text-sm">
+                <span className="font-bold text-foreground">
+                  {formatRoleDisplayLabel(profile.coaching_role_type || profile.account_role, "Team Staff")}
+                </span>
+                {profile.username ? <span className="text-muted-foreground"> — @{profile.username}</span> : null}
+              </p>
+            ) : (
+              <p className="mt-1 max-w-full break-words text-center text-sm">
+                {profile.username ? <span className="text-muted-foreground">@{profile.username} </span> : null}
+                <span className="font-bold text-foreground">
+                  {profile.username ? "— " : ""}
+                  {isParent
+                    ? "Parent / Guardian"
+                    : isScout
+                      ? formatRoleDisplayLabel(profile.scout_role_title, "Scout")
+                      : formatRoleDisplayLabel(profile.coaching_role_type || profile.account_role, "Coaching Staff")}
+                </span>
+              </p>
+            )}
+            {profile.bio ? <p className="mx-auto mt-2 max-w-xs break-words whitespace-pre-wrap text-center text-sm font-normal text-foreground">{profile.bio}</p> : null}
           </div>
 
           {teams.length ? (
@@ -191,22 +238,28 @@ const CoachStaffProfilePage = () => {
                   <div><p className="text-sm text-muted-foreground">Positions Scouted</p><p className="font-medium">{profile.scouting_positions.join(", ")}</p></div>
                 </div>
               ) : null}
-              {isAcademyStaff && profile.past_coaching_experience ? (
-                <div className="flex items-center gap-3 p-4">
-                  <Briefcase className="h-5 w-5 text-muted-foreground" />
-                  <div><p className="text-sm text-muted-foreground">Previous Organizations</p><p className="font-medium">{profile.past_coaching_experience}</p></div>
-                </div>
-              ) : null}
               {(isScout ? profile.scouting_accolades : profile.coaching_accolades) ? (
                 <div className="flex items-center gap-3 p-4">
                   <Star className="h-5 w-5 text-muted-foreground" />
                   <div><p className="text-sm text-muted-foreground">Accolades</p><p className="font-medium">{isScout ? profile.scouting_accolades : profile.coaching_accolades}</p></div>
                 </div>
               ) : null}
-              {!isScout && profile.coaching_location ? (
+              {(staffRecord?.city || staffRecord?.country || profile.coaching_location) ? (
                 <div className="flex items-center gap-3 p-4">
                   <MapPin className="h-5 w-5 text-muted-foreground" />
-                  <div><p className="text-sm text-muted-foreground">Location</p><p className="font-medium">{profile.coaching_location}</p></div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Location</p>
+                    <p className="font-medium">{[staffRecord?.city, staffRecord?.country].filter(Boolean).join(", ") || profile.coaching_location}</p>
+                  </div>
+                </div>
+              ) : null}
+              {staffRecord?.years_experience != null ? (
+                <div className="flex items-center gap-3 p-4">
+                  <Star className="h-5 w-5 text-muted-foreground" />
+                  <div>
+                    <p className="text-sm text-muted-foreground">{isScout ? "Years Scouting" : "Years of Experience"}</p>
+                    <p className="font-medium">{staffRecord.years_experience} years</p>
+                  </div>
                 </div>
               ) : null}
               <div className="flex items-center gap-3 p-4">
@@ -215,6 +268,42 @@ const CoachStaffProfilePage = () => {
               </div>
             </div>
           </section>
+
+          {contacts.length ? (
+            <section className="mb-6">
+              <h2 className="mb-3 text-lg font-semibold text-navy">Contact Information</h2>
+              <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+                {contacts.map((contact) => (
+                  <div key={contact.id} className="flex items-start gap-3 min-w-0">
+                    {contact.contact_type.includes("phone") ? (
+                      <Phone className="h-4 w-4 text-muted-foreground mt-0.5" />
+                    ) : contact.contact_type.includes("email") ? (
+                      <Mail className="h-4 w-4 text-muted-foreground mt-0.5" />
+                    ) : (
+                      <LinkIcon className="h-4 w-4 text-muted-foreground mt-0.5" />
+                    )}
+                    <div className="min-w-0">
+                      <p className="text-xs text-muted-foreground">{CONTACT_TYPE_LABELS[contact.contact_type] || contact.contact_type}</p>
+                      {contact.contact_type.includes("phone") ? (
+                        <a href={`tel:${contact.value}`} className="text-sm text-navy hover:underline break-all min-w-0">{contact.value}</a>
+                      ) : contact.contact_type.includes("email") ? (
+                        <a href={`mailto:${contact.value}`} className="text-sm text-navy hover:underline break-all min-w-0">{contact.value}</a>
+                      ) : (
+                        <a
+                          href={contact.value.startsWith("http") ? contact.value : `https://${contact.value}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-sm text-navy hover:underline break-all min-w-0"
+                        >
+                          {contact.value}
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
         </main>
       </div>
     </div>

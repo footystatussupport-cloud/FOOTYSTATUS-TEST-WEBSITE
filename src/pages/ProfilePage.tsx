@@ -13,7 +13,8 @@ import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ActiveMembership, LiveStandingSummary, TeamRosterPlayer, fetchActiveMembershipsForUser, fetchLiveStandingForMembership, fetchRosterForTeam, formatTeamLeagueLine, getMembershipTeamDestination } from "@/lib/teamMemberships";
-import ClubTeamsManager, { OfferedClubTeam } from "@/components/club/ClubTeamsManager";
+import { OfferedClubTeam } from "@/components/club/ClubTeamsManager";
+import DaughterTeamEditDialog from "@/components/club/DaughterTeamEditDialog";
 import { ClubTeamRecord, archiveClubTeam, createDaughterTeam, fetchClubByTeamId, fetchClubTeamOptionsForParentTeam, fetchClubTeams, fetchRosterForClubTeam, formatTeamGender, getAgeGroupSortValue, getOfferedTeamDuplicate, normalizeTeamGender, sanitizeClubTeamAccessCode, setDaughterTeamGender, updateClubTeamAccessCode } from "@/lib/clubTeams";
 import ClubNewsSection from "@/components/club-news/ClubNewsSection";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +27,8 @@ import ClubHistorySection, { ClubHistoryEntry } from "@/components/ClubHistorySe
 import { refereeRoleLabel, reviewRefereeMatchClaim } from "@/lib/referees";
 import {
   CLUB_COACH_REQUEST_ROLE_OPTIONS,
+  COACHING_ROLE_OPTIONS,
+  TEAM_STAFF_POSITION_OPTIONS,
   CoachClubTeamAssignment,
   CoachStaffTeamLink,
   acceptCoachStaffInvite,
@@ -59,7 +62,8 @@ import {
   requestParentPlayerLink,
   reviewParentPlayerLink,
 } from "@/lib/parentLinks";
-import { getUsernameErrorMessage, normalizeUsername, validateUsername } from "@/lib/usernames";
+import { USERNAME_MAX_LENGTH, getUsernameErrorMessage, normalizeUsername, validateUsername } from "@/lib/usernames";
+import { UsernameAvailabilityHint, useUsernameAvailability } from "@/components/UsernameAvailability";
 import { containsProfanityInFields } from "@/lib/profanityFilter";
 
 interface ProfileData {
@@ -325,6 +329,17 @@ interface TeamAccountData {
   contact_phone: string | null;
   team_type?: "club" | "school" | null;
   school_level?: string | null;
+  country?: string | null;
+  school_name?: string | null;
+  team_mascot?: string | null;
+  sport?: string | null;
+  league_conference?: string | null;
+  school_website?: string | null;
+  head_coach_name?: string | null;
+  head_coach_email?: string | null;
+  head_coach_phone?: string | null;
+  team_colors?: string | null;
+  social_links?: string | null;
 }
 
 interface TeamStaffMember {
@@ -438,11 +453,18 @@ interface EditFormState extends Partial<ProfileData> {
   emergency_contact?: string;
   child_full_name?: string;
   child_where_plays?: string;
-  child_team?: string;
-  child_league?: string;
-  child_age_group?: string;
   parent_notes?: string;
   relationship_to_player?: string;
+  country?: string;
+  team_mascot?: string;
+  sport?: string;
+  league_conference?: string;
+  school_website?: string;
+  head_coach_name?: string;
+  head_coach_email?: string;
+  head_coach_phone?: string;
+  team_colors?: string;
+  social_links_text?: string;
 }
 
 const MAX_FREE_CLIPS = FREE_VISIBLE_CLIP_LIMIT;
@@ -545,6 +567,7 @@ const ProfilePage = () => {
   const [linkedTeamClubStaff, setLinkedTeamClubStaff] = useState<any[]>([]);
   const [teamRoster, setTeamRoster] = useState<TeamRosterPlayer[]>([]);
   const [offeredClubTeams, setOfferedClubTeams] = useState<ClubTeamRecord[]>([]);
+  const [daughterTeamBeingEdited, setDaughterTeamBeingEdited] = useState<ClubTeamRecord | null>(null);
   const [offeredClubTeamRosters, setOfferedClubTeamRosters] = useState<Record<string, TeamRosterPlayer[]>>({});
   const [teamApprovalStatus, setTeamApprovalStatus] = useState<string | null>(null);
   const [teamStaffForm, setTeamStaffForm] = useState<EditableTeamStaffMember[]>([]);
@@ -810,7 +833,8 @@ const ProfilePage = () => {
   const isParentAccount = resolvedAccountCategory === "parent" || resolvedAccountRole === "parent";
   const playerBirthYear = Number(String(profile?.age_birth_year || "").match(/(19|20)\d{2}/)?.[0]);
   const playerAge = playerBirthYear ? new Date().getFullYear() - playerBirthYear : null;
-  const isYoungPlayerParentLinkAge = isPlayerAccount && playerAge !== null && playerAge >= 6 && playerAge <= 13;
+  // Parent linking is available to player accounts of any age.
+  const isYoungPlayerParentLinkAge = isPlayerAccount;
   const isOfficialFootyStatusAccount = isFootyStatusSuperAdminEmail(user?.email || profile?.email);
   const profileDisplayName = isTeamAccount
     ? teamAccountData?.club_name || profile?.club_name || profile?.full_name || "No organization set"
@@ -907,6 +931,15 @@ const ProfilePage = () => {
         third_kit_color: teamAccountData?.third_kit_color || "",
         contact_email: teamAccountData?.contact_email || profile?.email || "",
         contact_phone: teamAccountData?.contact_phone || "",
+        team_mascot: teamAccountData?.team_mascot || "",
+        sport: teamAccountData?.sport || "",
+        league_conference: teamAccountData?.league_conference || "",
+        school_website: teamAccountData?.school_website || "",
+        head_coach_name: teamAccountData?.head_coach_name || "",
+        head_coach_email: teamAccountData?.head_coach_email || "",
+        head_coach_phone: teamAccountData?.head_coach_phone || "",
+        team_colors: teamAccountData?.team_colors || "",
+        social_links_text: teamAccountData?.social_links || "",
       };
     }
 
@@ -918,6 +951,7 @@ const ProfilePage = () => {
         bio: profile?.bio || "",
         team_organization_name: staffAccountData?.team_organization_name || "",
         city: staffAccountData?.city || "",
+        country: staffAccountData?.country || "",
         coaching_level: staffAccountData?.coaching_level || "",
         years_experience:
           staffAccountData?.years_experience != null ? String(staffAccountData.years_experience) : "",
@@ -982,9 +1016,6 @@ const ProfilePage = () => {
         emergency_contact: parentAccountData?.emergency_contact || "",
         child_full_name: parentAccountData?.child_full_name || "",
         child_where_plays: parentAccountData?.child_where_plays || "",
-        child_team: parentAccountData?.child_team || "",
-        child_league: parentAccountData?.child_league || "",
-        child_age_group: parentAccountData?.child_age_group || "",
         parent_notes: parentAccountData?.parent_notes || "",
       };
     }
@@ -1580,19 +1611,46 @@ const ProfilePage = () => {
         return;
       }
 
-      const { data: newProfile } = await supabase
+      // profiles.username is mandatory: generate a valid unique username for
+      // this recovery insert so it can never fail with "Username is required".
+      const usernameSeed =
+        normalizeUsername(user.user_metadata?.username) ||
+        user.user_metadata?.full_name ||
+        (user.email || "").split("@")[0] ||
+        "user";
+      const { data: generatedUsername } = await (supabase as any).rpc("generate_unique_username", {
+        _seed: usernameSeed,
+        _user_id: user.id,
+      });
+
+      const { data: newProfile, error: recoveryInsertError } = await supabase
         .from('profiles')
         .insert({
           user_id: user.id,
           email: user.email,
           full_name: user.user_metadata?.full_name || '',
+          username: generatedUsername || undefined,
           role: resolvedMissingLegacyRole,
           account_category: resolvedMissingCategory,
           account_type: resolvedMissingAccountRole,
           account_role: resolvedMissingAccountRole,
-        })
+        } as any)
         .select()
         .single();
+
+      if (recoveryInsertError) {
+        console.error("Footy Status profile recovery insert failed", {
+          authUserId: user.id,
+          error: recoveryInsertError,
+        });
+        toast({
+          title: "Profile setup incomplete",
+          description: "We couldn't restore your profile. Please sign out and finish signup again.",
+          variant: "destructive",
+        });
+        setLoading(false);
+        return;
+      }
       if (newProfile) {
         const normalizedProfile = {
           ...(newProfile as unknown as ProfileData),
@@ -1636,7 +1694,7 @@ const ProfilePage = () => {
     if (accountRole === "team_club" || accountRole === "school_team") {
       const { data } = await (supabase as any)
         .from("team_profiles")
-        .select("id, team_id, club_id, club_name, leagues_offered, founded_year, country, city, home_stadium, training_ground, home_jersey_color, away_jersey_color, third_kit_color, age_groups_offered, contact_email, contact_phone, team_type, school_level")
+        .select("id, team_id, club_id, club_name, leagues_offered, founded_year, country, city, home_stadium, training_ground, home_jersey_color, away_jersey_color, third_kit_color, age_groups_offered, contact_email, contact_phone, team_type, school_level, school_name, team_mascot, sport, league_conference, school_website, head_coach_name, head_coach_email, head_coach_phone, team_colors, social_links")
         .eq("user_id", activeProfile.user_id)
         .maybeSingle();
       setTeamAccountData(data || null);
@@ -1871,6 +1929,7 @@ const ProfilePage = () => {
           full_name: mergedStaffData.full_name || prev.full_name,
           team_organization_name: mergedStaffData.teams_currently_coaching || mergedStaffData.team_organization_name || "",
           city: mergedStaffData.city || "",
+          country: mergedStaffData.country || "",
           coaching_level: mergedStaffData.coaching_level || "",
           years_experience: mergedStaffData.years_experience != null ? String(mergedStaffData.years_experience) : "",
           coaching_licenses_text: toCommaSeparated(mergedStaffData.coaching_licenses),
@@ -1930,9 +1989,6 @@ const ProfilePage = () => {
           emergency_contact: parentData.emergency_contact || "",
           child_full_name: parentData.child_full_name || "",
           child_where_plays: parentData.child_where_plays || "",
-          child_team: parentData.child_team || "",
-          child_league: parentData.child_league || "",
-          child_age_group: parentData.child_age_group || "",
           parent_notes: parentData.parent_notes || "",
         }));
       }
@@ -2105,30 +2161,15 @@ const ProfilePage = () => {
           .eq("user_id", user.id),
       ]);
     } else {
-      await Promise.all([
-        supabase
-          .from("profiles")
-          .update({
-            team_name: null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("user_id", user.id),
-        (supabase as any)
-          .from("player_profiles")
-          .update({
-            team: null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("user_id", user.id),
-        (supabase as any)
-          .from("players")
-          .update({
-            team_id: null,
-            club: null,
-            league: null,
-          })
-          .eq("user_id", user.id),
-      ]);
+      // No roster membership: only clear the roster link. The free-text team
+      // name entered at signup or in Edit Profile must be preserved.
+      await (supabase as any)
+        .from("players")
+        .update({
+          team_id: null,
+          league: null,
+        })
+        .eq("user_id", user.id);
     }
 
     const [inviteRes, requestRes] = await Promise.all([
@@ -2742,6 +2783,8 @@ const ProfilePage = () => {
     toast({ title: "Contact visibility updated" });
   };
 
+  const editUsernameAvailability = useUsernameAvailability(editForm.username || "", profile?.username);
+
   const handleSaveProfile = async () => {
     if (!user || !profile) return;
     setSaving(true);
@@ -2907,10 +2950,23 @@ const ProfilePage = () => {
               contact_email: contactEmail,
               contact_phone: contactPhone,
               team_type: organizationTeamType,
+              ...(organizationTeamType === "school"
+                ? {
+                    team_mascot: editForm.team_mascot?.trim() || null,
+                    sport: editForm.sport?.trim() || null,
+                    league_conference: editForm.league_conference?.trim() || null,
+                    school_website: editForm.school_website?.trim() || null,
+                    social_links: editForm.social_links_text?.trim() || null,
+                    team_colors: editForm.team_colors?.trim() || null,
+                    head_coach_name: editForm.head_coach_name?.trim() || null,
+                    head_coach_email: editForm.head_coach_email?.trim().toLowerCase() || null,
+                    head_coach_phone: editForm.head_coach_phone?.trim() || null,
+                  }
+                : {}),
             },
             { onConflict: "user_id" }
           )
-          .select("id, team_id, club_name, leagues_offered, founded_year, country, city, home_stadium, training_ground, home_jersey_color, away_jersey_color, third_kit_color, age_groups_offered, contact_email, contact_phone, team_type, school_level")
+          .select("id, team_id, club_name, leagues_offered, founded_year, country, city, home_stadium, training_ground, home_jersey_color, away_jersey_color, third_kit_color, age_groups_offered, contact_email, contact_phone, team_type, school_level, school_name, team_mascot, sport, league_conference, school_website, head_coach_name, head_coach_email, head_coach_phone, team_colors, social_links")
           .maybeSingle();
 
         if (teamProfilePersistError) {
@@ -3022,9 +3078,6 @@ const ProfilePage = () => {
           emergency_contact: editForm.emergency_contact?.trim() || null,
           child_full_name: editForm.child_full_name?.trim() || null,
           child_where_plays: editForm.child_where_plays?.trim() || null,
-          child_team: editForm.child_team?.trim() || parentAccountData?.child_team || null,
-          child_league: editForm.child_league?.trim() || null,
-          child_age_group: editForm.child_age_group?.trim() || null,
           parent_notes: editForm.parent_notes?.trim() || null,
         };
         console.info("Footy Status parent profile save payload", parentPayload);
@@ -3128,28 +3181,43 @@ const ProfilePage = () => {
           profile?.scout_organization ||
           null;
 
+        // Scouts store their answers in scouting_* form fields; use those for
+        // the shared staff record so a scout save never blanks their data.
+        const isScoutStaffAccount = resolvedAccountRole === "scout";
+        const staffOrganizationName = isScoutStaffAccount
+          ? editForm.scout_organization?.trim() || preservedStaffTeamName
+          : preservedStaffTeamName;
+        const staffLicensesList = ((isScoutStaffAccount ? editForm.scouting_licenses_text : editForm.coaching_licenses_text) || "")
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean);
+        const staffAgeGroupsList = ((isScoutStaffAccount ? editForm.scouting_age_groups_text : editForm.age_groups_coached_text) || "")
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean);
+        const staffPreviousTeamsList = isScoutStaffAccount
+          ? [editForm.scouting_experience?.trim()].filter(Boolean) as string[]
+          : (editForm.previous_teams_text || "")
+              .split(",")
+              .map((value) => value.trim())
+              .filter(Boolean);
+        const staffAchievements = isScoutStaffAccount
+          ? editForm.scouting_accolades?.trim() || null
+          : editForm.notable_achievements?.trim() || null;
+
         const { error: staffSetupError } = await (supabase as any).rpc("save_staff_account_profile", {
           _role: resolvedLegacyRole,
           _full_name: staffDisplayName,
-          _team_organization_name: preservedStaffTeamName,
+          _team_organization_name: staffOrganizationName,
           _city: editForm.city?.trim() || null,
           _coaching_level: editForm.coaching_level || "",
           _years_experience: editForm.years_experience ? Number(editForm.years_experience) : null,
-          _coaching_licenses: (editForm.coaching_licenses_text || "")
-            .split(",")
-            .map((value) => value.trim())
-            .filter(Boolean),
-          _age_groups_coached: (editForm.age_groups_coached_text || "")
-            .split(",")
-            .map((value) => value.trim())
-            .filter(Boolean),
+          _coaching_licenses: staffLicensesList,
+          _age_groups_coached: staffAgeGroupsList,
           _contact_email: editForm.contact_email?.trim().toLowerCase() || null,
           _contact_phone: editForm.contact_phone?.trim() || null,
-          _previous_teams: (editForm.previous_teams_text || "")
-            .split(",")
-            .map((value) => value.trim())
-            .filter(Boolean),
-          _notable_achievements: editForm.notable_achievements?.trim() || null,
+          _previous_teams: staffPreviousTeamsList,
+          _notable_achievements: staffAchievements,
         });
 
         if (staffSetupError) {
@@ -3165,25 +3233,17 @@ const ProfilePage = () => {
               user_id: user.id,
               full_name: staffDisplayName,
               role: profile?.role || "coach",
-              team_organization_name: preservedStaffTeamName,
+              team_organization_name: staffOrganizationName,
               city: editForm.city?.trim() || null,
+              country: editForm.country?.trim() || null,
               coaching_level: editForm.coaching_level || null,
               years_experience: editForm.years_experience ? Number(editForm.years_experience) : null,
-              coaching_licenses: (editForm.coaching_licenses_text || "")
-                .split(",")
-                .map((value) => value.trim())
-                .filter(Boolean),
-              age_groups_coached: (editForm.age_groups_coached_text || "")
-                .split(",")
-                .map((value) => value.trim())
-                .filter(Boolean),
+              coaching_licenses: staffLicensesList,
+              age_groups_coached: staffAgeGroupsList,
               contact_email: editForm.contact_email?.trim().toLowerCase() || null,
               contact_phone: editForm.contact_phone?.trim() || null,
-              previous_teams: (editForm.previous_teams_text || "")
-                .split(",")
-                .map((value) => value.trim())
-                .filter(Boolean),
-              notable_achievements: editForm.notable_achievements?.trim() || null,
+              previous_teams: staffPreviousTeamsList,
+              notable_achievements: staffAchievements,
             },
             { onConflict: "user_id" }
           )
@@ -3288,15 +3348,8 @@ const ProfilePage = () => {
       .or(`full_name.ilike.%${query.trim()}%,username.ilike.%${usernameQuery}%`)
       .limit(8);
 
-    const currentYear = new Date().getFullYear();
-    setParentPlayerSearchResults(
-      (data || []).filter((player: any) => {
-        const birthYear = Number(String(player.age_birth_year || "").match(/(19|20)\d{2}/)?.[0]);
-        if (!birthYear) return false;
-        const age = currentYear - birthYear;
-        return age >= 6 && age <= 13;
-      })
-    );
+    // Parents can link to any player account, regardless of the player's age.
+    setParentPlayerSearchResults(data || []);
   };
 
   const handleRequestParentLink = async (playerUserId: string) => {
@@ -3735,9 +3788,9 @@ const ProfilePage = () => {
         player_id: null,
         user_id: user.id,
         visibility: clipVisibility,
-        duration: editedClipDurationSeconds,
-        trim_start_seconds: Math.round(clipTrimStart),
-        trim_end_seconds: Math.round(clipTrimEnd),
+        duration: Math.round(editedClipDurationSeconds * 100) / 100,
+        trim_start_seconds: Math.round(clipTrimStart * 100) / 100,
+        trim_end_seconds: Math.round(clipTrimEnd * 100) / 100,
         playback_volume: clipPlaybackVolume,
         fit_mode: clipFitMode,
       });
@@ -4214,6 +4267,14 @@ const ProfilePage = () => {
     setSavingClubTeamAccessCodeId(null);
   };
 
+  const refreshOfferedClubTeams = async () => {
+    const clubId =
+      offeredClubTeams[0]?.club_id ||
+      (teamAccountData?.team_id ? (await fetchClubByTeamId(teamAccountData.team_id))?.id : null);
+    if (!clubId) return;
+    setOfferedClubTeams(await fetchClubTeams(clubId));
+  };
+
   const handleArchiveDaughterTeam = async (team: OfferedClubTeam) => {
     if (!team.id) return true;
     const { error } = await archiveClubTeam(team.id);
@@ -4589,12 +4650,10 @@ const ProfilePage = () => {
                 </div>
               </div>
               {isTeamAccount && !isOfficialFootyStatusAccount ? (
-                <span className="mt-2 inline-flex items-center rounded-full bg-muted px-3 py-1 text-xs font-medium text-muted-foreground">
-                  {getAccountRoleLabel()}
-                </span>
-              ) : null}
-              {isTeamAccount && teamAccountData?.club_name && !isOfficialFootyStatusAccount ? (
-                <p className="text-navy font-medium text-center mt-2">{teamAccountData.club_name}</p>
+                <div className="mt-1 flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm">
+                  {profile?.username ? <span className="break-all text-muted-foreground">@{profile.username}</span> : null}
+                  <span className="font-bold text-foreground">{profile?.username ? "— " : ""}{getAccountRoleLabel()}</span>
+                </div>
               ) : null}
               {isPlayerAccount ? (
                 <div className="mt-1 flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm">
@@ -4602,13 +4661,18 @@ const ProfilePage = () => {
                   {profile?.username ? <span className="break-all text-muted-foreground">@{profile.username}</span> : null}
                 </div>
               ) : null}
-              {!isTeamAccount && !isOfficialFootyStatusAccount && !isPlayerAccount ? (
+              {resolvedAccountRole === "academy_director" ? (
                 <div className="mt-1 flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm">
                   <span className="font-bold text-foreground">{getAccountRoleLabel()}</span>
+                  {profile?.username ? <span className="break-all text-muted-foreground">— @{profile.username}</span> : null}
+                </div>
+              ) : !isTeamAccount && !isOfficialFootyStatusAccount && !isPlayerAccount ? (
+                <div className="mt-1 flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm">
                   {profile?.username ? <span className="break-all text-muted-foreground">@{profile.username}</span> : null}
+                  <span className="font-bold text-foreground">{profile?.username ? "— " : ""}{getAccountRoleLabel()}</span>
                 </div>
               ) : null}
-              {displayProfileBio && <p className="mx-auto mt-1 w-full max-w-xs break-words whitespace-pre-wrap text-center text-sm text-muted-foreground" style={{ textAlign: "center" }}>{displayProfileBio}</p>}
+              {displayProfileBio && <p className="mx-auto mt-1 w-full max-w-xs break-words whitespace-pre-wrap text-center text-sm font-normal text-foreground" style={{ textAlign: "center" }}>{displayProfileBio}</p>}
             </>
           )}
           {isActivePro && !isPlayerAccount && <ProBadge className="mt-2" />}
@@ -4760,10 +4824,12 @@ const ProfilePage = () => {
                     value={editForm.username || ""}
                     onChange={(e) => setEditForm({ ...editForm, username: normalizeUsername(e.target.value) })}
                     placeholder="username"
+                    maxLength={USERNAME_MAX_LENGTH}
                     autoCapitalize="none"
                     autoCorrect="off"
                     spellCheck={false}
                   />
+                  <UsernameAvailabilityHint state={editUsernameAvailability} />
                   <p className="mt-1 text-xs text-muted-foreground">You can change your username once every 14 days.</p>
                 </div>
                 <div>
@@ -4791,6 +4857,19 @@ const ProfilePage = () => {
                   <Input value={editForm.display_name || ""} onChange={(e) => setEditForm({ ...editForm, display_name: e.target.value, club_name: e.target.value })} placeholder="Club / Organization Name" />
                 </div>
                 <div>
+                  <label className="text-sm text-muted-foreground">Username</label>
+                  <Input
+                    value={editForm.username || ""}
+                    onChange={(e) => setEditForm({ ...editForm, username: normalizeUsername(e.target.value) })}
+                    placeholder="username"
+                    maxLength={USERNAME_MAX_LENGTH}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                  />
+                  <UsernameAvailabilityHint state={editUsernameAvailability} />
+                </div>
+                <div>
                   <label className="text-sm text-muted-foreground">Leagues Provided</label>
                   <Input value={editForm.leagues_offered_text || ""} onChange={(e) => setEditForm({ ...editForm, leagues_offered_text: e.target.value })} placeholder="MLS Next, ECNL" />
                 </div>
@@ -4798,19 +4877,58 @@ const ProfilePage = () => {
                   <label className="text-sm text-muted-foreground">Age Groups Provided</label>
                   <Input value={editForm.age_groups_offered_text || ""} onChange={(e) => setEditForm({ ...editForm, age_groups_offered_text: e.target.value })} placeholder="U13, U14, U15" />
                 </div>
-                <div className="space-y-2">
-                  <label className="text-sm text-muted-foreground">Daughter Teams</label>
-                  <ClubTeamsManager
-                    value={offeredClubTeams}
-                    onChange={setOfferedClubTeams}
-                    onRemoveSavedTeam={handleArchiveDaughterTeam}
-                    disabled={saving}
-                  />
-                </div>
+                <p className="rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">
+                  Individual teams are managed from the Teams Offered section on your profile — each team card has its
+                  own Edit button.
+                </p>
                 <div>
                   <label className="text-sm text-muted-foreground">City / State</label>
                   <Input value={editForm.city || ""} onChange={(e) => setEditForm({ ...editForm, city: e.target.value })} placeholder="Dallas, TX" />
                 </div>
+                {(teamAccountData?.team_type === "school" || resolvedAccountRole === "school_team") ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-sm text-muted-foreground">Mascot</label>
+                        <Input value={editForm.team_mascot || ""} onChange={(e) => setEditForm({ ...editForm, team_mascot: e.target.value })} placeholder="Wildcats" />
+                      </div>
+                      <div>
+                        <label className="text-sm text-muted-foreground">Sport</label>
+                        <Input value={editForm.sport || ""} onChange={(e) => setEditForm({ ...editForm, sport: e.target.value })} placeholder="Soccer" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-sm text-muted-foreground">League / Conference</label>
+                      <Input value={editForm.league_conference || ""} onChange={(e) => setEditForm({ ...editForm, league_conference: e.target.value })} placeholder="District 5, Conference A" />
+                    </div>
+                    <div>
+                      <label className="text-sm text-muted-foreground">Website</label>
+                      <Input value={editForm.school_website || ""} onChange={(e) => setEditForm({ ...editForm, school_website: e.target.value })} placeholder="https://school.edu/athletics" />
+                    </div>
+                    <div>
+                      <label className="text-sm text-muted-foreground">Social Media Links</label>
+                      <Input value={editForm.social_links_text || ""} onChange={(e) => setEditForm({ ...editForm, social_links_text: e.target.value })} placeholder="@schoolsoccer on Instagram, X, TikTok" />
+                    </div>
+                    <div>
+                      <label className="text-sm text-muted-foreground">Team Colors</label>
+                      <Input value={editForm.team_colors || ""} onChange={(e) => setEditForm({ ...editForm, team_colors: e.target.value })} placeholder="Navy & Gold" />
+                    </div>
+                    <div>
+                      <label className="text-sm text-muted-foreground">Head Coach Name</label>
+                      <Input value={editForm.head_coach_name || ""} onChange={(e) => setEditForm({ ...editForm, head_coach_name: e.target.value })} placeholder="Coach name" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-sm text-muted-foreground">Head Coach Email</label>
+                        <Input type="email" value={editForm.head_coach_email || ""} onChange={(e) => setEditForm({ ...editForm, head_coach_email: e.target.value })} placeholder="coach@school.edu" />
+                      </div>
+                      <div>
+                        <label className="text-sm text-muted-foreground">Head Coach Phone</label>
+                        <Input type="tel" value={editForm.head_coach_phone || ""} onChange={(e) => setEditForm({ ...editForm, head_coach_phone: e.target.value })} placeholder="(555) 123-4567" />
+                      </div>
+                    </div>
+                  </>
+                ) : null}
                 <div>
                   <label className="text-sm text-muted-foreground">Bio</label>
                   <div className="space-y-2">
@@ -4853,10 +4971,6 @@ const ProfilePage = () => {
               </div>
             ) : isTeamAccount ? (
               <>
-                <div className="flex items-center gap-3 p-4">
-                  <Building2 className="h-5 w-5 text-muted-foreground" />
-                  <div><p className="text-sm text-muted-foreground">Club / Organization</p><p className="font-medium">{teamAccountData?.club_name || profile?.club_name || profile?.full_name || "No organization yet"}</p></div>
-                </div>
                 {teamAccountData?.leagues_offered?.length && (
                   <div className="flex items-center gap-3 p-4">
                     <Trophy className="h-5 w-5 text-muted-foreground" />
@@ -4891,6 +5005,72 @@ const ProfilePage = () => {
                   <div className="flex items-center gap-3 p-4">
                     <Shield className="h-5 w-5 text-muted-foreground" />
                     <div><p className="text-sm text-muted-foreground">Training Ground Address</p><p className="font-medium">{teamAccountData.training_ground}</p></div>
+                  </div>
+                )}
+                {teamAccountData?.team_mascot && (
+                  <div className="flex items-center gap-3 p-4">
+                    <Shield className="h-5 w-5 text-muted-foreground" />
+                    <div><p className="text-sm text-muted-foreground">Mascot</p><p className="font-medium">{teamAccountData.team_mascot}</p></div>
+                  </div>
+                )}
+                {teamAccountData?.sport && (
+                  <div className="flex items-center gap-3 p-4">
+                    <Trophy className="h-5 w-5 text-muted-foreground" />
+                    <div><p className="text-sm text-muted-foreground">Sport</p><p className="font-medium">{teamAccountData.sport}</p></div>
+                  </div>
+                )}
+                {teamAccountData?.school_level && (
+                  <div className="flex items-center gap-3 p-4">
+                    <Users className="h-5 w-5 text-muted-foreground" />
+                    <div><p className="text-sm text-muted-foreground">School Level</p><p className="font-medium capitalize">{teamAccountData.school_level.replaceAll("_", " ")}</p></div>
+                  </div>
+                )}
+                {teamAccountData?.league_conference && (
+                  <div className="flex items-center gap-3 p-4">
+                    <Trophy className="h-5 w-5 text-muted-foreground" />
+                    <div><p className="text-sm text-muted-foreground">League / Conference</p><p className="font-medium">{teamAccountData.league_conference}</p></div>
+                  </div>
+                )}
+                {teamAccountData?.team_colors && (
+                  <div className="flex items-center gap-3 p-4">
+                    <Shield className="h-5 w-5 text-muted-foreground" />
+                    <div><p className="text-sm text-muted-foreground">Team Colors</p><p className="font-medium">{teamAccountData.team_colors}</p></div>
+                  </div>
+                )}
+                {teamAccountData?.school_website && (
+                  <div className="flex items-center gap-3 min-w-0 p-4">
+                    <LinkIcon className="h-5 w-5 text-muted-foreground" />
+                    <div className="min-w-0">
+                      <p className="text-sm text-muted-foreground">Website</p>
+                      <a
+                        href={teamAccountData.school_website.startsWith("http") ? teamAccountData.school_website : `https://${teamAccountData.school_website}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-medium text-navy hover:underline break-all"
+                      >
+                        {teamAccountData.school_website}
+                      </a>
+                    </div>
+                  </div>
+                )}
+                {teamAccountData?.social_links && (
+                  <div className="flex items-center gap-3 min-w-0 p-4">
+                    <LinkIcon className="h-5 w-5 text-muted-foreground" />
+                    <div className="min-w-0"><p className="text-sm text-muted-foreground">Social Media</p><p className="font-medium break-all">{teamAccountData.social_links}</p></div>
+                  </div>
+                )}
+                {teamAccountData?.head_coach_name && (
+                  <div className="flex items-center gap-3 p-4">
+                    <Users className="h-5 w-5 text-muted-foreground" />
+                    <div>
+                      <p className="text-sm text-muted-foreground">Head Coach</p>
+                      <p className="font-medium">{teamAccountData.head_coach_name}</p>
+                      {[teamAccountData.head_coach_email, teamAccountData.head_coach_phone].filter(Boolean).length ? (
+                        <p className="text-sm text-muted-foreground">
+                          {[teamAccountData.head_coach_email, teamAccountData.head_coach_phone].filter(Boolean).join(" • ")}
+                        </p>
+                      ) : null}
+                    </div>
                   </div>
                 )}
                 {!teamAccountData?.club_name &&
@@ -4934,20 +5114,9 @@ const ProfilePage = () => {
                   <label className="text-sm text-muted-foreground">Where Their Child Plays</label>
                   <Input value={editForm.child_where_plays || ""} onChange={(e) => setEditForm({ ...editForm, child_where_plays: e.target.value })} placeholder="Club, school, academy" />
                 </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-sm text-muted-foreground">Child's Team</label>
-                    <Input value={editForm.child_team || ""} onChange={(e) => setEditForm({ ...editForm, child_team: e.target.value })} placeholder="Team" />
-                  </div>
-                  <div>
-                    <label className="text-sm text-muted-foreground">Child's League</label>
-                    <Input value={editForm.child_league || ""} onChange={(e) => setEditForm({ ...editForm, child_league: e.target.value })} placeholder="League" />
-                  </div>
-                </div>
-                <div>
-                  <label className="text-sm text-muted-foreground">Child's Age Group</label>
-                  <Input value={editForm.child_age_group || ""} onChange={(e) => setEditForm({ ...editForm, child_age_group: e.target.value })} placeholder="U15" />
-                </div>
+                <p className="text-xs text-muted-foreground">
+                  Your child's team, league, and age group come automatically from their linked player account.
+                </p>
                 <div>
                   <label className="text-sm text-muted-foreground">Important Notes</label>
                   <Input value={editForm.parent_notes || ""} onChange={(e) => setEditForm({ ...editForm, parent_notes: e.target.value })} placeholder="Important information" />
@@ -4997,7 +5166,7 @@ const ProfilePage = () => {
                           <p className="font-medium hover:text-primary">{link.player?.full_name || parentAccountData?.child_full_name || "Player"}</p>
                         </button>
                         <p className="text-sm text-muted-foreground">
-                          {[link.player?.team_name || link.player?.team || parentAccountData?.child_team, parentAccountData?.child_league, parentAccountData?.child_age_group]
+                          {[link.player?.team_name || link.player?.team, link.player?.current_league_name, link.player?.current_age_group]
                             .filter(Boolean)
                             .join(" - ")}
                         </p>
@@ -5021,7 +5190,7 @@ const ProfilePage = () => {
                   )}
                 </div>
                 <div className="border-t border-border p-4 space-y-3">
-                  <p className="text-sm font-semibold text-foreground">Link a Child Player (Ages 6–13)</p>
+                  <p className="text-sm font-semibold text-foreground">Link a Child Player</p>
                   <Input
                     value={parentPlayerSearchQuery}
                     onChange={(e) => handleParentPlayerSearch(e.target.value)}
@@ -5052,10 +5221,12 @@ const ProfilePage = () => {
                     value={editForm.username || ""}
                     onChange={(e) => setEditForm({ ...editForm, username: normalizeUsername(e.target.value) })}
                     placeholder="username"
+                    maxLength={USERNAME_MAX_LENGTH}
                     autoCapitalize="none"
                     autoCorrect="off"
                     spellCheck={false}
                   />
+                  <UsernameAvailabilityHint state={editUsernameAvailability} />
                 </div>
                 <div>
                   <label className="text-sm text-muted-foreground">Bio</label>
@@ -5192,7 +5363,7 @@ const ProfilePage = () => {
                 {displayProfileBio ? (
                   <div className="flex items-center gap-3 p-4">
                     <User className="h-5 w-5 text-muted-foreground" />
-                    <div><p className="text-sm text-muted-foreground">Bio</p><p className="font-medium whitespace-pre-wrap">{displayProfileBio}</p></div>
+                    <div><p className="text-sm text-muted-foreground">Bio</p><p className="text-sm font-normal text-foreground whitespace-pre-wrap">{displayProfileBio}</p></div>
                   </div>
                 ) : null}
               </>
@@ -5236,16 +5407,70 @@ const ProfilePage = () => {
                       <label className="text-sm text-muted-foreground">Accolades / Achievements</label>
                       <Input value={editForm.scouting_accolades || ""} onChange={(e) => setEditForm({ ...editForm, scouting_accolades: e.target.value })} placeholder="Achievements" />
                     </div>
+                    <div>
+                      <label className="text-sm text-muted-foreground">Years Scouting</label>
+                      <Input type="number" value={editForm.years_experience || ""} onChange={(e) => setEditForm({ ...editForm, years_experience: e.target.value })} placeholder="5" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-sm text-muted-foreground">City</label>
+                        <Input value={editForm.city || ""} onChange={(e) => setEditForm({ ...editForm, city: e.target.value })} placeholder="Los Angeles" />
+                      </div>
+                      <div>
+                        <label className="text-sm text-muted-foreground">Country</label>
+                        <Input value={editForm.country || ""} onChange={(e) => setEditForm({ ...editForm, country: e.target.value })} placeholder="USA" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-sm text-muted-foreground">Bio</label>
+                      <Input
+                        value={editForm.bio || ""}
+                        onChange={(e) => setEditForm({ ...editForm, bio: e.target.value.slice(0, BIO_MAX_LENGTH) })}
+                        placeholder="Short bio"
+                        maxLength={BIO_MAX_LENGTH}
+                        className="text-center placeholder:text-center"
+                        style={{ textAlign: "center" }}
+                      />
+                      <p className="text-xs text-muted-foreground text-right">{(editForm.bio || "").length}/{BIO_MAX_LENGTH}</p>
+                    </div>
                   </>
                 ) : profile?.account_role === "academy_director" ? (
                   <>
                     <div>
-                      <label className="text-sm text-muted-foreground">Staff Role / Title</label>
-                      <Input value={editForm.coaching_role_type || ""} onChange={(e) => setEditForm({ ...editForm, coaching_role_type: e.target.value })} placeholder="Club Director, Team Manager" />
+                      <label className="text-sm text-muted-foreground">Team Staff Position</label>
+                      <Select
+                        value={editForm.coaching_role_type || ""}
+                        onValueChange={(value) => setEditForm({ ...editForm, coaching_role_type: value })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select Team Staff position" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {/* Same options as the Team Staff signup questionnaire. */}
+                          {(editForm.coaching_role_type && !TEAM_STAFF_POSITION_OPTIONS.includes(editForm.coaching_role_type as any)
+                            ? [editForm.coaching_role_type, ...TEAM_STAFF_POSITION_OPTIONS]
+                            : TEAM_STAFF_POSITION_OPTIONS
+                          ).map((position) => (
+                            <SelectItem key={position} value={position}>
+                              {position}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
                     <div>
                       <label className="text-sm text-muted-foreground">Current Team / Organization</label>
                       <Input value={editForm.team_organization_name || ""} onChange={(e) => setEditForm({ ...editForm, team_organization_name: e.target.value, teams_currently_coaching: e.target.value })} placeholder="Current team, club, academy, or organization" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-sm text-muted-foreground">City</label>
+                        <Input value={editForm.city || ""} onChange={(e) => setEditForm({ ...editForm, city: e.target.value })} placeholder="Miami" />
+                      </div>
+                      <div>
+                        <label className="text-sm text-muted-foreground">Country</label>
+                        <Input value={editForm.country || ""} onChange={(e) => setEditForm({ ...editForm, country: e.target.value })} placeholder="USA" />
+                      </div>
                     </div>
                     <div>
                       <label className="text-sm text-muted-foreground">Bio / About Me</label>
@@ -5278,8 +5503,26 @@ const ProfilePage = () => {
                 ) : (
                   <>
                 <div>
-                  <label className="text-sm text-muted-foreground">Coaching Role / Type</label>
-                  <Input value={editForm.coaching_role_type || ""} onChange={(e) => setEditForm({ ...editForm, coaching_role_type: e.target.value })} placeholder="Head Coach, Trainer, Analyst" />
+                  <label className="text-sm text-muted-foreground">Coach Type</label>
+                  <Select
+                    value={editForm.coaching_role_type || ""}
+                    onValueChange={(value) => setEditForm({ ...editForm, coaching_role_type: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select coach type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {/* Same options as the coach signup questionnaire. */}
+                      {(editForm.coaching_role_type && !COACHING_ROLE_OPTIONS.includes(editForm.coaching_role_type as any)
+                        ? [editForm.coaching_role_type, ...COACHING_ROLE_OPTIONS]
+                        : COACHING_ROLE_OPTIONS
+                      ).map((role) => (
+                        <SelectItem key={role} value={role}>
+                          {role}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <label className="text-sm text-muted-foreground">Teams Currently Coaching</label>
@@ -5349,10 +5592,12 @@ const ProfilePage = () => {
                     value={editForm.username || ""}
                     onChange={(e) => setEditForm({ ...editForm, username: normalizeUsername(e.target.value) })}
                     placeholder="username"
+                    maxLength={USERNAME_MAX_LENGTH}
                     autoCapitalize="none"
                     autoCorrect="off"
                     spellCheck={false}
                   />
+                  <UsernameAvailabilityHint state={editUsernameAvailability} />
                   <p className="mt-1 text-xs text-muted-foreground">You can change your username once every 14 days.</p>
                 </div>
                 <div>
@@ -5462,24 +5707,13 @@ const ProfilePage = () => {
                 {staffAccountData?.years_experience !== null && staffAccountData?.years_experience !== undefined && (
                   <div className="flex items-center gap-3 p-4">
                     <Calendar className="h-5 w-5 text-muted-foreground" />
-                    <div><p className="text-sm text-muted-foreground">Coaching Experience</p><p className="font-medium">{staffAccountData?.years_experience} years</p></div>
+                    <div><p className="text-sm text-muted-foreground">{profile?.account_role === "scout" ? "Years Scouting" : "Coaching Experience"}</p><p className="font-medium">{staffAccountData?.years_experience} years</p></div>
                   </div>
                 )}
                 {staffAccountData?.coaching_licenses?.length ? (
                   <div className="flex items-center gap-3 p-4">
                     <Star className="h-5 w-5 text-muted-foreground" />
                     <div><p className="text-sm text-muted-foreground">Licenses / Certifications</p><p className="font-medium">{staffAccountData.coaching_licenses.join(", ")}</p></div>
-                  </div>
-                ) : null}
-                {(staffAccountData?.contact_email || staffAccountData?.contact_phone) ? (
-                  <div className="flex items-center gap-3 p-4">
-                    <Mail className="h-5 w-5 text-muted-foreground" />
-                    <div>
-                      <p className="text-sm text-muted-foreground">Contact Information</p>
-                      <p className="font-medium">
-                        {[staffAccountData?.contact_email, staffAccountData?.contact_phone].filter(Boolean).join(" | ")}
-                      </p>
-                    </div>
                   </div>
                 ) : null}
                 {profile?.account_role === "academy_director" && (staffAccountData?.past_coaching_experience || staffAccountData?.previous_teams?.length) ? (
@@ -5503,7 +5737,7 @@ const ProfilePage = () => {
                 {displayProfileBio ? (
                   <div className="flex items-center gap-3 p-4">
                     <User className="h-5 w-5 text-muted-foreground" />
-                    <div><p className="text-sm text-muted-foreground">Bio</p><p className="font-medium whitespace-pre-wrap">{displayProfileBio}</p></div>
+                    <div><p className="text-sm text-muted-foreground">Bio</p><p className="text-sm font-normal text-foreground whitespace-pre-wrap">{displayProfileBio}</p></div>
                   </div>
                 ) : null}
                 {!staffAccountData?.coaching_role_type &&
@@ -6099,23 +6333,21 @@ const ProfilePage = () => {
             )}
           </div>
           <div className="bg-card border border-border rounded-xl divide-y divide-border">
-            {!isTeamAccount && (
-              <div className="p-4 space-y-2">
-                <p className="text-sm text-muted-foreground">Who can see my contact info</p>
-                <Select value={settings.showContactInfo} onValueChange={handleContactVisibilityChange}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Choose contact visibility" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {CONTACT_VISIBILITY_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {option.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
+            <div className="p-4 space-y-2">
+              <p className="text-sm text-muted-foreground">Who can see my contact info</p>
+              <Select value={settings.showContactInfo} onValueChange={handleContactVisibilityChange}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Choose contact visibility" />
+                </SelectTrigger>
+                <SelectContent>
+                  {CONTACT_VISIBILITY_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             {isEditingContact && isPlayerAccount ? (
               <div className="p-4 space-y-3">
                 {RESTRICTED_CONTACTS.map((contactType) => (
@@ -7092,9 +7324,28 @@ const ProfilePage = () => {
                                 {[formatTeamGender(team.gender), team.age_group, team.league_name].filter(Boolean).join(" • ") || (teamAccountData?.team_type === "school" ? "School team" : "Club team")}
                               </p>
                             </div>
-                            <Badge variant="outline" className="shrink-0 rounded-full">
-                              {team.status === "inactive" ? "Inactive" : "Active"}
-                            </Badge>
+                            <div className="flex shrink-0 items-center gap-1">
+                              {team.id ? (
+                                <Button
+                                  type="button"
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-7 w-7"
+                                  aria-label="Edit this team"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setDaughterTeamBeingEdited(team);
+                                  }}
+                                  onMouseDown={stopTileEvent}
+                                  onKeyDown={stopTileEvent}
+                                >
+                                  <Edit className="h-3.5 w-3.5" />
+                                </Button>
+                              ) : null}
+                              <Badge variant="outline" className="rounded-full">
+                                {team.status === "inactive" ? "Inactive" : "Active"}
+                              </Badge>
+                            </div>
                           </div>
                           {[team.coach_name ? `Coach ${team.coach_name}` : null, formatTeamGender(team.gender), team.season, team.level]
                             .filter(Boolean)
@@ -7407,6 +7658,19 @@ const ProfilePage = () => {
             </div>
           </section>
         )}
+
+        <DaughterTeamEditDialog
+          open={Boolean(daughterTeamBeingEdited)}
+          onOpenChange={(open) => {
+            if (!open) setDaughterTeamBeingEdited(null);
+          }}
+          team={daughterTeamBeingEdited}
+          isSchool={teamAccountData?.team_type === "school" || resolvedAccountRole === "school_team"}
+          parentTeamId={teamAccountData?.team_id || null}
+          onSaved={refreshOfferedClubTeams}
+          onDelete={handleArchiveDaughterTeam}
+        />
+
         {isPlayerAccount ? (
           <ClubHistorySection
             entries={clubHistory}

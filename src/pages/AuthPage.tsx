@@ -281,6 +281,8 @@ const getSignupRequiredFieldLabel = (role: string, profileData: any, normalizedE
     if (!hasSignupValue(profileData?.refereeCertifyingOrganization)) missing.push("Certifying organization");
     if (!hasSignupValue(profileData?.refereeYearsExperience)) missing.push("Years of experience");
     if (!hasSignupValue(contactEmail)) missing.push("Contact email");
+    if (!hasSignupValue(profileData?.contactPhone)) missing.push("Phone number");
+    if (!profileData?.refereeCertificationProofFile) missing.push("Referee certification upload");
   } else if (role === "team_club") {
     if (!hasSignupValue(profileData?.clubName)) missing.push("Team or club name");
     if (!hasSignupValue(contactEmail)) missing.push("Contact email");
@@ -447,11 +449,12 @@ const verifySignupAccountPersistence = async (
 const saveSignupContactRows = async (
   userId: string,
   contactEmail?: string | null,
-  contactPhone?: string | null
+  contactPhone?: string | null,
+  contactTypePrefix: "player" | "coach" = "player"
 ) => {
   const entries: Array<[string, string]> = [
-    ["player_email", contactEmail?.trim().toLowerCase() || ""],
-    ["player_phone", contactPhone?.trim() || ""],
+    [`${contactTypePrefix}_email`, contactEmail?.trim().toLowerCase() || ""],
+    [`${contactTypePrefix}_phone`, contactPhone?.trim() || ""],
   ].filter(([, value]) => value.length > 0);
 
   for (const [contactType, value] of entries) {
@@ -468,7 +471,8 @@ const saveSignupContactRows = async (
       user_id: userId,
       contact_type: contactType,
       value,
-      visibility: "public",
+      // Matches the default contact privacy setting (Teams / Coaches / Staff Only).
+      visibility: "restricted",
     };
 
     const saveResult = existing.data?.id
@@ -1403,20 +1407,26 @@ const AuthPage = () => {
               emergency_contact: profileData.emergencyContact || null,
               child_full_name: profileData.childFullName || null,
               child_where_plays: profileData.childWherePlays || null,
-              child_team: profileData.childTeam || null,
-              child_league: profileData.childLeague || null,
-              child_age_group: profileData.childAgeGroup || null,
               parent_notes: profileData.parentNotes || null,
             },
             { onConflict: "user_id" }
           );
       }
 
-      if (role === "referee") {
+      if (role === "referee" || role === "player" || role === "parent") {
         await saveSignupContactRows(
           sessionUserId,
           profileData.contactEmail || normalizedEmail,
           profileData.contactPhone || null
+        );
+      } else if (accountCategory === "team_staff" && role !== "team_club" && role !== "school_team") {
+        // Coach / staff / scout / academy accounts: contact info lives in the
+        // privacy-controlled Contact Information section.
+        await saveSignupContactRows(
+          sessionUserId,
+          profileData.contactEmail || normalizedEmail,
+          profileData.contactPhone || null,
+          "coach"
         );
       }
 

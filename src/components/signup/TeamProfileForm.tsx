@@ -4,7 +4,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import ClubTeamsManager, { OfferedClubTeam } from "@/components/club/ClubTeamsManager";
-import { normalizeUsername } from "@/lib/usernames";
+import { USERNAME_MAX_LENGTH, normalizeUsername } from "@/lib/usernames";
+import { UsernameAvailabilityHint, useUsernameAvailability } from "@/components/UsernameAvailability";
 
 const US_STATES = [
   "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
@@ -110,6 +111,8 @@ const TeamProfileForm = ({ email, teamType = "club", onSubmit, onBack, loading }
       contactEmail: prev.contactEmail || email,
     }));
   }, [email]);
+
+  const usernameAvailability = useUsernameAvailability(formData.username);
 
   const handleChange = (field: keyof TeamProfileData, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -324,11 +327,13 @@ const TeamProfileForm = ({ email, teamType = "club", onSubmit, onBack, loading }
             onChange={(e) => handleChange("username", normalizeUsername(e.target.value))}
             placeholder="fcunited"
             required
+            maxLength={USERNAME_MAX_LENGTH}
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
             className="border-2 focus:border-navy"
           />
+          <UsernameAvailabilityHint state={usernameAvailability} />
         </div>
 
         <div className="col-span-2 space-y-2">
@@ -584,7 +589,7 @@ const TeamProfileForm = ({ email, teamType = "club", onSubmit, onBack, loading }
         )}
 
         <div className="col-span-2 space-y-3">
-          <Label>Admin & Staff</Label>
+          <Label>Add Staff</Label>
           {formData.staffMembers.map((staff, index) => (
             <div key={index} className="space-y-2 rounded-lg border border-border p-3">
               <Input
@@ -632,7 +637,7 @@ const TeamProfileForm = ({ email, teamType = "club", onSubmit, onBack, loading }
         <Button
           type="submit"
           className="flex-1 bg-gradient-to-r from-navy to-primary hover:from-navy-light hover:to-primary"
-          disabled={loading}
+          disabled={loading || !usernameAvailability.canSubmit}
         >
           {loading ? "Creating..." : "Create Account"}
         </Button>

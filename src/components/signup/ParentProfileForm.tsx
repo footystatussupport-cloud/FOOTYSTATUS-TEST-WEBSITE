@@ -3,7 +3,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { normalizeUsername } from "@/lib/usernames";
+import { USERNAME_MAX_LENGTH, normalizeUsername } from "@/lib/usernames";
+import { UsernameAvailabilityHint, useUsernameAvailability } from "@/components/UsernameAvailability";
 
 interface ParentProfileData {
   fullName: string;
@@ -15,9 +16,6 @@ interface ParentProfileData {
   emergencyContact: string;
   childFullName: string;
   childWherePlays: string;
-  childTeam: string;
-  childLeague: string;
-  childAgeGroup: string;
   parentNotes: string;
 }
 
@@ -39,9 +37,6 @@ const ParentProfileForm = ({ email, onSubmit, onBack, loading }: ParentProfileFo
     emergencyContact: "",
     childFullName: "",
     childWherePlays: "",
-    childTeam: "",
-    childLeague: "",
-    childAgeGroup: "",
     parentNotes: "",
   });
 
@@ -52,6 +47,8 @@ const ParentProfileForm = ({ email, onSubmit, onBack, loading }: ParentProfileFo
       contactEmail: prev.contactEmail || email,
     }));
   }, [email]);
+
+  const usernameAvailability = useUsernameAvailability(formData.username);
 
   const handleChange = (field: keyof ParentProfileData, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -90,11 +87,13 @@ const ParentProfileForm = ({ email, onSubmit, onBack, loading }: ParentProfileFo
             onChange={(e) => handleChange("username", normalizeUsername(e.target.value))}
             placeholder="janedoe"
             required
+            maxLength={USERNAME_MAX_LENGTH}
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
             className="border-2 focus:border-navy"
           />
+          <UsernameAvailabilityHint state={usernameAvailability} />
         </div>
 
         <div className="space-y-2">
@@ -192,40 +191,6 @@ const ParentProfileForm = ({ email, onSubmit, onBack, loading }: ParentProfileFo
           />
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-2">
-            <Label htmlFor="childTeam">Child's Team</Label>
-            <Input
-              id="childTeam"
-              value={formData.childTeam}
-              onChange={(e) => handleChange("childTeam", e.target.value)}
-              placeholder="Team"
-              className="border-2 focus:border-navy"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="childLeague">Child's League</Label>
-            <Input
-              id="childLeague"
-              value={formData.childLeague}
-              onChange={(e) => handleChange("childLeague", e.target.value)}
-              placeholder="League"
-              className="border-2 focus:border-navy"
-            />
-          </div>
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="childAgeGroup">Child's Age Group</Label>
-          <Input
-            id="childAgeGroup"
-            value={formData.childAgeGroup}
-            onChange={(e) => handleChange("childAgeGroup", e.target.value)}
-            placeholder="U13, U15, Varsity"
-            className="border-2 focus:border-navy"
-          />
-        </div>
-
         <div className="space-y-2">
           <Label htmlFor="parentNotes">Important Notes / Necessary Information</Label>
           <Input
@@ -249,7 +214,7 @@ const ParentProfileForm = ({ email, onSubmit, onBack, loading }: ParentProfileFo
         <Button
           type="submit"
           className="flex-1 bg-gradient-to-r from-navy to-primary hover:from-navy-light hover:to-primary"
-          disabled={loading}
+          disabled={loading || !usernameAvailability.canSubmit}
         >
           {loading ? "Creating..." : "Create Account"}
         </Button>

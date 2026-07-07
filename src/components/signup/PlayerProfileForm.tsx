@@ -3,7 +3,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { normalizeUsername } from "@/lib/usernames";
+import { USERNAME_MAX_LENGTH, normalizeUsername } from "@/lib/usernames";
+import { UsernameAvailabilityHint, useUsernameAvailability } from "@/components/UsernameAvailability";
 
 interface PlayerProfileData {
   fullName: string;
@@ -57,6 +58,8 @@ const PlayerProfileForm = ({ email, onSubmit, onBack, loading }: PlayerProfileFo
     }));
   }, [email]);
 
+  const usernameAvailability = useUsernameAvailability(formData.username);
+
   const handleChange = (field: keyof PlayerProfileData, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
@@ -87,11 +90,13 @@ const PlayerProfileForm = ({ email, onSubmit, onBack, loading }: PlayerProfileFo
             onChange={(e) => handleChange("username", normalizeUsername(e.target.value))}
             placeholder="john10"
             required
+            maxLength={USERNAME_MAX_LENGTH}
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
             className="border-2 focus:border-navy"
           />
+          <UsernameAvailabilityHint state={usernameAvailability} />
         </div>
 
         <div className="col-span-2 space-y-2">
@@ -219,7 +224,7 @@ const PlayerProfileForm = ({ email, onSubmit, onBack, loading }: PlayerProfileFo
         <Button type="button" variant="outline" className="flex-1" onClick={onBack}>
           Back
         </Button>
-        <Button type="submit" className="flex-1 bg-gradient-to-r from-navy to-primary hover:from-navy-light hover:to-primary" disabled={loading}>
+        <Button type="submit" className="flex-1 bg-gradient-to-r from-navy to-primary hover:from-navy-light hover:to-primary" disabled={loading || !usernameAvailability.canSubmit}>
           {loading ? "Creating..." : "Create Account"}
         </Button>
       </div>

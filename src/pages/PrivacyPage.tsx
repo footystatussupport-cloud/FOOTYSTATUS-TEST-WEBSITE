@@ -7,10 +7,23 @@ import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSettings } from "@/hooks/useSettings";
 import { useBlockedUsers } from "@/hooks/useBlockedUsers";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "@/hooks/use-toast";
 
 const PrivacyPage = () => {
   const { settings, updateSetting, loading } = useSettings();
   const { blockedUsers, unblockUser, loading: blockedLoading } = useBlockedUsers();
+
+  const handleContactVisibilityChange = async (value: string) => {
+    const { error } = await (supabase as any).rpc("set_contact_info_visibility", {
+      _visibility: value,
+    });
+    if (error) {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+      return;
+    }
+    updateSetting("showContactInfo", value);
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -51,17 +64,16 @@ const PrivacyPage = () => {
               </div>
               <Select
                 value={settings.showContactInfo}
-                onValueChange={(value) => updateSetting('showContactInfo', value)}
+                onValueChange={handleContactVisibilityChange}
                 disabled={loading}
               >
-                <SelectTrigger className="w-32">
+                <SelectTrigger className="w-48">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="everyone">Everyone</SelectItem>
-                  <SelectItem value="staff_only">Staff Only</SelectItem>
-                  <SelectItem value="connections">Connections</SelectItem>
-                  <SelectItem value="nobody">Nobody</SelectItem>
+                  <SelectItem value="staff_only">Teams / Coaches / Staff Only</SelectItem>
+                  <SelectItem value="private">Only Me</SelectItem>
                 </SelectContent>
               </Select>
             </div>

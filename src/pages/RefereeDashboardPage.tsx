@@ -1,12 +1,25 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, CalendarDays, CheckCircle2, Clock3, ShieldCheck, XCircle } from "lucide-react";
+import { ArrowLeft, BadgeCheck, CalendarDays, CheckCircle2, Clock3, ShieldAlert, ShieldCheck, Upload, XCircle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
-import { fetchRefereeClaimsForUser, refereeRoleLabel, RefereeMatchClaim, removeRefereeMatchAssignment } from "@/lib/referees";
+import {
+  REFEREE_PROOF_ACCEPT,
+  RefereeMatchClaim,
+  RefereeVerificationState,
+  fetchRefereeClaimsForUser,
+  fetchRefereeVerification,
+  refereeRoleLabel,
+  refereeVerificationLabel,
+  removeRefereeMatchAssignment,
+  resubmitRefereeCertification,
+  uploadRefereeCertification,
+  validateRefereeProofFile,
+} from "@/lib/referees";
 import { formatMatchDateTime } from "@/lib/matches";
 
 interface RefereeProfileDetails {
@@ -38,6 +51,9 @@ const RefereeDashboardPage = () => {
   const [details, setDetails] = useState<RefereeProfileDetails | null>(null);
   const [claims, setClaims] = useState<RefereeMatchClaim[]>([]);
   const [leavingClaimId, setLeavingClaimId] = useState<string | null>(null);
+  const [verification, setVerification] = useState<RefereeVerificationState | null>(null);
+  const [replacementProofFile, setReplacementProofFile] = useState<File | null>(null);
+  const [submittingProof, setSubmittingProof] = useState(false);
 
   const isRefereeAccount = profile?.account_category === "referee" || profile?.account_role === "referee" || profile?.role === "referee";
 
@@ -54,7 +70,7 @@ const RefereeDashboardPage = () => {
     const loadDashboard = async () => {
       if (!user?.id) return;
       setLoading(true);
-      const [profileRes, claimsRes] = await Promise.all([
+      const [profileRes, claimsRes, verificationRes] = await Promise.all([
         (supabase as any)
           .from("profiles")
           .select(
@@ -63,15 +79,42 @@ const RefereeDashboardPage = () => {
           .eq("user_id", user.id)
           .maybeSingle(),
         fetchRefereeClaimsForUser(user.id),
+        fetchRefereeVerification(user.id),
       ]);
 
       setDetails(profileRes.data || null);
       setClaims(claimsRes.data);
+      setVerification(verificationRes);
       setLoading(false);
     };
 
     loadDashboard();
   }, [user?.id]);
+
+  const handleSubmitReplacementProof = async () => {
+    if (!user?.id || !replacementProofFile) return;
+    const validationError = validateRefereeProofFile(replacementProofFile);
+    if (validationError) {
+      toast({ title: "Certification upload", description: validationError, variant: "destructive" });
+      return;
+    }
+
+    setSubmittingProof(true);
+    try {
+      const proofPath = await uploadRefereeCertification(user.id, replacementProofFile);
+      const { error } = await resubmitRefereeCertification(proofPath);
+      if (error) throw error;
+      toast({
+        title: "Certification submitted",
+        description: "Your application is back in the Footy Status verification queue.",
+      });
+      setReplacementProofFile(null);
+      setVerification(await fetchRefereeVerification(user.id));
+    } catch (error: any) {
+      toast({ title: "Could not submit certification", description: error.message, variant: "destructive" });
+    }
+    setSubmittingProof(false);
+  };
 
   const handleLeaveMatch = async (claim: RefereeMatchClaim) => {
     const confirmed = window.confirm(
@@ -179,6 +222,16 @@ const RefereeDashboardPage = () => {
             <div>
               <h1 className="text-xl font-bold">{details?.full_name || "Referee Dashboard"}</h1>
               <p className="text-sm text-white/75">{details?.referee_certification_level || "Certification level not set"}</p>
+              <span className={`mt-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${
+                verification?.status === "verified"
+                  ? "bg-green-500/90 text-white"
+                  : verification?.status === "rejected"
+                    ? "bg-red-500/90 text-white"
+                    : "bg-white/20 text-white"
+              }`}>
+                {verification?.status === "verified" ? <BadgeCheck className="h-3.5 w-3.5" /> : <ShieldAlert className="h-3.5 w-3.5" />}
+                {refereeVerificationLabel(verification?.status)}
+              </span>
             </div>
           </div>
           <div className="mt-4 grid grid-cols-3 gap-2 text-center text-sm">
@@ -195,6 +248,53 @@ const RefereeDashboardPage = () => {
               <p className="text-white/75">Denied</p>
             </div>
           </div>
+        </section>
+
+        <section className="rounded-xl border border-border bg-card p-4">
+          <div className="mb-3 flex items-center gap-2">
+            <ShieldCheck className="h-5 w-5 text-navy" />
+            <h2 className="text-sm font-bold tracking-wide text-navy">VERIFICATION STATUS</h2>
+          </div>
+          {verification?.status === "verified" ? (
+            <div className="rounded-lg border border-green-500/40 bg-green-500/10 p-3 text-sm">
+              <p className="flex items-center gap-2 font-semibold text-foreground">
+                <BadgeCheck className="h-4 w-4 text-green-600" /> Verified Referee
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                Your referee certification has been verified by Footy Status. All referee fixture features are unlocked.
+              </p>
+            </div>
+          ) : verification?.status === "revision_requested" ? (
+            <div className="space-y-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+              <p className="font-semibold text-foreground">Revision Required</p>
+              {verification.note ? (
+                <p className="text-muted-foreground">Footy Status note: {verification.note}</p>
+              ) : null}
+              <p className="text-muted-foreground">
+                Upload a replacement certification and your application returns to the verification queue automatically.
+              </p>
+              <Input type="file" accept={REFEREE_PROOF_ACCEPT} onChange={(e) => setReplacementProofFile(e.target.files?.[0] || null)} />
+              <Button size="sm" className="w-full" onClick={handleSubmitReplacementProof} disabled={!replacementProofFile || submittingProof}>
+                <Upload className="mr-2 h-4 w-4" />
+                {submittingProof ? "Submitting..." : "Submit replacement certification"}
+              </Button>
+            </div>
+          ) : verification?.status === "rejected" ? (
+            <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm">
+              <p className="font-semibold text-foreground">Verification Denied</p>
+              {verification.note ? <p className="mt-1 text-muted-foreground">Footy Status note: {verification.note}</p> : null}
+              <p className="mt-1 text-muted-foreground">
+                Your account stays active, but referee fixture features remain locked. Contact Footy Status support if you believe this is a mistake.
+              </p>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm">
+              <p className="font-semibold text-foreground">Pending Verification</p>
+              <p className="mt-1 text-muted-foreground">
+                Footy Status is reviewing your referee certification. Referee fixture features unlock once you are verified.
+              </p>
+            </div>
+          )}
         </section>
 
         <section className="rounded-xl border border-border bg-card p-4">

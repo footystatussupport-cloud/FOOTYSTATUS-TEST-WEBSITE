@@ -36,14 +36,18 @@ import {
 } from "@/lib/matches";
 import {
   fetchRefereeClaimsForMatch,
+  fetchRefereeVerification,
   refereeRoleLabel,
+  refereeVerificationLabel,
   RefereeMatchClaim,
   RefereeMatchRole,
+  RefereeVerificationState,
   removeRefereeMatchAssignment,
   reviewRefereeMatchClaim,
   submitRefereeMatchClaim,
   updateRefereeMatchClaim,
 } from "@/lib/referees";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { isFootyStatusSuperAdminEmail } from "@/lib/superAdmin";
 
 const initialResultForm = {
@@ -92,6 +96,8 @@ const MatchDetails = () => {
   const [removingFilmLinkId, setRemovingFilmLinkId] = useState<string | null>(null);
   const [refereeClaims, setRefereeClaims] = useState<RefereeMatchClaim[]>([]);
   const [showRefereeClaimForm, setShowRefereeClaimForm] = useState(false);
+  const [refereeVerification, setRefereeVerification] = useState<RefereeVerificationState | null>(null);
+  const [showVerificationRequiredDialog, setShowVerificationRequiredDialog] = useState(false);
   const [refereeClaimRole, setRefereeClaimRole] = useState<RefereeMatchRole>("main_referee");
   const [refereeClaimPublicName, setRefereeClaimPublicName] = useState(true);
   const [refereeClaimProofFile, setRefereeClaimProofFile] = useState<File | null>(null);
@@ -113,6 +119,15 @@ const MatchDetails = () => {
     return approvedMainReferees >= 1 && approvedAssistantReferees >= 2;
   }, [approvedRefereeClaims]);
   const canRequestRefereeSpot = isRefereeAccount && (!refereeSpotsFilled || Boolean(ownRefereeClaim));
+  const isVerifiedReferee = refereeVerification?.status === "verified";
+
+  useEffect(() => {
+    if (!isRefereeAccount || !user?.id) {
+      setRefereeVerification(null);
+      return;
+    }
+    fetchRefereeVerification(user.id).then(setRefereeVerification);
+  }, [isRefereeAccount, user?.id]);
   const canUploadRefereeReports = useMemo(() => {
     if (!match || !user?.id) return false;
     return adminContext.isMatchAdmin || match.referee_user_id === user.id || ownRefereeClaim?.status === "approved";
@@ -251,6 +266,13 @@ const MatchDetails = () => {
   };
 
   const handleSubmitRefereeClaim = async () => {
+    // Verification is also enforced in the database; this guard just gives a
+    // clear explanation before anything is submitted.
+    if (!isVerifiedReferee) {
+      setShowVerificationRequiredDialog(true);
+      return;
+    }
+
     if (!id || !user?.id || !refereeClaimProofFile) {
       toast({ title: "Proof required", description: "Upload proof that you are assigned to ref this match.", variant: "destructive" });
       return;
@@ -286,6 +308,10 @@ const MatchDetails = () => {
   };
 
   const handleUpdateRefereePreference = async () => {
+    if (!isVerifiedReferee) {
+      setShowVerificationRequiredDialog(true);
+      return;
+    }
     if (!ownRefereeClaim || !id || !user?.id) return;
     setSubmittingRefereeClaim(true);
     const { error } = await updateRefereeMatchClaim({
@@ -583,7 +609,16 @@ const MatchDetails = () => {
               <p className="text-sm text-muted-foreground">Approved referee assignments appear here.</p>
             </div>
             {canRequestRefereeSpot ? (
-              <Button size="sm" onClick={() => setShowRefereeClaimForm((prev) => !prev)}>
+              <Button
+                size="sm"
+                onClick={() => {
+                  if (!isVerifiedReferee) {
+                    setShowVerificationRequiredDialog(true);
+                    return;
+                  }
+                  setShowRefereeClaimForm((prev) => !prev);
+                }}
+              >
                 I am reffing this game
               </Button>
             ) : null}
@@ -651,7 +686,20 @@ const MatchDetails = () => {
             </div>
           ) : null}
 
-          {showRefereeClaimForm && canRequestRefereeSpot ? (
+          {isRefereeAccount && !isVerifiedReferee ? (
+            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+              <p className="font-semibold text-foreground">Referee verification required</p>
+              <p className="mt-1 text-muted-foreground">
+                Only Footy Status Verified Referees can request or manage referee fixtures. Current status:{" "}
+                <span className="font-semibold">{refereeVerificationLabel(refereeVerification?.status)}</span>
+              </p>
+              <Button size="sm" variant="outline" className="mt-2" onClick={() => navigate("/referee")}>
+                View Verification Status
+              </Button>
+            </div>
+          ) : null}
+
+          {showRefereeClaimForm && canRequestRefereeSpot && isVerifiedReferee ? (
             <div className="space-y-3 rounded-xl border border-border p-3">
               <div>
                 <Label>What type of referee are you?</Label>
@@ -706,6 +754,35 @@ const MatchDetails = () => {
             </div>
           ) : null}
         </section>
+
+        <Dialog open={showVerificationRequiredDialog} onOpenChange={setShowVerificationRequiredDialog}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Referee Verification Required</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3 text-sm">
+              <p className="text-muted-foreground">
+                To protect clubs, teams, and players, only Footy Status Verified Referees may request or manage referee
+                fixtures.
+              </p>
+              <p className="text-muted-foreground">
+                Please submit your referee certification and wait for approval before using referee match features.
+              </p>
+              <p>
+                Status: <span className="font-semibold">{refereeVerificationLabel(refereeVerification?.status)}</span>
+              </p>
+              {refereeVerification?.note ? (
+                <p className="text-muted-foreground">Footy Status note: {refereeVerification.note}</p>
+              ) : null}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowVerificationRequiredDialog(false)}>
+                Close
+              </Button>
+              <Button onClick={() => navigate("/referee")}>View Verification Status</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {match.home_possession != null || match.away_possession != null ? (
           <section className="rounded-xl border border-border bg-card p-4">

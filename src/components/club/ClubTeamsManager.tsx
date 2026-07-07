@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import CoachSelector from "@/components/club/CoachSelector";
 
 export interface OfferedClubTeam {
   id?: string;
@@ -14,6 +15,8 @@ export interface OfferedClubTeam {
   season?: string;
   level?: string;
   coach_name?: string;
+  /** Linked Coach account (source of truth when set). */
+  head_coach_user_id?: string | null;
   status?: "active" | "inactive" | "archived";
   team_type?: "club" | "school";
   school_level?: "varsity" | "junior_varsity" | "prep" | "middle_school" | null;
@@ -135,31 +138,20 @@ const ClubTeamsManager = ({ value, onChange, disabled, onRemoveSavedTeam }: Club
                   disabled={disabled}
                 />
               </div>
-              <div className="space-y-2">
-                <Label>Status</Label>
-                <Select
-                  value={team.status || "active"}
-                  onValueChange={(next) => updateTeam(index, { status: next as OfferedClubTeam["status"] })}
-                  disabled={disabled}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="active">Active</SelectItem>
-                    <SelectItem value="inactive">Inactive</SelectItem>
-                    <SelectItem value="archived">Archived</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
             </div>
 
             <div className="space-y-2">
-              <Label>Coach</Label>
-              <Input
-                value={team.coach_name || ""}
-                onChange={(e) => updateTeam(index, { coach_name: e.target.value })}
-                placeholder="Head coach name"
+              <Label>Head Coach</Label>
+              <CoachSelector
+                headCoachUserId={team.head_coach_user_id}
+                coachName={team.coach_name || ""}
+                onSelectCoach={(coach) =>
+                  updateTeam(index, {
+                    head_coach_user_id: coach?.user_id || null,
+                    coach_name: coach?.full_name || (coach ? team.coach_name : ""),
+                  })
+                }
+                onCoachNameChange={(name) => updateTeam(index, { coach_name: name, head_coach_user_id: null })}
                 disabled={disabled}
               />
             </div>

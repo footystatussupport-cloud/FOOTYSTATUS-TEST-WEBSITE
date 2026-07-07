@@ -10,9 +10,6 @@ export interface ParentProfileDetails {
   emergency_contact: string | null;
   child_full_name: string | null;
   child_where_plays: string | null;
-  child_team: string | null;
-  child_league: string | null;
-  child_age_group: string | null;
   parent_notes: string | null;
 }
 
@@ -34,6 +31,9 @@ export interface ParentPlayerLink {
     team_name: string | null;
     age_birth_year: string | null;
     position: string | null;
+    // Live values from the linked player account (single source of truth).
+    current_league_name?: string | null;
+    current_age_group?: string | null;
   } | null;
 }
 
@@ -92,10 +92,33 @@ export const fetchParentLinksForParentUser = async (userId: string) => {
     .neq("status", "removed")
     .order("created_at", { ascending: false });
 
-  return (data || []).map((link: any) => ({
-    ...link,
-    player: link.player_profiles || null,
-  })) as ParentPlayerLink[];
+  const links = (data || []) as any[];
+
+  // Pull the linked players' live team / league / age group from the public
+  // player view so the parent account always reflects the player's current
+  // information (the player account is the single source of truth).
+  const playerProfileIds = links
+    .map((link) => link.player_profile_id)
+    .filter(Boolean);
+
+  let liveById: Record<string, any> = {};
+  if (playerProfileIds.length) {
+    const { data: liveRows } = await (supabase as any)
+      .from("player_profiles_public")
+      .select("id, team, team_name, current_league_name, current_age_group")
+      .in("id", playerProfileIds);
+    liveById = Object.fromEntries((liveRows || []).map((row: any) => [row.id, row]));
+  }
+
+  return links.map((link: any) => {
+    const live = liveById[link.player_profile_id];
+    return {
+      ...link,
+      player: link.player_profiles
+        ? { ...link.player_profiles, ...(live || {}) }
+        : live || null,
+    };
+  }) as ParentPlayerLink[];
 };
 
 export const fetchParentLinksForPlayerUser = async (userId: string) => {

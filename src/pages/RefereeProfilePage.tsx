@@ -21,6 +21,7 @@ interface PublicRefereeProfile {
   referee_availability: string | null;
   referee_accolades: string | null;
   referee_profile_public: boolean | null;
+  referee_verification_status?: string | null;
 }
 
 const DetailRow = ({ icon: Icon, label, value }: { icon: typeof Shield; label: string; value?: string | number | null }) => {
@@ -51,7 +52,7 @@ const RefereeProfilePage = () => {
       const { data } = await (supabase as any)
         .from("profiles")
         .select(
-          "user_id, full_name, avatar_url, bio, referee_certification_level, referee_certifying_organization, referee_years_experience, referee_main_experience, referee_assistant_experience, referee_leagues_tournaments, referee_availability, referee_accolades, referee_profile_public"
+          "user_id, full_name, avatar_url, bio, referee_certification_level, referee_certifying_organization, referee_years_experience, referee_main_experience, referee_assistant_experience, referee_leagues_tournaments, referee_availability, referee_accolades, referee_profile_public, referee_verification_status"
         )
         .eq("user_id", userId)
         .eq("account_category", "referee")
@@ -113,6 +114,11 @@ const RefereeProfilePage = () => {
             <div className="w-full">
               <h1 className="mx-auto max-w-[14rem] break-words text-center text-2xl font-bold">{profile.full_name || "Referee"}</h1>
               <p className="text-sm text-white/75">{profile.referee_certification_level || "Referee"}</p>
+              {profile.referee_verification_status === "verified" ? (
+                <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-green-500/90 px-2 py-0.5 text-xs font-semibold text-white">
+                  <Shield className="h-3.5 w-3.5" /> Footy Status Verified Referee
+                </span>
+              ) : null}
             </div>
           </div>
         </section>
@@ -127,7 +133,15 @@ const RefereeProfilePage = () => {
           <DetailRow icon={Trophy} label="Leagues / Tournaments" value={profile.referee_leagues_tournaments} />
           <DetailRow icon={Calendar} label="Availability" value={profile.referee_availability} />
           <DetailRow icon={Star} label="Accolades / Notable Matches" value={profile.referee_accolades} />
-          <DetailRow icon={User} label="Bio" value={profile.bio} />
+          {profile.bio ? (
+            <div className="flex items-center gap-3 p-4">
+              <User className="h-5 w-5 text-muted-foreground" />
+              <div>
+                <p className="text-sm text-muted-foreground">Bio</p>
+                <p className="text-sm font-normal text-foreground whitespace-pre-wrap">{profile.bio}</p>
+              </div>
+            </div>
+          ) : null}
         </section>
       </main>
     </div>

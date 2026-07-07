@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { normalizeUsername } from "@/lib/usernames";
 
 export type AdminEditSection = "profile" | "stats" | "clips" | "strikes" | "pro" | "teams" | "parents" | "account";
 
@@ -161,7 +162,16 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
 
   const saveProfile = async () => {
     if (editorKind === "header") {
-      await patch("profiles", { full_name: form.full_name, username: form.username || null, bio: form.bio || null, avatar_url: form.avatar_url || null, account_role: form.account_role });
+      // Never send a null/blank username: leaving the field empty preserves
+      // the account's existing username instead of tripping validation.
+      const nextUsername = normalizeUsername(form.username);
+      await patch("profiles", {
+        full_name: form.full_name,
+        ...(nextUsername ? { username: nextUsername } : {}),
+        bio: form.bio || null,
+        avatar_url: form.avatar_url || null,
+        account_role: form.account_role,
+      });
       return;
     }
     if (editorKind === "contacts") {

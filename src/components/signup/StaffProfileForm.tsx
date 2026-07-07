@@ -4,8 +4,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { COACHING_ROLE_OPTIONS } from "@/lib/coachStaffTeams";
-import { normalizeUsername } from "@/lib/usernames";
+import { COACHING_ROLE_OPTIONS, TEAM_STAFF_POSITION_OPTIONS } from "@/lib/coachStaffTeams";
+import { USERNAME_MAX_LENGTH, normalizeUsername } from "@/lib/usernames";
+import { UsernameAvailabilityHint, useUsernameAvailability } from "@/components/UsernameAvailability";
 import { supabase } from "@/integrations/supabase/client";
 import { Search, X } from "lucide-react";
 
@@ -22,18 +23,7 @@ interface CoachingTeamSelection {
   label: string;
 }
 
-const STAFF_ROLE_OPTIONS = [
-  "Club Director",
-  "Academy Director",
-  "Technical Director",
-  "Operations Director",
-  "Team Manager",
-  "Team Administrator",
-  "Team Coordinator",
-  "Media Staff",
-  "Equipment Manager",
-  "Other Team Staff",
-] as const;
+const STAFF_ROLE_OPTIONS = TEAM_STAFF_POSITION_OPTIONS;
 
 interface StaffProfileData {
   fullName: string;
@@ -121,6 +111,8 @@ const StaffProfileForm = ({ email, staffType, onSubmit, onBack, loading }: Staff
       contactEmail: prev.contactEmail || email,
     }));
   }, [email]);
+
+  const usernameAvailability = useUsernameAvailability(formData.username);
 
   const handleChange = (field: keyof StaffProfileData, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -266,11 +258,13 @@ const StaffProfileForm = ({ email, staffType, onSubmit, onBack, loading }: Staff
             onChange={(e) => handleChange("username", normalizeUsername(e.target.value))}
             placeholder="coachsmith"
             required
+            maxLength={USERNAME_MAX_LENGTH}
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
             className="border-2 focus:border-navy"
           />
+          <UsernameAvailabilityHint state={usernameAvailability} />
         </div>
 
         <div className="col-span-2 space-y-2">
@@ -644,7 +638,7 @@ const StaffProfileForm = ({ email, staffType, onSubmit, onBack, loading }: Staff
         <Button
           type="submit"
           className="flex-1 bg-gradient-to-r from-navy to-primary hover:from-navy-light hover:to-primary"
-          disabled={loading}
+          disabled={loading || !usernameAvailability.canSubmit}
         >
           {loading ? "Creating..." : "Create Account"}
         </Button>

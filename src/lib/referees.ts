@@ -2,6 +2,120 @@ import { supabase } from "@/integrations/supabase/client";
 
 export type RefereeMatchRole = "main_referee" | "assistant_referee" | "fourth_official" | "other";
 export type RefereeClaimStatus = "pending" | "approved" | "denied";
+export type RefereeVerificationStatus = "pending" | "verified" | "revision_requested" | "rejected";
+
+export interface RefereeVerificationState {
+  status: RefereeVerificationStatus;
+  note: string | null;
+  submitted_at: string | null;
+  certification_proof_url: string | null;
+}
+
+export const REFEREE_PROOF_ACCEPT = ".pdf,.jpg,.jpeg,.png";
+export const REFEREE_PROOF_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
+
+const REFEREE_PROOF_ALLOWED_TYPES = ["application/pdf", "image/jpeg", "image/jpg", "image/png"];
+const REFEREE_PROOF_ALLOWED_EXTENSIONS = ["pdf", "jpg", "jpeg", "png"];
+
+/** Returns an error message when the certification file is not acceptable. */
+export const validateRefereeProofFile = (file: File | null | undefined): string | null => {
+  if (!file) return "Proof of referee certification is required before creating a Referee account.";
+  const extension = (file.name.split(".").pop() || "").toLowerCase();
+  if (!REFEREE_PROOF_ALLOWED_TYPES.includes(file.type) && !REFEREE_PROOF_ALLOWED_EXTENSIONS.includes(extension)) {
+    return "Unsupported file type. Please upload a PDF, JPG, JPEG, or PNG.";
+  }
+  if (file.size > REFEREE_PROOF_MAX_BYTES) {
+    return "The file is too large. Please upload a document under 10 MB.";
+  }
+  return null;
+};
+
+export const refereeVerificationLabel = (status?: string | null) => {
+  switch (status) {
+    case "verified":
+      return "Verified Referee";
+    case "revision_requested":
+      return "Revision Required";
+    case "rejected":
+      return "Verification Denied";
+    default:
+      return "Pending Verification";
+  }
+};
+
+export const fetchRefereeVerification = async (userId: string): Promise<RefereeVerificationState | null> => {
+  const { data, error } = await (supabase as any)
+    .from("profiles")
+    .select("referee_verification_status, referee_verification_note, referee_verification_submitted_at, referee_certification_proof_url")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error || !data) return null;
+
+  return {
+    status: (data.referee_verification_status || "pending") as RefereeVerificationStatus,
+    note: data.referee_verification_note || null,
+    submitted_at: data.referee_verification_submitted_at || null,
+    certification_proof_url: data.referee_certification_proof_url || null,
+  };
+};
+
+export const uploadRefereeCertification = async (userId: string, file: File) => {
+  const extension = file.name.split(".").pop() || "file";
+  const path = `${userId}/certification-${Date.now()}.${extension}`;
+  const uploadRes = await supabase.storage.from("referee-proof").upload(path, file, { upsert: true });
+  if (uploadRes.error) throw uploadRes.error;
+  return path;
+};
+
+export const resubmitRefereeCertification = (proofPath: string) =>
+  (supabase as any).rpc("resubmit_referee_certification", { _proof_path: proofPath });
+
+export interface RefereeVerificationApplication {
+  user_id: string;
+  avatar_url: string | null;
+  full_name: string | null;
+  username: string | null;
+  email: string | null;
+  phone: string | null;
+  location: string | null;
+  certification_level: string | null;
+  license_number: string | null;
+  certifying_organization: string | null;
+  years_experience: number | null;
+  main_experience: string | null;
+  assistant_experience: string | null;
+  leagues_tournaments: string | null;
+  availability: string | null;
+  accolades: string | null;
+  bio: string | null;
+  certification_proof_url: string | null;
+  verification_status: string | null;
+  verification_note: string | null;
+  submitted_at: string | null;
+}
+
+export const fetchRefereeVerificationQueue = async () => {
+  const { data, error } = await (supabase as any).rpc("get_referee_verification_queue");
+  return { data: (data || []) as RefereeVerificationApplication[], error };
+};
+
+export const reviewRefereeVerification = (payload: {
+  refereeUserId: string;
+  action: "verify" | "request_revision" | "reject";
+  note?: string | null;
+}) =>
+  (supabase as any).rpc("review_referee_verification", {
+    _referee_user_id: payload.refereeUserId,
+    _action: payload.action,
+    _note: payload.note || null,
+  });
+
+export const getRefereeProofSignedUrl = async (path: string) => {
+  const { data, error } = await supabase.storage.from("referee-proof").createSignedUrl(path, 60 * 60);
+  if (error) return null;
+  return data?.signedUrl || null;
+};
 
 export interface RefereeMatchClaim {
   id: string;

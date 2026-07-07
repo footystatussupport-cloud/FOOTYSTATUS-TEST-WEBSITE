@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import RefereeVerificationQueue from "@/components/admin/RefereeVerificationQueue";
 
 type AccountResult = {
   user_id: string;
@@ -168,6 +169,8 @@ const MasterAdminConsole = () => {
   };
 
   return (
+    <>
+    <RefereeVerificationQueue />
     <section className="mb-6 rounded-2xl border border-amber-400/50 bg-card p-4 shadow-sm">
       <div className="mb-4 flex items-center gap-3">
         <span className="rounded-full bg-amber-400 p-2 text-slate-950"><ShieldCheck className="h-5 w-5" /></span>
@@ -287,6 +290,7 @@ const MasterAdminConsole = () => {
         </DialogContent>
       </Dialog>
     </section>
+    </>
   );
 };
 
