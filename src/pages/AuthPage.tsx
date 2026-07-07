@@ -584,6 +584,11 @@ const AuthPage = () => {
   const [searchParams] = useSearchParams();
   const mode = searchParams.get("mode");
   const authReason = searchParams.get("reason");
+  const redirectToParam = searchParams.get("redirectTo");
+  const authRedirectTo =
+    redirectToParam && redirectToParam.startsWith("/") && !redirectToParam.startsWith("//")
+      ? redirectToParam
+      : "/";
   const [isLogin, setIsLogin] = useState(mode !== "signup");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -823,7 +828,7 @@ const AuthPage = () => {
         if (onboardingComplete === false) {
           navigate("/auth?mode=signup", { replace: true });
         } else {
-          navigate("/");
+          navigate(authRedirectTo);
         }
       }
     };
@@ -862,7 +867,7 @@ const AuthPage = () => {
       });
       if (error) throw error;
       toast({ title: "Welcome back!", description: "Successfully logged in." });
-      navigate("/");
+      navigate(authRedirectTo);
     } catch (error: any) {
       toast({ title: "Error", description: getAuthErrorMessage(error), variant: "destructive" });
     } finally {
@@ -936,7 +941,7 @@ const AuthPage = () => {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: buildAppUrl("/"),
+          redirectTo: buildAppUrl(`/auth?mode=signup&redirectTo=${encodeURIComponent(authRedirectTo)}`),
           queryParams: {
             prompt: "select_account",
             include_granted_scopes: "true",
@@ -1066,7 +1071,7 @@ const AuthPage = () => {
           email: parsed.data.email,
           password: parsed.data.password,
           options: {
-            emailRedirectTo: buildAppUrl("/"),
+            emailRedirectTo: buildAppUrl(authRedirectTo),
             data: {
               full_name: profileData.fullName || profileData.clubName || profileData.schoolName || "",
               username: normalizedUsername,
@@ -1811,7 +1816,7 @@ const AuthPage = () => {
 
       toast({ title: "Welcome to Footy Status!", description: "Your account has been created successfully." });
       clearSignupFlow();
-      navigate("/", { replace: true });
+      navigate(authRedirectTo, { replace: true });
     } catch (error) {
       console.error("Signup error:", {
         error,
@@ -1837,7 +1842,7 @@ const AuthPage = () => {
           },
         }));
         clearSignupFlow();
-        navigate("/", { replace: true });
+        navigate(authRedirectTo, { replace: true });
         return;
       }
 
@@ -1894,7 +1899,7 @@ const AuthPage = () => {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: buildAppUrl("/"),
+          redirectTo: buildAppUrl(authRedirectTo),
           queryParams: {
             prompt: "select_account",
             include_granted_scopes: "true",

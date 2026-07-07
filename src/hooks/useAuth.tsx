@@ -12,6 +12,7 @@ interface AuthContextType {
     account_role: string | null;
     role: string | null;
     player_gender: "boy" | "girl" | null;
+    next_up_gender_preference: "both" | "boy" | "girl" | null;
   } | null;
   loading: boolean;
   refreshProfile: () => Promise<void>;
@@ -39,14 +40,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
       let { data, error } = await (supabase as any)
         .from("profiles")
-        .select("user_id, account_category, account_type, account_role, role")
+        .select("user_id, account_category, account_type, account_role, role, next_up_gender_preference")
         .eq("user_id", nextUser.id)
         .maybeSingle();
 
       if (error?.message?.includes("account_type")) {
         const fallback = await (supabase as any)
           .from("profiles")
-          .select("user_id, account_category, account_role, role")
+          .select("user_id, account_category, account_role, role, next_up_gender_preference")
           .eq("user_id", nextUser.id)
           .maybeSingle();
         data = fallback.data ? { ...fallback.data, account_type: null } : null;
@@ -92,6 +93,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
               account_role: resolvedAccountRole,
               role: data.role,
               player_gender: playerProfile?.player_gender || null,
+              next_up_gender_preference: data.next_up_gender_preference || "both",
             }
           : null;
 

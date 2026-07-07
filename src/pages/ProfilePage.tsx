@@ -470,7 +470,7 @@ interface EditFormState extends Partial<ProfileData> {
 const MAX_FREE_CLIPS = FREE_VISIBLE_CLIP_LIMIT;
 const MAX_FREE_CLIP_DURATION_SECONDS = 25;
 const MAX_PRO_CLIP_DURATION_SECONDS = 45;
-const FREE_CLIP_DURATION_ERROR = "Free accounts can upload clips up to 25 seconds.";
+const FREE_CLIP_DURATION_ERROR = "Free accounts can upload Next Up Clips up to 25 seconds. Please trim your clip to 25 seconds or less.";
 const FREE_CLIP_COUNT_ERROR = "Free accounts can only have 3 active clips. Upgrade to Pro or delete a clip to upload another.";
 const PRO_CLIP_DURATION_ERROR = "Pro accounts can upload clips up to 45 seconds.";
 const CONTACT_LABELS: Record<keyof ContactFormState, string> = {
@@ -823,6 +823,20 @@ const ProfilePage = () => {
           ? "referee"
         : nextProfile?.role || null);
 
+  const roundClipSeconds = (value: number) => Math.round(Math.max(0, value) * 100) / 100;
+  const roundTrimStep = (value: number) => Math.round(Math.max(0, value) * 10) / 10;
+  const formatClipSeconds = (value: number) => {
+    const rounded = roundClipSeconds(value);
+    return Number.isInteger(rounded) ? `${rounded}` : rounded.toFixed(2).replace(/0$/, "");
+  };
+  const getClipSaveErrorMessage = (message?: string | null) => {
+    const raw = message || "";
+    if (raw.includes("invalid input syntax for type integer") || raw.toLowerCase().includes("duration")) {
+      return "We couldn't save the clip duration correctly. Please try again. If this keeps happening, make sure the latest database SQL has been applied.";
+    }
+    return raw || "We couldn't save your clip. Please try again.";
+  };
+
   const resolvedAccountCategory = normalizeAccountCategory(profile);
   const resolvedAccountRole = normalizeAccountRole(profile);
 
@@ -844,7 +858,7 @@ const ProfilePage = () => {
   const isActivePro = getIsPro(profile);
   const maxClipDurationSeconds = isActivePro ? MAX_PRO_CLIP_DURATION_SECONDS : MAX_FREE_CLIP_DURATION_SECONDS;
   const getClipDurationLimitMessage = () => (isActivePro ? PRO_CLIP_DURATION_ERROR : FREE_CLIP_DURATION_ERROR);
-  const editedClipDurationSeconds = Math.max(0, Math.ceil((clipTrimEnd - clipTrimStart) * 100) / 100);
+  const editedClipDurationSeconds = roundClipSeconds(clipTrimEnd - clipTrimStart);
   const activeClipCount = clips.filter((clip) => clip.visibility !== "inactive").length;
   const canUploadAnotherActiveClip = isActivePro || activeClipCount < MAX_FREE_CLIPS;
   const daysRemaining = getDaysRemaining(profile);
@@ -3667,25 +3681,22 @@ const ProfilePage = () => {
 
     try {
       const duration = await getVideoDuration(file);
-      const safeDurationSeconds = Math.ceil(duration * 100) / 100;
-
-      if (safeDurationSeconds > maxClipDurationSeconds) {
-        toast({
-          title: "Clip is too long",
-          description: getClipDurationLimitMessage(),
-          variant: "destructive",
-        });
-        resetSelectedClip();
-        return;
-      }
+      const safeDurationSeconds = roundClipSeconds(duration);
+      const initialTrimEnd = roundClipSeconds(Math.min(safeDurationSeconds, maxClipDurationSeconds));
 
       setSelectedVideoFile(file);
       setSelectedVideoDuration(safeDurationSeconds);
       setClipTrimStart(0);
-      setClipTrimEnd(Math.min(safeDurationSeconds, maxClipDurationSeconds));
+      setClipTrimEnd(initialTrimEnd);
       setClipPlaybackVolume(1);
       setClipFitMode("cover");
-      toast({ title: "Video ready", description: "Trim it, adjust volume, choose sizing, then post." });
+      toast({
+        title: "Video ready",
+        description:
+          safeDurationSeconds > maxClipDurationSeconds
+            ? `Trim your clip to ${maxClipDurationSeconds} seconds or less before posting.`
+            : "Trim it, adjust volume, choose sizing, then post.",
+      });
     } catch (durationError: any) {
       toast({ title: "Video error", description: durationError.message, variant: "destructive" });
       resetSelectedClip();
@@ -3720,7 +3731,7 @@ const ProfilePage = () => {
     }
 
     if (editedClipDurationSeconds <= 0) {
-      toast({ title: "Trim needed", description: "Choose at least 1 second of video.", variant: "destructive" });
+      toast({ title: "Trim needed", description: "Choose at least 0.1 seconds of video.", variant: "destructive" });
       return;
     }
 
@@ -3788,15 +3799,15 @@ const ProfilePage = () => {
         player_id: null,
         user_id: user.id,
         visibility: clipVisibility,
-        duration: Math.round(editedClipDurationSeconds * 100) / 100,
-        trim_start_seconds: Math.round(clipTrimStart * 100) / 100,
-        trim_end_seconds: Math.round(clipTrimEnd * 100) / 100,
+        duration: roundClipSeconds(editedClipDurationSeconds),
+        trim_start_seconds: roundClipSeconds(clipTrimStart),
+        trim_end_seconds: roundClipSeconds(clipTrimEnd),
         playback_volume: clipPlaybackVolume,
         fit_mode: clipFitMode,
       });
 
     if (insertError) {
-      toast({ title: "Error saving clip", description: insertError.message, variant: "destructive" });
+      toast({ title: "Error saving clip", description: getClipSaveErrorMessage(insertError.message), variant: "destructive" });
     } else {
       toast({ title: "Clip submitted for review", description: "Footy Status will review your video before it goes live." });
       setClipTitle("");
@@ -4495,7 +4506,7 @@ const ProfilePage = () => {
     if (editedClipDurationSeconds <= 0 || editedClipDurationSeconds > maxClipDurationSeconds) {
       toast({
         title: "Adjust clip length",
-        description: getClipDurationLimitMessage(),
+        description: editedClipDurationSeconds <= 0 ? "Choose at least 0.1 seconds of video." : getClipDurationLimitMessage(),
         variant: "destructive",
       });
       return;
@@ -6876,7 +6887,7 @@ const ProfilePage = () => {
                   <div className="space-y-4 rounded-lg border border-border p-3 text-sm text-muted-foreground">
                     <p className="font-medium text-foreground">{selectedVideoFile.name}</p>
                     {selectedVideoDuration !== null && (
-                      <p>Source: {Math.round(selectedVideoDuration)} seconds</p>
+                      <p>Source: {formatClipSeconds(selectedVideoDuration)} seconds</p>
                     )}
                     {selectedVideoPreviewUrl ? (
                       <div className="overflow-hidden rounded-lg border border-border bg-black">
@@ -6900,21 +6911,21 @@ const ProfilePage = () => {
                     ) : null}
                     <div className="rounded-lg bg-muted p-3 text-xs text-muted-foreground">
                       {isActivePro ? "Pro clips can be up to 45 seconds." : "Free clips can be up to 25 seconds."}
-                      <span className="ml-1 font-medium text-foreground">Selected: {editedClipDurationSeconds}s</span>
+                      <span className="ml-1 font-medium text-foreground">Selected: {formatClipSeconds(editedClipDurationSeconds)}s</span>
                     </div>
                     <div className="space-y-3">
                       <div className="space-y-2">
                         <div className="flex items-center justify-between text-xs">
                           <span>Start</span>
-                          <span>{Math.round(clipTrimStart)}s</span>
+                          <span>{formatClipSeconds(clipTrimStart)}s</span>
                         </div>
                         <Slider
                           min={0}
-                          max={Math.max(1, Math.floor(selectedVideoDuration || 1) - 1)}
-                          step={1}
+                          max={Math.max(0, roundTrimStep((selectedVideoDuration || 0) - 0.1))}
+                          step={0.1}
                           value={[clipTrimStart]}
                           onValueChange={(value) => {
-                            const nextStart = Math.min(value[0] || 0, Math.max(0, clipTrimEnd - 1));
+                            const nextStart = roundTrimStep(Math.min(value[0] || 0, Math.max(0, clipTrimEnd - 0.1)));
                             setClipTrimStart(nextStart);
                             if (clipPreviewVideoRef.current) {
                               clipPreviewVideoRef.current.currentTime = nextStart;
@@ -6925,15 +6936,15 @@ const ProfilePage = () => {
                       <div className="space-y-2">
                         <div className="flex items-center justify-between text-xs">
                           <span>End</span>
-                          <span>{Math.round(clipTrimEnd)}s</span>
+                          <span>{formatClipSeconds(clipTrimEnd)}s</span>
                         </div>
                         <Slider
-                          min={1}
-                          max={Math.max(1, Math.floor(selectedVideoDuration || 1))}
-                          step={1}
+                          min={0.1}
+                          max={Math.max(0.1, roundTrimStep(selectedVideoDuration || 0))}
+                          step={0.1}
                           value={[clipTrimEnd]}
                           onValueChange={(value) => {
-                            const nextEnd = Math.max(value[0] || 1, clipTrimStart + 1);
+                            const nextEnd = roundTrimStep(Math.max(value[0] || 0.1, clipTrimStart + 0.1));
                             setClipTrimEnd(nextEnd);
                           }}
                         />
@@ -8066,8 +8077,8 @@ const ProfilePage = () => {
             <p><span className="font-medium">Title:</span> {clipTitle}</p>
             {clipCaption && <p><span className="font-medium">Caption:</span> {clipCaption}</p>}
             {selectedVideoFile && <p><span className="font-medium">Video:</span> {selectedVideoFile.name}</p>}
-            {selectedVideoDuration !== null && <p><span className="font-medium">Edited length:</span> {editedClipDurationSeconds} seconds</p>}
-            <p><span className="font-medium">Trim:</span> {Math.round(clipTrimStart)}s to {Math.round(clipTrimEnd)}s</p>
+            {selectedVideoDuration !== null && <p><span className="font-medium">Edited length:</span> {formatClipSeconds(editedClipDurationSeconds)} seconds</p>}
+            <p><span className="font-medium">Trim:</span> {formatClipSeconds(clipTrimStart)}s to {formatClipSeconds(clipTrimEnd)}s</p>
             <p><span className="font-medium">Volume:</span> {Math.round(clipPlaybackVolume * 100)}%</p>
             <p><span className="font-medium">Sizing:</span> {clipFitMode === "cover" ? "Fill frame" : "Fit whole clip"}</p>
           </div>

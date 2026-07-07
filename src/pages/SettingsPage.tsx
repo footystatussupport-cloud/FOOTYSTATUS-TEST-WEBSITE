@@ -10,6 +10,7 @@ import { useSettings, type UserSettings } from "@/hooks/useSettings";
 import NotificationSettingsSection from "@/components/notifications/NotificationSettingsSection";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/useAuth";
 
 interface SettingItem {
   id: keyof UserSettings;
@@ -25,8 +26,31 @@ const SettingsPage = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { settings, updateSetting, loading } = useSettings();
+  const { user, profile, refreshProfile } = useAuth();
   const [clearingCache, setClearingCache] = useState(false);
   const [deletingAccount, setDeletingAccount] = useState(false);
+
+  const role = profile?.account_role || profile?.account_type || profile?.role;
+  const canUseNextUpGenderPreference = Boolean(
+    role &&
+      ["scout", "team_staff", "head_coach_assistant", "coach", "trainer", "academy_director", "team_club", "school_team"].includes(role)
+  );
+
+  const updateNextUpGenderPreference = async (value: "both" | "boy" | "girl") => {
+    if (!user?.id) return;
+    const { error } = await (supabase as any)
+      .from("profiles")
+      .update({ next_up_gender_preference: value })
+      .eq("user_id", user.id);
+
+    if (error) {
+      toast({ title: "Could not save preference", description: error.message, variant: "destructive" });
+      return;
+    }
+
+    await refreshProfile();
+    toast({ title: "Next Up preference saved", description: "Your scouting feed will use this filter." });
+  };
 
   const getAuthStorageEntries = (storage: Storage) =>
     Object.keys(storage)
@@ -261,6 +285,32 @@ const SettingsPage = () => {
         <NotificationSettingsSection />
         {renderSection('Privacy', privacySettings)}
         {renderSection('Content & Playback', contentSettings)}
+        {canUseNextUpGenderPreference ? (
+          <section className="mb-8">
+            <h2 className="text-lg font-semibold text-navy mb-2">Next Up Clips</h2>
+            <div className="bg-card border border-border rounded-xl px-4">
+              <div className="flex items-center justify-between py-4">
+                <div className="flex-1">
+                  <Label className="text-base font-medium">Next Up Clip Gender Preference</Label>
+                  <p className="text-sm text-muted-foreground">Choose which player clips appear in your scouting feed</p>
+                </div>
+                <Select
+                  value={profile?.next_up_gender_preference || "both"}
+                  onValueChange={(value) => updateNextUpGenderPreference(value as "both" | "boy" | "girl")}
+                >
+                  <SelectTrigger className="w-36">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="both">Both</SelectItem>
+                    <SelectItem value="girl">Girls Only</SelectItem>
+                    <SelectItem value="boy">Boys Only</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </section>
+        ) : null}
         {renderSection('Accessibility', accessibilitySettings)}
         {renderSection('Data & Storage', dataSettings)}
         {renderSection('Sound & Haptics', soundSettings)}

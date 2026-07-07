@@ -13,6 +13,7 @@ import {
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import ProBadge from "@/components/ProBadge";
 import { getIsPro } from "@/lib/subscriptions";
@@ -143,6 +144,27 @@ const reportReasons = [
   { value: "spam", label: "Misleading or Spam", description: "False information, spam, or scam content" },
 ];
 
+type NextUpGenderPreference = "both" | "boy" | "girl";
+
+const genderPreferenceLabels: Record<NextUpGenderPreference, string> = {
+  both: "Both",
+  boy: "Boys Only",
+  girl: "Girls Only",
+};
+
+const canUseScoutingGenderFilter = (profile?: {
+  account_category?: string | null;
+  account_role?: string | null;
+  account_type?: string | null;
+  role?: string | null;
+} | null) => {
+  const role = profile?.account_role || profile?.account_type || profile?.role;
+  return Boolean(
+    role &&
+      ["scout", "team_staff", "head_coach_assistant", "coach", "trainer", "academy_director", "team_club", "school_team"].includes(role)
+  );
+};
+
 const NextUpTab = () => {
   const [searchParams] = useSearchParams();
   const [clips, setClips] = useState<Clip[]>([]);
@@ -166,7 +188,9 @@ const NextUpTab = () => {
   const loadingMoreRef = useRef(false);
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { user } = useAuth();
+  const { user, profile, loading: authLoading, refreshProfile } = useAuth();
+  const canFilterByGender = canUseScoutingGenderFilter(profile);
+  const [genderPreference, setGenderPreference] = useState<NextUpGenderPreference>("both");
   const { settings } = useSettings();
   const clipIdFromUrl = searchParams.get("clip");
   const returnTo = searchParams.get("returnTo");
@@ -231,12 +255,21 @@ const NextUpTab = () => {
   }, []);
 
   const loadMoreClips = useCallback(async (reset = false) => {
+    if (!user) {
+      setClips([]);
+      setIsCaughtUp(false);
+      setIsLoadingMore(false);
+      return;
+    }
     if (loadingMoreRef.current || (!reset && isCaughtUp)) return;
     loadingMoreRef.current = true;
     setIsLoadingMore(true);
 
     try {
-      const { data, error } = await (supabase as any).rpc("get_next_up_feed", { _limit: 12 });
+      const { data, error } = await (supabase as any).rpc("get_next_up_feed", {
+        _limit: 12,
+        _gender_preference: canFilterByGender ? genderPreference : null,
+      });
       if (error) throw error;
       let rawClips = data || [];
       if (reset && clipIdFromUrl) {
@@ -279,20 +312,56 @@ const NextUpTab = () => {
       loadingMoreRef.current = false;
       setIsLoadingMore(false);
     }
-  }, [clipIdFromUrl, enrichClips, isCaughtUp, user?.id]);
+  }, [canFilterByGender, clipIdFromUrl, enrichClips, genderPreference, isCaughtUp, user]);
 
   useEffect(() => {
+    const savedPreference = profile?.next_up_gender_preference;
+    if (savedPreference === "boy" || savedPreference === "girl" || savedPreference === "both") {
+      setGenderPreference(savedPreference);
+    } else {
+      setGenderPreference("both");
+    }
+  }, [profile?.next_up_gender_preference]);
+
+  const updateGenderPreference = async (value: NextUpGenderPreference) => {
+    setGenderPreference(value);
+    setClips([]);
+    setCurrentIndex(0);
+    setIsCaughtUp(false);
+    loadingMoreRef.current = false;
+
+    const { error } = await (supabase as any)
+      .from("profiles")
+      .update({ next_up_gender_preference: value })
+      .eq("user_id", user?.id);
+
+    if (error) {
+      toast({ title: "Could not save preference", description: error.message, variant: "destructive" });
+      return;
+    }
+
+    await refreshProfile();
+  };
+
+  useEffect(() => {
+    if (!user) {
+      setClips([]);
+      setCurrentIndex(0);
+      setIsCaughtUp(false);
+      return;
+    }
     setIsCaughtUp(false);
     loadMoreClips(true);
-  }, [user?.id]);
+  }, [genderPreference, user?.id, loadMoreClips]);
 
   useEffect(() => {
+    if (!user) return;
     const channel = supabase
       .channel("next-up-clips")
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "clips" }, () => setIsCaughtUp(false))
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, []);
+  }, [user]);
 
   const getActiveVideo = () => {
     const activeClip = clips[currentIndex];
@@ -644,6 +713,34 @@ const NextUpTab = () => {
 
   const currentClip = clips[currentIndex];
 
+  if (authLoading) {
+    return (
+      <div className="flex h-full min-h-[70vh] flex-col items-center justify-center px-6 text-center">
+        <Play className="mb-4 h-12 w-12 text-muted-foreground" />
+        <p className="text-sm text-muted-foreground">Checking your account...</p>
+      </div>
+    );
+  }
+
+  if (!user) {
+    const redirectTo = encodeURIComponent(`/${window.location.search || "?tab=next-up"}`);
+    return (
+      <div className="flex h-full min-h-[70vh] flex-col items-center justify-center px-6 text-center">
+        <Play className="mb-4 h-16 w-16 text-muted-foreground" />
+        <h3 className="mb-2 text-xl font-bold text-foreground">Log in or sign up to watch Next Up Clips</h3>
+        <p className="mb-5 max-w-xs text-sm text-muted-foreground">
+          Next Up Clips are available after you join Footy Status.
+        </p>
+        <div className="flex w-full max-w-xs flex-col gap-3">
+          <Button onClick={() => navigate(`/auth?mode=login&redirectTo=${redirectTo}`)}>Log In</Button>
+          <Button variant="outline" onClick={() => navigate(`/auth?mode=signup&redirectTo=${redirectTo}`)}>
+            Create Account
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   if (clips.length === 0 && !isLoadingMore) {
     return (
       <div className="flex flex-col items-center justify-center h-[70vh] px-4">
@@ -669,6 +766,25 @@ const NextUpTab = () => {
         >
           <ArrowLeft className="h-5 w-5" />
         </button>
+      ) : null}
+      {canFilterByGender ? (
+        <div className="absolute left-3 right-3 top-3 z-30 flex justify-center">
+          <div className="rounded-full border border-white/15 bg-black/55 px-3 py-2 text-white shadow-lg backdrop-blur-md">
+            <div className="flex items-center gap-2 text-xs">
+              <span className="whitespace-nowrap text-white/80">Viewing:</span>
+              <Select value={genderPreference} onValueChange={(value) => updateGenderPreference(value as NextUpGenderPreference)}>
+                <SelectTrigger className="h-8 w-32 border-white/20 bg-white/10 text-xs text-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="both">Both</SelectItem>
+                  <SelectItem value="girl">Girls Only</SelectItem>
+                  <SelectItem value="boy">Boys Only</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </div>
       ) : null}
       <div
         ref={containerRef}

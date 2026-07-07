@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Play, User } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/hooks/useAuth";
 import logo from "@/assets/footystatus-logo.png";
 
 interface SharedClip {
@@ -20,12 +21,24 @@ interface SharedClip {
 const ClipSharePage = () => {
   const { clipId } = useParams();
   const navigate = useNavigate();
+  const { user, loading: authLoading } = useAuth();
   const [clip, setClip] = useState<SharedClip | null>(null);
   const [loading, setLoading] = useState(true);
+  const redirectTo = encodeURIComponent(`/clip/${clipId || ""}`);
 
   useEffect(() => {
     const loadClip = async () => {
-      if (!clipId) return;
+      if (authLoading) return;
+      if (!user) {
+        setClip(null);
+        setLoading(false);
+        return;
+      }
+      if (!clipId) {
+        setLoading(false);
+        return;
+      }
+
       setLoading(true);
       const { data: clipRow } = await supabase
         .from("clips")
@@ -61,7 +74,7 @@ const ClipSharePage = () => {
     };
 
     loadClip();
-  }, [clipId]);
+  }, [authLoading, clipId, user]);
 
   const openInApp = () => {
     if (!clipId) return;
@@ -71,8 +84,27 @@ const ClipSharePage = () => {
     }, 900);
   };
 
-  if (loading) {
-    return <div className="flex min-h-[100dvh] items-center justify-center bg-background text-muted-foreground">Loading clip…</div>;
+  if (authLoading || loading) {
+    return <div className="flex min-h-[100dvh] items-center justify-center bg-background text-muted-foreground">Loading clip...</div>;
+  }
+
+  if (!user) {
+    return (
+      <div className="flex min-h-[100dvh] flex-col items-center justify-center gap-4 bg-background px-6 text-center">
+        <img src={logo} alt="Footy Status" className="mb-2 h-20 w-auto object-contain" />
+        <Play className="h-12 w-12 text-muted-foreground" />
+        <div>
+          <h1 className="text-xl font-bold">Log in or sign up to watch Next Up Clips</h1>
+          <p className="mt-2 text-sm text-muted-foreground">Create an account or log in to open this shared clip.</p>
+        </div>
+        <div className="flex w-full max-w-xs flex-col gap-3">
+          <Button onClick={() => navigate(`/auth?mode=login&redirectTo=${redirectTo}`)}>Log In</Button>
+          <Button variant="outline" onClick={() => navigate(`/auth?mode=signup&redirectTo=${redirectTo}`)}>
+            Create Account
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   if (!clip) {
