@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, ChangeEvent, PointerEvent, useMemo } from 
 import { Link, useNavigate } from "react-router-dom";
 import { ArrowLeft, Camera, User, Calendar, Trophy, Edit, Save, X, Upload, Video, Crown, Lock, Link as LinkIcon, Phone, Mail, Shield, Star, Building2, Briefcase, MapPin, Users, Heart, Eye, Check } from "lucide-react";
 import Header from "@/components/Header";
+import ProfileHeader from "@/components/ProfileHeader";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useSettings } from "@/hooks/useSettings";
@@ -4607,26 +4608,26 @@ const ProfilePage = () => {
           <h1 className="text-2xl font-bold">My Profile</h1>
         </div>
 
-        {/* Avatar */}
-        <div className="bg-card border border-border rounded-xl p-6 mb-6 text-center">
-          <div className="relative inline-block mb-4">
-            <div className="w-24 h-24 rounded-full bg-muted flex items-center justify-center mx-auto overflow-hidden">
-              {profile?.avatar_url ? (
-                <img src={profile.avatar_url} alt="Profile" className="w-full h-full object-cover" />
-              ) : (
-                <User className="h-12 w-12 text-muted-foreground" />
-              )}
+        {/* Profile header */}
+        <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarUpload} />
+        {isEditingDetails ? (
+          <div className="mb-8 flex flex-col items-center">
+            <div className="relative mb-4">
+              <div className="flex h-28 w-28 items-center justify-center overflow-hidden rounded-full bg-muted">
+                {profile?.avatar_url ? (
+                  <img src={profile.avatar_url} alt="Profile" className="h-full w-full object-cover" />
+                ) : (
+                  <User className="h-12 w-12 text-muted-foreground" />
+                )}
+              </div>
+              <button
+                onClick={() => avatarInputRef.current?.click()}
+                className="absolute bottom-0 right-0 flex h-8 w-8 items-center justify-center rounded-full bg-primary text-white"
+                disabled={uploadingAvatar}
+              >
+                <Camera className="h-4 w-4" />
+              </button>
             </div>
-            <button
-              onClick={() => avatarInputRef.current?.click()}
-              className="absolute bottom-0 right-0 w-8 h-8 bg-primary rounded-full flex items-center justify-center text-white"
-              disabled={uploadingAvatar}
-            >
-              <Camera className="h-4 w-4" />
-            </button>
-            <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarUpload} />
-          </div>
-          {isEditingDetails ? (
             <Input
               value={isTeamAccount ? editForm.display_name || "" : isTeamStaffAccount ? editForm.display_name || editForm.full_name || "" : editForm.full_name || ""}
               onChange={(e) =>
@@ -4639,61 +4640,50 @@ const ProfilePage = () => {
                       : { full_name: e.target.value }),
                 })
               }
-              className="text-center font-bold text-xl mb-2"
+              className="max-w-xs text-center text-xl font-bold"
               placeholder={isTeamAccount ? "Club / Organization Name" : "Full Name"}
             />
-          ) : (
-            <>
-              <div className="grid w-full grid-cols-[1fr_auto_1fr] items-center">
-                <h2 className="col-start-2 max-w-[14rem] break-words text-center text-xl font-bold">{profileDisplayName}</h2>
-                <div className="col-start-3 ml-2 flex items-center gap-1 justify-self-start">
-                  {isPlayerAccount && isActivePro ? (
-                    <ProBadge
-                      iconOnly
-                      showInfoBubble
-                      className="border border-yellow-500 bg-white text-yellow-700 shadow-sm"
-                    />
-                  ) : null}
-                  {isOfficialFootyStatusAccount || (isTeamAccount && teamApprovalStatus === "approved") ? (
-                    <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-green-600 text-white shadow-sm" aria-label="Official Footy authenticated profile">
-                      <Check className="h-3.5 w-3.5" />
-                    </span>
-                  ) : null}
-                </div>
-              </div>
-              {isTeamAccount && !isOfficialFootyStatusAccount ? (
-                <div className="mt-1 flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm">
-                  {profile?.username ? <span className="break-all text-muted-foreground">@{profile.username}</span> : null}
-                  <span className="font-bold text-foreground">{profile?.username ? "— " : ""}{getAccountRoleLabel()}</span>
-                </div>
-              ) : null}
-              {isPlayerAccount ? (
-                <div className="mt-1 flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm">
-                  <span className="font-bold text-foreground">Player</span>
-                  {profile?.username ? <span className="break-all text-muted-foreground">@{profile.username}</span> : null}
-                </div>
-              ) : null}
-              {resolvedAccountRole === "academy_director" ? (
-                <div className="mt-1 flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm">
-                  <span className="font-bold text-foreground">{getAccountRoleLabel()}</span>
-                  {profile?.username ? <span className="break-all text-muted-foreground">— @{profile.username}</span> : null}
-                </div>
-              ) : !isTeamAccount && !isOfficialFootyStatusAccount && !isPlayerAccount ? (
-                <div className="mt-1 flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm">
-                  {profile?.username ? <span className="break-all text-muted-foreground">@{profile.username}</span> : null}
-                  <span className="font-bold text-foreground">{profile?.username ? "— " : ""}{getAccountRoleLabel()}</span>
-                </div>
-              ) : null}
-              {displayProfileBio && <p className="mx-auto mt-1 w-full max-w-xs break-words whitespace-pre-wrap text-center text-sm font-normal text-foreground" style={{ textAlign: "center" }}>{displayProfileBio}</p>}
-            </>
-          )}
-          {isActivePro && !isPlayerAccount && <ProBadge className="mt-2" />}
-          {isActivePro && daysRemaining !== null ? (
-            <p className="mt-1 text-xs text-muted-foreground">
-              Pro renews in {daysRemaining} days on {new Date(profile?.pro_expires_at || "").toLocaleDateString()}
-            </p>
-          ) : null}
-        </div>
+          </div>
+        ) : (
+          <ProfileHeader
+            avatarUrl={profile?.avatar_url}
+            displayName={profileDisplayName}
+            roleLabel={isPlayerAccount ? "Player" : getAccountRoleLabel()}
+            username={profile?.username}
+            bio={displayProfileBio}
+            avatarOverlay={
+              <button
+                onClick={() => avatarInputRef.current?.click()}
+                className="absolute bottom-0 right-0 flex h-8 w-8 items-center justify-center rounded-full bg-primary text-white"
+                disabled={uploadingAvatar}
+              >
+                <Camera className="h-4 w-4" />
+              </button>
+            }
+            nameBadge={
+              <>
+                {isPlayerAccount && isActivePro ? (
+                  <ProBadge iconOnly showInfoBubble className="border border-yellow-500 bg-white text-yellow-700 shadow-sm" />
+                ) : null}
+                {isOfficialFootyStatusAccount || (isTeamAccount && teamApprovalStatus === "approved") ? (
+                  <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-green-600 text-white shadow-sm" aria-label="Official Footy authenticated profile">
+                    <Check className="h-3.5 w-3.5" />
+                  </span>
+                ) : null}
+              </>
+            }
+            below={
+              <>
+                {isActivePro && !isPlayerAccount ? <ProBadge className="mt-2" /> : null}
+                {isActivePro && daysRemaining !== null ? (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Pro renews in {daysRemaining} days on {new Date(profile?.pro_expires_at || "").toLocaleDateString()}
+                  </p>
+                ) : null}
+              </>
+            }
+          />
+        )}
 
         {/* Profile Details */}
         {isTeamAccount && teamAccountData?.team_id ? (
@@ -4785,7 +4775,7 @@ const ProfilePage = () => {
               </Button>
             )}
           </div>
-          <div className="bg-card border border-border rounded-xl divide-y divide-border">
+          <div className="bg-card border border-border rounded-xl">
             {isEditingDetails && isPlayerAccount ? (
               <div className="p-4 space-y-3">
                 <div>
@@ -5165,7 +5155,7 @@ const ProfilePage = () => {
                     <div><p className="text-sm text-muted-foreground">Relationship to Player</p><p className="font-medium capitalize">{parentAccountData.relationship_to_player.replaceAll("_", " ")}</p></div>
                   </div>
                 ) : null}
-                <div className="border-t border-border p-4 space-y-3">
+                <div className="p-4 space-y-3">
                   <p className="text-sm font-semibold text-foreground">Linked Children / Players</p>
                   {parentChildLinks.length ? (
                     parentChildLinks.map((link) => (
@@ -5201,7 +5191,7 @@ const ProfilePage = () => {
                     <p className="text-sm text-muted-foreground">No linked players yet.</p>
                   )}
                 </div>
-                <div className="border-t border-border p-4 space-y-3">
+                <div className="p-4 space-y-3">
                   <p className="text-sm font-semibold text-foreground">Link a Child Player</p>
                   <Input
                     value={parentPlayerSearchQuery}
@@ -6344,7 +6334,7 @@ const ProfilePage = () => {
               </Button>
             )}
           </div>
-          <div className="bg-card border border-border rounded-xl divide-y divide-border">
+          <div className="bg-card border border-border rounded-xl">
             <div className="p-4 space-y-2">
               <p className="text-sm text-muted-foreground">Who can see my contact info</p>
               <Select value={settings.showContactInfo} onValueChange={handleContactVisibilityChange}>

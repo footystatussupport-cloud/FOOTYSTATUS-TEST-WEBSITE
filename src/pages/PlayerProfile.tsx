@@ -12,6 +12,7 @@ import ClubHistorySection, { ClubHistoryEntry } from "@/components/ClubHistorySe
 import { getIsPro, recordProfileView } from "@/lib/subscriptions";
 import { PrivateParentContact, fetchPrivateParentContactsForPlayer } from "@/lib/parentLinks";
 import InlineProfileAdminControls from "@/components/admin/InlineProfileAdminControls";
+import ProfileHeader from "@/components/ProfileHeader";
 
 interface Player {
   id: string;
@@ -445,36 +446,19 @@ const PlayerProfile = () => {
         </header>
 
         <div className="w-full min-w-0 overflow-x-hidden p-4">
-        {/* Profile Header */}
-        <div className="relative flex flex-col items-center mb-8">
-          <div className="absolute right-0 top-0">
-            <InlineProfileAdminControls targetUserId={player.user_id} targetName={player.name} section="profile" label="Edit profile header" onChanged={() => setReloadToken((value) => value + 1)} />
-          </div>
-          <div className="w-28 h-28 rounded-full bg-foreground flex items-center justify-center overflow-hidden mb-4">
-            {player.profile_image_url ? (
-              <img src={player.profile_image_url} alt={player.name} className="w-full h-full object-cover" />
-            ) : (
-              <User className="h-14 w-14 text-background" />
-            )}
-          </div>
-          <div className="grid w-full grid-cols-[1fr_auto_1fr] items-center">
-            <h1 className="col-start-2 max-w-[14rem] break-words text-center text-2xl font-bold text-foreground">{player.name}</h1>
-            <div className="col-start-3 ml-2 justify-self-start">
-              {isProPlayer ? (
-                <ProBadge
-                  iconOnly
-                  showInfoBubble
-                  className="border border-yellow-500 bg-white text-yellow-700 shadow-sm"
-                />
-              ) : null}
-            </div>
-          </div>
-          <div className="mt-1 flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm">
-            <span className="font-bold text-foreground">Player</span>
-            {player.username ? <span className="break-all text-muted-foreground">@{player.username}</span> : null}
-          </div>
-          {displayBio && <p className="mx-auto mt-2 w-full max-w-xs break-words whitespace-pre-wrap text-center text-sm font-normal text-foreground" style={{ textAlign: "center" }}>{displayBio}</p>}
-        </div>
+        <ProfileHeader
+          avatarUrl={player.profile_image_url}
+          displayName={player.name}
+          roleLabel="Player"
+          username={player.username}
+          bio={displayBio}
+          nameBadge={
+            isProPlayer ? (
+              <ProBadge iconOnly showInfoBubble className="border border-yellow-500 bg-white text-yellow-700 shadow-sm" />
+            ) : null
+          }
+          topRight={<InlineProfileAdminControls targetUserId={player.user_id} targetName={player.name} section="profile" label="Edit profile header" onChanged={() => setReloadToken((value) => value + 1)} />}
+        />
 
         {isYoungPlayer && parentContacts.length > 0 && (
           <section className="mb-6">
@@ -506,7 +490,7 @@ const PlayerProfile = () => {
 
         <section className="mb-6">
           <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-lg font-semibold text-navy">Details</h2><InlineProfileAdminControls targetUserId={player.user_id} targetName={player.name} section="profile" label="Edit player details" onChanged={() => setReloadToken((value) => value + 1)} /></div>
-          <div className="bg-card border border-border rounded-xl overflow-hidden divide-y divide-border">
+          <div className="bg-card border border-border rounded-xl overflow-hidden">
             {activeMembership?.team ? (
               <div className="p-4 space-y-2">
                 <div className="flex items-center gap-2">

@@ -4,12 +4,14 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Skeleton } from "@/components/ui/skeleton";
 import { supabase } from "@/integrations/supabase/client";
 import InlineProfileAdminControls from "@/components/admin/InlineProfileAdminControls";
+import ProfileHeader from "@/components/ProfileHeader";
 import { useAuth } from "@/hooks/useAuth";
 import { isFootyStatusSuperAdminEmail } from "@/lib/superAdmin";
 
 interface PublicRefereeProfile {
   user_id: string;
   full_name: string | null;
+  username: string | null;
   avatar_url: string | null;
   bio: string | null;
   referee_certification_level: string | null;
@@ -52,7 +54,7 @@ const RefereeProfilePage = () => {
       const { data } = await (supabase as any)
         .from("profiles")
         .select(
-          "user_id, full_name, avatar_url, bio, referee_certification_level, referee_certifying_organization, referee_years_experience, referee_main_experience, referee_assistant_experience, referee_leagues_tournaments, referee_availability, referee_accolades, referee_profile_public, referee_verification_status"
+          "user_id, full_name, username, avatar_url, bio, referee_certification_level, referee_certifying_organization, referee_years_experience, referee_main_experience, referee_assistant_experience, referee_leagues_tournaments, referee_availability, referee_accolades, referee_profile_public, referee_verification_status"
         )
         .eq("user_id", userId)
         .eq("account_category", "referee")
@@ -99,29 +101,22 @@ const RefereeProfilePage = () => {
       </header>
 
       <main className="space-y-5 p-4">
-        <InlineProfileAdminControls targetUserId={profile.user_id} targetName={profile.full_name} />
-        <section className="rounded-2xl bg-gradient-to-br from-navy to-primary p-5 text-center text-white">
-          <div className="flex flex-col items-center">
-            <div className="mb-4 h-20 w-20 overflow-hidden rounded-full border border-white/20 bg-white/15">
-              {profile.avatar_url ? (
-                <img src={profile.avatar_url} alt={profile.full_name || "Referee"} className="h-full w-full object-cover" />
-              ) : (
-                <div className="flex h-full w-full items-center justify-center">
-                  <Shield className="h-8 w-8" />
-                </div>
-              )}
-            </div>
-            <div className="w-full">
-              <h1 className="mx-auto max-w-[14rem] break-words text-center text-2xl font-bold">{profile.full_name || "Referee"}</h1>
-              <p className="text-sm text-white/75">{profile.referee_certification_level || "Referee"}</p>
-              {profile.referee_verification_status === "verified" ? (
-                <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-green-500/90 px-2 py-0.5 text-xs font-semibold text-white">
-                  <Shield className="h-3.5 w-3.5" /> Footy Status Verified Referee
-                </span>
-              ) : null}
-            </div>
-          </div>
-        </section>
+        <ProfileHeader
+          avatarUrl={profile.avatar_url}
+          displayName={profile.full_name || "Referee"}
+          roleLabel="Referee"
+          username={profile.username}
+          bio={profile.bio}
+          fallbackIcon={<Shield className="h-12 w-12 text-background" />}
+          topRight={<InlineProfileAdminControls targetUserId={profile.user_id} targetName={profile.full_name} />}
+          below={
+            profile.referee_verification_status === "verified" ? (
+              <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-green-600 px-2 py-0.5 text-xs font-semibold text-white">
+                <Shield className="h-3.5 w-3.5" /> Footy Status Verified Referee
+              </span>
+            ) : null
+          }
+        />
 
         <section className="relative overflow-hidden rounded-xl border border-border bg-card">
           <div className="absolute right-3 top-3 z-10"><InlineProfileAdminControls targetUserId={profile.user_id} targetName={profile.full_name} section="profile" label="Edit referee information" /></div>
@@ -133,15 +128,6 @@ const RefereeProfilePage = () => {
           <DetailRow icon={Trophy} label="Leagues / Tournaments" value={profile.referee_leagues_tournaments} />
           <DetailRow icon={Calendar} label="Availability" value={profile.referee_availability} />
           <DetailRow icon={Star} label="Accolades / Notable Matches" value={profile.referee_accolades} />
-          {profile.bio ? (
-            <div className="flex items-center gap-3 p-4">
-              <User className="h-5 w-5 text-muted-foreground" />
-              <div>
-                <p className="text-sm text-muted-foreground">Bio</p>
-                <p className="text-sm font-normal text-foreground whitespace-pre-wrap">{profile.bio}</p>
-              </div>
-            </div>
-          ) : null}
         </section>
       </main>
     </div>

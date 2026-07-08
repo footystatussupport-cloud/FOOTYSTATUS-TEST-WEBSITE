@@ -11,6 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { fetchRosterForTeam, formatTeamLeagueLine, removeTeamRosterPlayer, TeamRosterPlayer } from "@/lib/teamMemberships";
 import { ClubTeamRecord, fetchClubByTeamId, fetchClubTeams, fetchRosterForClubTeam, formatTeamGender, getAgeGroupSortValue, normalizeTeamGender, sanitizeClubTeamAccessCode, updateClubTeamAccessCode } from "@/lib/clubTeams";
 import ClubNewsSection from "@/components/club-news/ClubNewsSection";
+import ProfileHeader from "@/components/ProfileHeader";
 import ProBadge from "@/components/ProBadge";
 import {
   CoachStaffProfile,
@@ -839,33 +840,22 @@ const TeamProfile = () => {
       </header>
 
       <div className="p-4">
-        <InlineProfileAdminControls targetUserId={team.owner_user_id} targetName={team.name} />
-        <div className="bg-card border border-border rounded-xl p-6 mb-6 text-center">
-          <div className="flex flex-col items-center">
-          <div className="w-24 h-24 rounded-full bg-navy flex items-center justify-center overflow-hidden mb-4">
-            {team.logo_url ? (
-              <img src={team.logo_url} alt={team.name} className="w-full h-full object-cover" />
-            ) : (
-              <Shield className="h-12 w-12 text-white" />
-            )}
-          </div>
-          <div className="grid w-full grid-cols-[1fr_auto_1fr] items-center">
-            <h1 className="col-start-2 max-w-[14rem] break-words text-center text-2xl font-bold text-foreground">{team.name}</h1>
-            <div className="col-start-3 ml-2 justify-self-start">
-              {teamApproved ? (
-                <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-green-600 text-white shadow-sm" aria-label="Official Footy authenticated profile">
-                  <Check className="h-3.5 w-3.5" />
-                </span>
-              ) : null}
-            </div>
-          </div>
-          <div className="mt-1 flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm">
-            {teamUsername ? <span className="break-all text-muted-foreground">@{teamUsername}</span> : null}
-            <span className="font-bold text-foreground">{teamUsername ? "— " : ""}{teamAccountLabel}</span>
-          </div>
-          {teamBio ? <p className="mx-auto mt-2 w-full max-w-xs break-words whitespace-pre-wrap text-center text-sm font-normal text-foreground" style={{ textAlign: "center" }}>{teamBio}</p> : null}
-        </div>
-        </div>
+        <ProfileHeader
+          avatarUrl={team.logo_url}
+          displayName={team.name}
+          roleLabel={teamAccountLabel}
+          username={teamUsername}
+          bio={teamBio}
+          fallbackIcon={<Shield className="h-12 w-12 text-background" />}
+          topRight={<InlineProfileAdminControls targetUserId={team.owner_user_id} targetName={team.name} />}
+          nameBadge={
+            teamApproved ? (
+              <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-green-600 text-white shadow-sm" aria-label="Official Footy authenticated profile">
+                <Check className="h-3.5 w-3.5" />
+              </span>
+            ) : null
+          }
+        />
 
         <ClubNewsSection
           teamId={team.id}
@@ -878,7 +868,7 @@ const TeamProfile = () => {
 
         <section className="mb-6">
           <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-lg font-semibold text-navy">Details</h2><InlineProfileAdminControls targetUserId={team.owner_user_id} targetName={team.name} section="profile" label="Edit team details" /></div>
-          <div className="bg-card border border-border rounded-xl divide-y divide-border">
+          <div className="bg-card border border-border rounded-xl">
             {teamProfileDetails?.leagues_offered?.length ? (
               <div className="flex items-center gap-3 p-4">
                 <Trophy className="h-5 w-5 text-muted-foreground" />
@@ -993,7 +983,7 @@ const TeamProfile = () => {
         {teamProfileDetails?.school_website || teamProfileDetails?.social_links ? (
           <section className="mb-6">
             <h2 className="text-lg font-semibold text-navy mb-3">Website & Social Links</h2>
-            <div className="bg-card border border-border rounded-xl divide-y divide-border">
+            <div className="bg-card border border-border rounded-xl">
               {teamProfileDetails?.school_website ? (
                 <div className="flex items-center gap-3 min-w-0 p-4">
                   <Trophy className="h-5 w-5 text-muted-foreground" />
@@ -1025,7 +1015,7 @@ const TeamProfile = () => {
 
         <section className="mb-6">
           <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-lg font-semibold text-navy">Contact Information</h2><InlineProfileAdminControls targetUserId={team.owner_user_id} targetName={team.name} section="profile" label="Edit team contact information" /></div>
-          <div className="bg-card border border-border rounded-xl divide-y divide-border">
+          <div className="bg-card border border-border rounded-xl">
               {team.contact_email && (
                 <div className="flex items-center gap-3 min-w-0 p-4">
                   <Mail className="h-5 w-5 text-muted-foreground" />
@@ -1078,7 +1068,7 @@ const TeamProfile = () => {
 
         <section className="mb-6">
           <h2 className="text-lg font-semibold text-navy mb-3">Home Field & Kits</h2>
-          <div className="bg-card border border-border rounded-xl divide-y divide-border">
+          <div className="bg-card border border-border rounded-xl">
             <div className="flex items-center gap-3 p-4">
               <MapPin className="h-5 w-5 text-muted-foreground" />
               <div>
@@ -1195,7 +1185,7 @@ const TeamProfile = () => {
               )}
 
               {canManageTeam ? (
-                <div className="space-y-3 border-t border-border pt-4">
+                <div className="space-y-3 pt-2">
                   <p className="text-sm font-medium">Invite Coach / Staff</p>
                   <Input value={coachStaffSearch} onChange={(e) => setCoachStaffSearch(e.target.value)} placeholder="Search coach/staff profiles" />
                   {coachStaffResults.map((staff) => (

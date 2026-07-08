@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { supabase } from "@/integrations/supabase/client";
 import { CoachStaffProfile, CoachStaffTeamLink, fetchCoachStaffTeamLinksForUser, formatRoleDisplayLabel } from "@/lib/coachStaffTeams";
 import InlineProfileAdminControls from "@/components/admin/InlineProfileAdminControls";
+import ProfileHeader from "@/components/ProfileHeader";
 
 interface ContactItem {
   id: string;
@@ -109,39 +110,22 @@ const CoachStaffProfilePage = () => {
         </header>
 
         <main className="p-4">
-          <InlineProfileAdminControls targetUserId={profile.user_id} targetName={profile.full_name} />
-          <div className="flex flex-col items-center mb-6">
-            <div className="w-28 h-28 rounded-full bg-foreground flex items-center justify-center overflow-hidden mb-4">
-              {profile.avatar_url ? (
-                <img src={profile.avatar_url} alt={profile.full_name || "Coach"} className="w-full h-full object-cover" />
-              ) : (
-                <User className="h-14 w-14 text-background" />
-              )}
-            </div>
-            <h1 className="text-center text-2xl font-bold text-foreground">{profile.full_name || (isParent ? "Parent / Guardian" : isScout ? "Scout" : isAcademyStaff ? "Team Staff" : "Coach / Staff")}</h1>
-            {isAcademyStaff ? (
-              // Team Staff lead with their selected position, then the username.
-              <p className="mt-1 max-w-full break-words text-center text-sm">
-                <span className="font-bold text-foreground">
-                  {formatRoleDisplayLabel(profile.coaching_role_type || profile.account_role, "Team Staff")}
-                </span>
-                {profile.username ? <span className="text-muted-foreground"> — @{profile.username}</span> : null}
-              </p>
-            ) : (
-              <p className="mt-1 max-w-full break-words text-center text-sm">
-                {profile.username ? <span className="text-muted-foreground">@{profile.username} </span> : null}
-                <span className="font-bold text-foreground">
-                  {profile.username ? "— " : ""}
-                  {isParent
-                    ? "Parent / Guardian"
-                    : isScout
-                      ? formatRoleDisplayLabel(profile.scout_role_title, "Scout")
-                      : formatRoleDisplayLabel(profile.coaching_role_type || profile.account_role, "Coaching Staff")}
-                </span>
-              </p>
-            )}
-            {profile.bio ? <p className="mx-auto mt-2 max-w-xs break-words whitespace-pre-wrap text-center text-sm font-normal text-foreground">{profile.bio}</p> : null}
-          </div>
+          <ProfileHeader
+            avatarUrl={profile.avatar_url}
+            displayName={profile.full_name || (isParent ? "Parent / Guardian" : isScout ? "Scout" : isAcademyStaff ? "Team Staff" : "Coach / Staff")}
+            roleLabel={
+              isParent
+                ? "Parent"
+                : isScout
+                  ? formatRoleDisplayLabel(profile.scout_role_title, "Scout")
+                  : isAcademyStaff
+                    ? formatRoleDisplayLabel(profile.coaching_role_type || profile.account_role, "Team Staff")
+                    : formatRoleDisplayLabel(profile.coaching_role_type || profile.account_role, "Coaching Staff")
+            }
+            username={profile.username}
+            bio={profile.bio}
+            topRight={<InlineProfileAdminControls targetUserId={profile.user_id} targetName={profile.full_name} />}
+          />
 
           {teams.length ? (
             <section className="mb-6">
@@ -177,7 +161,7 @@ const CoachStaffProfilePage = () => {
 
           <section className="mb-6">
             <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-lg font-semibold text-navy mb-3">{isParent ? "Parent / Guardian Details" : isScout ? "Scout Details" : isAcademyStaff ? "Club Director / Team Staff Details" : "Coach / Staff Details"}</h2><InlineProfileAdminControls targetUserId={profile.user_id} targetName={profile.full_name} section="profile" label="Edit profile information" /></div>
-            <div className="bg-card border border-border rounded-xl divide-y divide-border">
+            <div className="bg-card border border-border rounded-xl">
               {isAcademyStaff && profile.teams_currently_coaching ? (
                 <div className="flex items-center gap-3 p-4">
                   <Users className="h-5 w-5 text-muted-foreground" />
