@@ -77,29 +77,20 @@ export const fetchParentProfileForUser = async (userId: string) => {
 };
 
 export const fetchParentLinksForParentUser = async (userId: string) => {
-  const { data: parentProfile } = await (supabase as any)
-    .from("parent_profiles")
-    .select("id")
-    .eq("user_id", userId)
-    .maybeSingle();
+  // Read the parent's linked children through a SECURITY DEFINER RPC so the
+  // relationship is retrieved authoritatively from the parent side, immune to
+  // player_profiles RLS that would otherwise hide the child rows.
+  const { data, error } = await (supabase as any).rpc("get_parent_linked_children", {
+    _parent_user_id: userId,
+  });
 
-  if (!parentProfile?.id) return [] as ParentPlayerLink[];
+  if (error || !data) return [] as ParentPlayerLink[];
 
-  const { data } = await (supabase as any)
-    .from("parent_player_links")
-    .select("*, player_profiles(id, user_id, full_name, team, team_name, age_birth_year, position)")
-    .eq("parent_profile_id", parentProfile.id)
-    .neq("status", "removed")
-    .order("created_at", { ascending: false });
+  const rows = data as any[];
 
-  const links = (data || []) as any[];
-
-  // Pull the linked players' live team / league / age group from the public
-  // player view so the parent account always reflects the player's current
-  // information (the player account is the single source of truth).
-  const playerProfileIds = links
-    .map((link) => link.player_profile_id)
-    .filter(Boolean);
+  // Enrich with the players' live team / league / age group from the public
+  // player view (single source of truth for the player's current information).
+  const playerProfileIds = rows.map((row) => row.player_profile_id).filter(Boolean);
 
   let liveById: Record<string, any> = {};
   if (playerProfileIds.length) {
@@ -110,13 +101,28 @@ export const fetchParentLinksForParentUser = async (userId: string) => {
     liveById = Object.fromEntries((liveRows || []).map((row: any) => [row.id, row]));
   }
 
-  return links.map((link: any) => {
-    const live = liveById[link.player_profile_id];
+  return rows.map((row: any) => {
+    const live = liveById[row.player_profile_id] || {};
     return {
-      ...link,
-      player: link.player_profiles
-        ? { ...link.player_profiles, ...(live || {}) }
-        : live || null,
+      id: row.link_id,
+      status: row.status,
+      parent_profile_id: "",
+      player_profile_id: row.player_profile_id,
+      relationship_to_player: row.relationship_to_player,
+      notes: row.notes,
+      created_at: row.created_at,
+      approved_at: row.approved_at,
+      player: {
+        id: row.player_profile_id,
+        user_id: row.player_user_id,
+        full_name: row.player_full_name,
+        team: live.team ?? row.player_team,
+        team_name: live.team_name ?? row.player_team_name,
+        age_birth_year: row.player_age_birth_year,
+        position: row.player_position,
+        current_league_name: live.current_league_name ?? null,
+        current_age_group: live.current_age_group ?? null,
+      },
     };
   }) as ParentPlayerLink[];
 };
