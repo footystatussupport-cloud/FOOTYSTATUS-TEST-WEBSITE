@@ -1315,6 +1315,50 @@ const AuthPage = () => {
           throw new Error(staffProfileError.message || "We couldn't save your coach/staff profile answers.");
         }
 
+        const staffProfileRepairPayload: Record<string, any> = {
+          full_name: normalizedFullName,
+          username: normalizedUsername,
+          bio: profileData.bio ? String(profileData.bio).trim().slice(0, 100) : null,
+          email: profileData.contactEmail ? String(profileData.contactEmail).trim().toLowerCase() : normalizedEmail,
+          account_category: accountCategory,
+          account_type: role,
+          account_role: role,
+          role: legacyRole,
+          coaching_role_type: selectedStaffRole || profileData.coachingRoleType || null,
+          teams_currently_coaching: staffOrganization,
+          past_coaching_experience: role === "scout" ? profileData.scoutingExperience || null : profileData.previousTeams || null,
+          coaching_licenses: role === "scout" ? null : staffLicenses,
+          coaching_accolades: role === "scout" ? null : profileData.notableAchievements || null,
+          coaching_location: normalizedCity || profileData.city || null,
+          scout_role_title: role === "scout" ? profileData.scoutRoleTitle || "Scout" : null,
+          scout_organization: role === "scout" ? profileData.scoutOrganization || null : null,
+          scouting_licenses: role === "scout" ? staffLicenses : null,
+          scouting_experience: role === "scout" ? profileData.scoutingExperience || null : null,
+          scouting_regions: role === "scout" ? profileData.scoutingRegions || null : null,
+          scouting_age_groups: role === "scout" ? staffAgeGroups : null,
+          scouting_positions: role === "scout" ? splitCommaValues(profileData.scoutingPositions) : null,
+          scouting_accolades: role === "scout" ? profileData.scoutingAccolades || null : null,
+        };
+
+        console.info("Footy Status staff signup profile repair payload", {
+          authUserId: sessionUserId,
+          selectedRole: role,
+          staffProfileRepairPayload,
+        });
+
+        const staffProfileRepair = await stripMissingProfilesColumnsAndRetry(
+          staffProfileRepairPayload,
+          (nextPayload) =>
+            (supabase as any)
+              .from("profiles")
+              .update(nextPayload)
+              .eq("user_id", sessionUserId)
+        );
+
+        if (staffProfileRepair.error) {
+          throw staffProfileRepair.error;
+        }
+
         const selectedCoachingTeams = Array.isArray(profileData.selectedCoachingTeams)
           ? profileData.selectedCoachingTeams.slice(0, 5)
           : [];

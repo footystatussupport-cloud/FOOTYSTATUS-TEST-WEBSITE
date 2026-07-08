@@ -1115,6 +1115,15 @@ const TeamProfile = () => {
                       <div className="min-w-0">
                         <p className="font-medium text-sm truncate">{staffProfile.full_name || "Club Staff"}</p>
                         <p className="text-sm text-muted-foreground truncate">{staff.staff_role || staffProfile.coaching_role_type || "Club Director / Team Staff"}</p>
+                        {(staff.assignments || []).length > 0 ? (
+                          <div className="mt-1 space-y-0.5">
+                            {(staff.assignments || []).map((assignment: any) => (
+                              <p key={assignment.id} className="text-xs text-muted-foreground truncate">
+                                {assignment.team_name} {assignment.staff_role ? `— ${assignment.staff_role}` : ""}
+                              </p>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
                     </button>
                     {canManageTeam ? (
@@ -1169,6 +1178,15 @@ const TeamProfile = () => {
                           <div className="min-w-0">
                             <p className="font-medium truncate">{staffProfile.full_name || "Coach / Staff"}</p>
                             <p className="text-xs text-muted-foreground">{staff.staff_role || staffProfile.coaching_role_type || "Coaching Staff"}</p>
+                            {(staff.assignments || []).length > 0 ? (
+                              <div className="mt-1 space-y-0.5">
+                                {(staff.assignments || []).map((assignment: any) => (
+                                  <p key={assignment.id} className="text-xs text-muted-foreground truncate">
+                                    {assignment.team_name} {assignment.staff_role ? `— ${assignment.staff_role}` : ""}
+                                  </p>
+                                ))}
+                              </div>
+                            ) : null}
                           </div>
                         </button>
                         {canManageTeam ? (

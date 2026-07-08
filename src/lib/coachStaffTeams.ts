@@ -164,6 +164,13 @@ export interface CoachStaffTeamLink {
   club_team_name?: string | null;
 }
 
+export interface CoachStaffTeamAssignmentLine {
+  id: string;
+  club_team_id?: string | null;
+  staff_role?: string | null;
+  team_name: string;
+}
+
 export const fetchCoachStaffProfiles = async (query?: string) => {
   let request = (supabase as any)
     .from("profiles")
@@ -244,6 +251,53 @@ export const fetchCoachStaffTeamLinksForUser = async (userId: string) => {
 };
 
 export const fetchCoachStaffForTeam = async (teamId: string) => {
+  const buildGroupedCoachRows = async (membershipRows: any[]) => {
+    const clubTeamIds = [...new Set(membershipRows.map((row) => row.club_team_id).filter(Boolean))];
+    const { data: clubTeams } = clubTeamIds.length
+      ? await (supabase as any)
+          .from("club_teams")
+          .select("id, age_group, level, league_name")
+          .in("id", clubTeamIds)
+      : { data: [] };
+    const clubTeamsById = new Map((clubTeams || []).map((team: any) => [team.id, team]));
+    const formatClubTeamName = (clubTeamId?: string | null) => {
+      if (!clubTeamId) return "Mother Team";
+      const clubTeam = clubTeamsById.get(clubTeamId);
+      return [clubTeam?.age_group, clubTeam?.level, clubTeam?.league_name].filter(Boolean).join(" - ") || "Daughter Team";
+    };
+
+    const grouped = new Map<string, any>();
+    membershipRows.forEach((row) => {
+      const current = grouped.get(row.coach_user_id);
+      const assignment: CoachStaffTeamAssignmentLine = {
+        id: row.id,
+        club_team_id: row.club_team_id || null,
+        staff_role: row.staff_role || null,
+        team_name: formatClubTeamName(row.club_team_id),
+      };
+
+      if (!current) {
+        grouped.set(row.coach_user_id, {
+          ...row,
+          assignments: [assignment],
+        });
+        return;
+      }
+
+      current.assignments = [...(current.assignments || []), assignment];
+      const currentIsMotherRole = !current.club_team_id;
+      const rowIsMotherRole = !row.club_team_id;
+      if (!currentIsMotherRole && rowIsMotherRole) {
+        grouped.set(row.coach_user_id, {
+          ...row,
+          assignments: current.assignments,
+        });
+      }
+    });
+
+    return [...grouped.values()];
+  };
+
   const { data, error } = await (supabase as any)
     .from("coach_staff_team_memberships")
     .select("id, team_id, club_team_id, coach_user_id, staff_role, status, profiles!coach_staff_team_memberships_coach_user_id_fkey(user_id, full_name, avatar_url, username, account_role, coaching_role_type, bio)")
@@ -267,19 +321,11 @@ export const fetchCoachStaffForTeam = async (teamId: string) => {
       : { data: [] };
     const profilesByUserId = new Map((profiles || []).map((profile: any) => [profile.user_id, profile]));
     const rows = ((fallback.data || []) as any[]).map((row) => ({ ...row, profile: profilesByUserId.get(row.coach_user_id) || null }));
-    return [...rows.reduce((byCoach, row) => {
-      const current = byCoach.get(row.coach_user_id);
-      if (!current || (current.club_team_id && !row.club_team_id)) byCoach.set(row.coach_user_id, row);
-      return byCoach;
-    }, new Map<string, any>()).values()];
+    return buildGroupedCoachRows(rows);
   }
 
   const rows = ((data || []) as any[]).map((row) => ({ ...row, profile: row.profiles || null }));
-  return [...rows.reduce((byCoach, row) => {
-    const current = byCoach.get(row.coach_user_id);
-    if (!current || (current.club_team_id && !row.club_team_id)) byCoach.set(row.coach_user_id, row);
-    return byCoach;
-  }, new Map<string, any>()).values()];
+  return buildGroupedCoachRows(rows);
 };
 
 export const fetchCoachStaffForClubTeam = async (teamId: string, clubTeamId: string) => {
@@ -350,16 +396,20 @@ export const requestCoachStaffTeamLink = async (
   staffRole?: string | null,
   teamContext?: { club_team_id?: string | null; league_id?: string | null; age_group?: string | null }
 ) =>
-  (supabase as any).from("coach_staff_join_requests").insert({
-    team_id: teamId,
-    club_team_id: teamContext?.club_team_id || null,
-    league_id: teamContext?.league_id || null,
-    age_group: teamContext?.age_group || null,
-    coach_user_id: coachUserId,
-    staff_role: staffRole || null,
-    status: "pending",
-    requested_at: new Date().toISOString(),
-  });
+  (supabase as any).from("coach_staff_join_requests").upsert(
+    {
+      team_id: teamId,
+      club_team_id: teamContext?.club_team_id || null,
+      league_id: teamContext?.league_id || null,
+      age_group: teamContext?.age_group || null,
+      coach_user_id: coachUserId,
+      staff_role: staffRole || null,
+      status: "pending",
+      requested_at: new Date().toISOString(),
+      reviewed_at: null,
+    },
+    { onConflict: "team_id,club_team_id,coach_user_id,status" }
+  );
 
 export const requestCoachClubLink = async (
   teamId: string,
@@ -437,37 +487,11 @@ export const acceptCoachStaffInvite = async (invite: { id: string; team_id: stri
     .eq("id", invite.id);
 };
 
-export const reviewCoachStaffJoinRequest = async (request: { id: string; team_id: string; coach_user_id: string; staff_role?: string | null; club_team_id?: string | null; league_id?: string | null; age_group?: string | null }, approve: boolean) => {
-  if ((request as any).request_kind === "club_multi") {
-    return (supabase as any).rpc("review_coach_club_link_request", {
-      _request_id: request.id,
-      _approve: approve,
-    });
-  }
-
-  if (approve) {
-    const membership = await (supabase as any).from("coach_staff_team_memberships").upsert(
-      {
-        team_id: request.team_id,
-        club_team_id: request.club_team_id || null,
-        league_id: request.league_id || null,
-        age_group: request.age_group || null,
-        coach_user_id: request.coach_user_id,
-        staff_role: request.staff_role || null,
-        status: "approved",
-        approved_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "team_id,club_team_id,coach_user_id" }
-    );
-    if (membership.error) return membership;
-  }
-
-  return (supabase as any)
-    .from("coach_staff_join_requests")
-    .update({ status: approve ? "approved" : "rejected", reviewed_at: new Date().toISOString() })
-    .eq("id", request.id);
-};
+export const reviewCoachStaffJoinRequest = async (request: { id: string }, approve: boolean) =>
+  (supabase as any).rpc("review_coach_staff_join_request", {
+    _request_id: request.id,
+    _approve: approve,
+  });
 
 export const unlinkCoachStaffFromTeam = async (membershipId: string) =>
   (supabase as any)

@@ -2736,13 +2736,17 @@ const ProfilePage = () => {
     }
   };
 
-  const persistBasicContactRows = async (email?: string | null, phone?: string | null) => {
+  const persistBasicContactRows = async (
+    email?: string | null,
+    phone?: string | null,
+    contactTypePrefix: "player" | "coach" = "player"
+  ) => {
     if (!user) return;
 
     const nextForm = {
       ...contactForm,
-      player_email: email?.trim().toLowerCase() || "",
-      player_phone: phone?.trim() || "",
+      [`${contactTypePrefix}_email`]: email?.trim().toLowerCase() || "",
+      [`${contactTypePrefix}_phone`]: phone?.trim() || "",
     };
     const existingByType = new Map(contacts.map((contact) => [contact.contact_type, contact]));
     const entries = Object.entries(nextForm) as Array<[keyof ContactFormState, string]>;
@@ -2807,6 +2811,12 @@ const ProfilePage = () => {
     const normalizedUsername = normalizeUsername(editForm.username);
     const currentUsername = normalizeUsername(profile.username);
     const usernameWasEntered = String(editForm.username ?? "").trim().length > 0;
+
+    if (isEditingDetails && isTeamStaffAccount && !usernameWasEntered) {
+      toast({ title: "Error", description: "Username is required", variant: "destructive" });
+      setSaving(false);
+      return;
+    }
 
     if (usernameWasEntered && normalizedUsername !== currentUsername) {
       const usernameValidationMessage = validateUsername(normalizedUsername);
@@ -3219,27 +3229,11 @@ const ProfilePage = () => {
         const staffAchievements = isScoutStaffAccount
           ? editForm.scouting_accolades?.trim() || null
           : editForm.notable_achievements?.trim() || null;
-
-        const { error: staffSetupError } = await (supabase as any).rpc("save_staff_account_profile", {
-          _role: resolvedLegacyRole,
-          _full_name: staffDisplayName,
-          _team_organization_name: staffOrganizationName,
-          _city: editForm.city?.trim() || null,
-          _coaching_level: editForm.coaching_level || "",
-          _years_experience: editForm.years_experience ? Number(editForm.years_experience) : null,
-          _coaching_licenses: staffLicensesList,
-          _age_groups_coached: staffAgeGroupsList,
-          _contact_email: editForm.contact_email?.trim().toLowerCase() || null,
-          _contact_phone: editForm.contact_phone?.trim() || null,
-          _previous_teams: staffPreviousTeamsList,
-          _notable_achievements: staffAchievements,
-        });
-
-        if (staffSetupError) {
-          toast({ title: "Error", description: staffSetupError.message, variant: "destructive" });
-          setSaving(false);
-          return;
-        }
+        const staffContactEmail = editForm.contact_email?.trim().toLowerCase() || null;
+        const staffContactPhone = editForm.contact_phone?.trim() || null;
+        const savedSpecificStaffRole = isScoutStaffAccount
+          ? editForm.scout_role_title?.trim() || "Scout"
+          : editForm.coaching_role_type?.trim() || staffAccountData?.coaching_role_type || profile?.coaching_role_type || null;
 
         const { data: savedStaffProfile, error: staffProfilePersistError } = await (supabase as any)
           .from("staff_profiles")
@@ -3255,8 +3249,8 @@ const ProfilePage = () => {
               years_experience: editForm.years_experience ? Number(editForm.years_experience) : null,
               coaching_licenses: staffLicensesList,
               age_groups_coached: staffAgeGroupsList,
-              contact_email: editForm.contact_email?.trim().toLowerCase() || null,
-              contact_phone: editForm.contact_phone?.trim() || null,
+              contact_email: staffContactEmail,
+              contact_phone: staffContactPhone,
               previous_teams: staffPreviousTeamsList,
               notable_achievements: staffAchievements,
             },
@@ -3279,8 +3273,8 @@ const ProfilePage = () => {
           .from("profiles")
           .update({
             full_name: staffDisplayName,
-            email: editForm.contact_email?.trim().toLowerCase() || null,
-            coaching_role_type: editForm.coaching_role_type?.trim() || null,
+            email: staffContactEmail,
+            coaching_role_type: savedSpecificStaffRole,
             teams_currently_coaching: preservedStaffTeamName,
             past_coaching_experience: editForm.previous_teams_text?.trim() || null,
             coaching_licenses: (editForm.coaching_licenses_text || "")
@@ -3316,7 +3310,7 @@ const ProfilePage = () => {
         }
 
         try {
-          await persistBasicContactRows(editForm.contact_email?.trim().toLowerCase() || null, editForm.contact_phone?.trim() || null);
+          await persistBasicContactRows(staffContactEmail, staffContactPhone, "coach");
         } catch (contactError: any) {
           console.error("Footy Status staff contact row save failed", contactError);
           toast({ title: "Error", description: contactError.message, variant: "destructive" });
@@ -4569,10 +4563,13 @@ const ProfilePage = () => {
         ]
       : []),
   ].filter((contact) => contact.value);
+  // For staff/official accounts the email and phone are already shown once via
+  // teamStaffContacts, so exclude every email/phone contact type here to avoid
+  // duplicate email/phone rows. Only social links flow through this list.
   const sharedNonPlayerContacts = !isPlayerAccount && !isTeamAccount
     ? visibleContacts.filter((contact) =>
         isTeamStaffAccount || isOfficialFootyStatusAccount
-          ? !["player_email", "player_phone"].includes(contact.contact_type)
+          ? !["player_email", "player_phone", "coach_email", "coach_phone"].includes(contact.contact_type)
           : true
       )
     : [];
@@ -5374,6 +5371,19 @@ const ProfilePage = () => {
                 <div>
                   <label className="text-sm text-muted-foreground">Full Name</label>
                   <Input value={editForm.display_name || editForm.full_name || ""} onChange={(e) => setEditForm({ ...editForm, display_name: e.target.value, full_name: e.target.value })} placeholder="Full Name" />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Username</label>
+                  <Input
+                    value={editForm.username || ""}
+                    onChange={(e) => setEditForm({ ...editForm, username: normalizeUsername(e.target.value) })}
+                    placeholder="coachusername"
+                    maxLength={USERNAME_MAX_LENGTH}
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                  />
+                  <UsernameAvailabilityHint state={editUsernameAvailability} />
                 </div>
                 {profile?.account_role === "scout" ? (
                   <>

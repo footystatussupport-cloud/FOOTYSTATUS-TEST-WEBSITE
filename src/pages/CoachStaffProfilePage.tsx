@@ -97,6 +97,22 @@ const CoachStaffProfilePage = () => {
   const isScout = profile.account_role === "scout";
   const isAcademyStaff = profile.account_role === "academy_director";
   const isParent = profile.account_category === "parent" || profile.account_role === "parent";
+  const dedupedContacts = contacts.reduce<ContactItem[]>((result, contact) => {
+    const normalizedKind = contact.contact_type.includes("email")
+      ? "email"
+      : contact.contact_type.includes("phone")
+        ? "phone"
+        : contact.contact_type;
+    const alreadyAdded = result.some((item) => {
+      const itemKind = item.contact_type.includes("email")
+        ? "email"
+        : item.contact_type.includes("phone")
+          ? "phone"
+          : item.contact_type;
+      return itemKind === normalizedKind;
+    });
+    return alreadyAdded ? result : [...result, contact];
+  }, []);
 
   return (
     <div className="min-h-screen bg-background">
@@ -253,11 +269,11 @@ const CoachStaffProfilePage = () => {
             </div>
           </section>
 
-          {contacts.length ? (
+          {dedupedContacts.length ? (
             <section className="mb-6">
               <h2 className="mb-3 text-lg font-semibold text-navy">Contact Information</h2>
               <div className="bg-card border border-border rounded-xl p-4 space-y-3">
-                {contacts.map((contact) => (
+                {dedupedContacts.map((contact) => (
                   <div key={contact.id} className="flex items-start gap-3 min-w-0">
                     {contact.contact_type.includes("phone") ? (
                       <Phone className="h-4 w-4 text-muted-foreground mt-0.5" />
