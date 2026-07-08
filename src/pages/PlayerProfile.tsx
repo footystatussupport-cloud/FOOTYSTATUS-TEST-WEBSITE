@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate, Navigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
-import { ArrowLeft, User, Mail, Phone, Trophy, Star, Shield, Link as LinkIcon, Video, Heart, Eye } from "lucide-react";
+import { ArrowLeft, User, Users, Mail, Phone, Trophy, Star, Shield, Link as LinkIcon, Video, Heart, Eye } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/hooks/useAuth";
 import Header from "@/components/Header";
@@ -424,6 +424,11 @@ const PlayerProfile = () => {
     .filter(Boolean)
     .map((value) => String(value).trim().toLowerCase());
   const displayBio = player.bio && !detailValues.includes(player.bio.trim().toLowerCase()) ? player.bio : null;
+  // Parent contact info is surfaced at the top of the profile for players aged
+  // 6-13 (a safety feature); players 14+ keep it in the contact area at the bottom.
+  const playerBirthYear = Number(String(player.age_birth_year || "").match(/(19|20)\d{2}/)?.[0]);
+  const playerAge = playerBirthYear ? new Date().getFullYear() - playerBirthYear : null;
+  const isYoungPlayer = playerAge !== null && playerAge >= 6 && playerAge <= 13;
 
   return (
     <div className="min-h-screen bg-background">
@@ -470,6 +475,34 @@ const PlayerProfile = () => {
           </div>
           {displayBio && <p className="mx-auto mt-2 w-full max-w-xs break-words whitespace-pre-wrap text-center text-sm font-normal text-foreground" style={{ textAlign: "center" }}>{displayBio}</p>}
         </div>
+
+        {isYoungPlayer && parentContacts.length > 0 && (
+          <section className="mb-6">
+            <div className="rounded-xl border border-amber-300 bg-amber-50 p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <Users className="h-4 w-4 text-amber-800" />
+                <h2 className="text-sm font-bold tracking-wide text-amber-900">PARENT / GUARDIAN CONTACT</h2>
+              </div>
+              <div className="space-y-3">
+                {parentContacts.map((parentContact) => (
+                  <div key={parentContact.link_id} className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-foreground">{parentContact.parent_full_name}</p>
+                      <p className="text-xs capitalize text-muted-foreground">{parentContact.relationship_to_player || "Parent / Guardian"}</p>
+                    </div>
+                    {parentContact.contact_phone ? (
+                      <a href={`tel:${parentContact.contact_phone}`} className="shrink-0 text-sm font-medium text-navy hover:underline">
+                        {parentContact.contact_phone}
+                      </a>
+                    ) : (
+                      <span className="shrink-0 text-xs text-muted-foreground">No phone on file</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+        )}
 
         <section className="mb-6">
           <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-lg font-semibold text-navy">Details</h2><InlineProfileAdminControls targetUserId={player.user_id} targetName={player.name} section="profile" label="Edit player details" onChanged={() => setReloadToken((value) => value + 1)} /></div>
@@ -563,7 +596,7 @@ const PlayerProfile = () => {
           </div>
         ) : null}
 
-        {parentContacts.length > 0 && (
+        {!isYoungPlayer && parentContacts.length > 0 && (
           <section className="mb-6">
             <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-sm font-bold tracking-wide">PARENT / GUARDIAN CONTACTS</h2><InlineProfileAdminControls targetUserId={player.user_id} targetName={player.name} section="parents" label="Manage parent links" onChanged={() => setReloadToken((value) => value + 1)} /></div>
             <div className="bg-card border border-border rounded-lg p-4 space-y-3">
