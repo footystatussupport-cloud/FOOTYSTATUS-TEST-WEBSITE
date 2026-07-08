@@ -4,6 +4,7 @@ import { ArrowLeft, Check, KeyRound, Search, Shield, Trophy, UserPlus, Users, X 
 import { Skeleton } from "@/components/ui/skeleton";
 import MatchCard from "@/components/MatchCard";
 import { fetchRosterForClubTeam, formatTeamGender, normalizeTeamGender, sanitizeClubTeamAccessCode, updateClubTeamAccessCode } from "@/lib/clubTeams";
+import { removeTeamRosterPlayer, type TeamRosterPlayer } from "@/lib/teamMemberships";
 import { fetchClubTeamPageData, formatLeagueSubtitle, type ClubTeamPageData } from "@/lib/matches";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/hooks/useAuth";
@@ -380,15 +381,16 @@ const ClubTeamProfile = () => {
     setActionLoading(false);
   };
 
-  const handleRemovePlayer = async (membershipId: string) => {
+  const handleRemovePlayer = async (player: TeamRosterPlayer) => {
     if (!canManageClubTeam) return;
 
     const confirmed = window.confirm("Are you sure you want to remove this player from this daughter team?");
     if (!confirmed) return;
 
     setActionLoading(true);
-    const { error } = await (supabase as any).rpc("remove_player_from_club_team", {
-      _membership_id: membershipId,
+    const { error } = await removeTeamRosterPlayer(supabase, player, {
+      teamId: clubTeam?.team_id || null,
+      clubTeamId: clubTeam?.id || null,
     });
 
     if (error) {
@@ -1085,7 +1087,7 @@ const ClubTeamProfile = () => {
                       variant="outline"
                       className="shrink-0"
                       disabled={actionLoading}
-                      onClick={() => handleRemovePlayer(player.membership_id)}
+                      onClick={() => handleRemovePlayer(player)}
                     >
                       Remove
                     </Button>

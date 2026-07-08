@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
-import { fetchRosterForTeam, formatTeamLeagueLine, TeamRosterPlayer } from "@/lib/teamMemberships";
+import { fetchRosterForTeam, formatTeamLeagueLine, removeTeamRosterPlayer, TeamRosterPlayer } from "@/lib/teamMemberships";
 import { ClubTeamRecord, fetchClubByTeamId, fetchClubTeams, fetchRosterForClubTeam, formatTeamGender, getAgeGroupSortValue, normalizeTeamGender, sanitizeClubTeamAccessCode, updateClubTeamAccessCode } from "@/lib/clubTeams";
 import ClubNewsSection from "@/components/club-news/ClubNewsSection";
 import ProBadge from "@/components/ProBadge";
@@ -760,15 +760,16 @@ const TeamProfile = () => {
     setSavingClubTeamAccessCodeId(null);
   };
 
-  const handleRemovePlayerFromTeam = async (membershipId: string) => {
+  const handleRemovePlayerFromTeam = async (player: TeamRosterPlayer) => {
     if (!team || !canManageTeam) return;
 
     const confirmed = window.confirm("Are you sure you want to remove this player from this team?");
     if (!confirmed) return;
 
     setActionLoading(true);
-    const { error } = await (supabase as any).rpc("remove_player_from_club_team", {
-      _membership_id: membershipId,
+    const { error } = await removeTeamRosterPlayer(supabase, player, {
+      teamId: team.id,
+      clubTeamId: null,
     });
 
     if (error) {

@@ -12,7 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ActiveMembership, LiveStandingSummary, TeamRosterPlayer, fetchActiveMembershipsForUser, fetchLiveStandingForMembership, fetchRosterForTeam, formatTeamLeagueLine, getMembershipTeamDestination } from "@/lib/teamMemberships";
+import { ActiveMembership, LiveStandingSummary, TeamRosterPlayer, fetchActiveMembershipsForUser, fetchLiveStandingForMembership, fetchRosterForTeam, formatTeamLeagueLine, getMembershipTeamDestination, removeTeamRosterPlayer } from "@/lib/teamMemberships";
 import { OfferedClubTeam } from "@/components/club/ClubTeamsManager";
 import DaughterTeamEditDialog from "@/components/club/DaughterTeamEditDialog";
 import { ClubTeamRecord, archiveClubTeam, createDaughterTeam, fetchClubByTeamId, fetchClubTeamOptionsForParentTeam, fetchClubTeams, fetchRosterForClubTeam, formatTeamGender, getAgeGroupSortValue, getOfferedTeamDuplicate, normalizeTeamGender, sanitizeClubTeamAccessCode, setDaughterTeamGender, updateClubTeamAccessCode } from "@/lib/clubTeams";
@@ -4414,12 +4414,13 @@ const ProfilePage = () => {
     setCategorizingDaughterTeamId(null);
   };
 
-  const handleRemovePlayerFromClubTeam = async (membershipId: string) => {
+  const handleRemovePlayerFromClubTeam = async (player: TeamRosterPlayer) => {
     const confirmed = window.confirm("Are you sure you want to remove this player from this team?");
     if (!confirmed) return;
 
-    const { error } = await (supabase as any).rpc("remove_player_from_club_team", {
-      _membership_id: membershipId,
+    const { error } = await removeTeamRosterPlayer(supabase, player, {
+      teamId: teamAccountData?.team_id || null,
+      clubTeamId: null,
     });
 
     if (error) {
@@ -7252,7 +7253,7 @@ const ProfilePage = () => {
                           size="sm"
                           variant="outline"
                           className="shrink-0"
-                          onClick={() => handleRemovePlayerFromClubTeam(player.membership_id)}
+                          onClick={() => handleRemovePlayerFromClubTeam(player)}
                         >
                           Remove
                         </Button>

@@ -80,6 +80,39 @@ export interface TeamRosterPlayer {
   is_pro?: boolean;
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Roster entries backed by a real membership row have a UUID membership_id.
+ * Text-linked (typed team name) fallback entries use synthetic ids like
+ * "profile-<uuid>" / "legacy-<id>" that are NOT valid membership UUIDs.
+ */
+export const isRealMembershipId = (membershipId?: string | null) =>
+  Boolean(membershipId && UUID_PATTERN.test(membershipId));
+
+/**
+ * Remove a player from a team. Uses the membership-id RPC when the roster entry
+ * is a real membership; otherwise clears the typed team linkage by user id so
+ * fallback (name-matched) players can also be removed without a UUID error.
+ */
+export const removeTeamRosterPlayer = async (
+  supabaseClient: typeof supabase,
+  player: Pick<TeamRosterPlayer, "membership_id" | "player_user_id">,
+  context: { teamId?: string | null; clubTeamId?: string | null }
+) => {
+  if (isRealMembershipId(player.membership_id)) {
+    return (supabaseClient as any).rpc("remove_player_from_club_team", {
+      _membership_id: player.membership_id,
+    });
+  }
+
+  return (supabaseClient as any).rpc("remove_player_team_link_by_user", {
+    _player_user_id: player.player_user_id,
+    _team_id: context.teamId || null,
+    _club_team_id: context.clubTeamId || null,
+  });
+};
+
 export const formatTeamLeagueLine = (teamName?: string | null, ageGroup?: string | null, leagueName?: string | null) =>
   [
     teamName,
