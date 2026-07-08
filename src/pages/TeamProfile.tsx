@@ -242,34 +242,28 @@ const TeamProfile = () => {
   }, [clubTeamsByLeague]);
 
   const fetchManagementData = async (teamId: string) => {
-    const [inviteRes, requestRes] = await Promise.all([
+    // Pending join requests (mother + daughter teams) come from an authoritative
+    // SECURITY DEFINER RPC so they always appear for the club manager.
+    const [inviteRes, requestRpcRes] = await Promise.all([
       (supabase as any)
         .from("team_player_invites")
         .select("id, status, created_at, player_profile_id, player_user_id, age_group")
         .eq("team_id", teamId)
         .eq("status", "pending")
         .order("created_at", { ascending: false }),
-      (supabase as any)
-        .from("team_join_requests")
-        .select("id, status, requested_at, player_profile_id, player_user_id, age_group, access_code_last4")
-        .eq("team_id", teamId)
-        .eq("status", "pending")
-        .order("requested_at", { ascending: false }),
+      (supabase as any).rpc("get_club_pending_join_requests", { _team_id: teamId }),
     ]);
 
-    const playerIds = [
-      ...new Set([
-        ...(inviteRes.data || []).map((invite: any) => invite.player_profile_id),
-        ...(requestRes.data || []).map((request: any) => request.player_profile_id),
-      ]),
-    ];
+    const invitePlayerIds = [
+      ...new Set((inviteRes.data || []).map((invite: any) => invite.player_profile_id)),
+    ].filter(Boolean);
 
     let profilesById = new Map<string, PlayerSearchResult>();
-    if (playerIds.length) {
+    if (invitePlayerIds.length) {
       const { data: profiles } = await (supabase as any)
         .from("player_profiles_public")
         .select("id, user_id, full_name, position, profile_image_url, username")
-        .in("id", playerIds);
+        .in("id", invitePlayerIds);
       profilesById = new Map((profiles || []).map((profile: any) => [profile.id, profile]));
     }
 
@@ -280,9 +274,16 @@ const TeamProfile = () => {
       }))
     );
     setJoinRequests(
-      (requestRes.data || []).map((request: any) => ({
-        ...request,
-        player_name: profilesById.get(request.player_profile_id)?.full_name || "Unknown Player",
+      ((requestRpcRes.data || []) as any[]).map((request: any) => ({
+        id: request.id,
+        status: "pending",
+        requested_at: request.requested_at,
+        player_profile_id: request.player_profile_id,
+        player_user_id: request.player_user_id,
+        age_group: request.age_group,
+        access_code_last4: request.access_code_last4,
+        club_team_id: request.club_team_id,
+        player_name: request.player_name || "Unknown Player",
       }))
     );
   };

@@ -2530,48 +2530,44 @@ const ProfilePage = () => {
   const fetchManagedClubTeamRequests = async (teamId: string, clubTeams: ClubTeamRecord[]) => {
     const activeClubTeamIds = clubTeams.map((clubTeam) => clubTeam.id).filter(Boolean);
 
-    if (!teamId || !activeClubTeamIds.length) {
+    if (!teamId) {
       setManagedClubTeamInvites([]);
       setManagedClubTeamJoinRequests([]);
       return;
     }
 
-    const [inviteRes, requestRes] = await Promise.all([
-      (supabase as any)
-        .from("team_player_invites")
-        .select("id, team_id, club_team_id, player_profile_id, player_user_id, age_group, created_at")
-        .eq("team_id", teamId)
-        .eq("status", "pending")
-        .in("club_team_id", activeClubTeamIds)
-        .order("created_at", { ascending: false }),
-      (supabase as any)
-        .from("team_join_requests")
-        .select("id, team_id, club_team_id, player_profile_id, player_user_id, age_group, requested_at, access_code_last4")
-        .eq("team_id", teamId)
-        .eq("status", "pending")
-        .in("club_team_id", activeClubTeamIds)
-        .order("requested_at", { ascending: false }),
+    // Pending join requests come from an authoritative SECURITY DEFINER RPC so
+    // they always appear regardless of RLS visibility rules or team-id nuances.
+    // Invites still come from a direct query (owned by the club account).
+    const [requestRpcRes, inviteRes] = await Promise.all([
+      (supabase as any).rpc("get_club_pending_join_requests", { _team_id: teamId }),
+      activeClubTeamIds.length
+        ? (supabase as any)
+            .from("team_player_invites")
+            .select("id, team_id, club_team_id, player_profile_id, player_user_id, age_group, created_at")
+            .eq("team_id", teamId)
+            .eq("status", "pending")
+            .in("club_team_id", activeClubTeamIds)
+            .order("created_at", { ascending: false })
+        : Promise.resolve({ data: [] }),
     ]);
 
-    const playerProfileIds = [
-      ...new Set([
-        ...((inviteRes.data || []) as any[]).map((invite) => invite.player_profile_id),
-        ...((requestRes.data || []) as any[]).map((request) => request.player_profile_id),
-      ]),
+    const invitePlayerProfileIds = [
+      ...new Set(((inviteRes.data || []) as any[]).map((invite) => invite.player_profile_id)),
     ].filter(Boolean);
 
-    const { data: playerProfiles } = playerProfileIds.length
+    const { data: invitePlayerProfiles } = invitePlayerProfileIds.length
       ? await (supabase as any)
           .from("player_profiles_public")
           .select("id, user_id, full_name, profile_image_url, username")
-          .in("id", playerProfileIds)
+          .in("id", invitePlayerProfileIds)
       : { data: [] };
 
-    const playerProfilesById = new Map((playerProfiles || []).map((player: any) => [player.id, player]));
+    const invitePlayersById = new Map((invitePlayerProfiles || []).map((player: any) => [player.id, player]));
 
     setManagedClubTeamInvites(
       ((inviteRes.data || []) as any[]).map((invite) => {
-        const playerProfile = playerProfilesById.get(invite.player_profile_id);
+        const playerProfile = invitePlayersById.get(invite.player_profile_id);
         return {
           ...invite,
           player_name: playerProfile?.full_name || "Unknown Player",
@@ -2582,15 +2578,19 @@ const ProfilePage = () => {
     );
 
     setManagedClubTeamJoinRequests(
-      ((requestRes.data || []) as any[]).map((request) => {
-        const playerProfile = playerProfilesById.get(request.player_profile_id);
-        return {
-          ...request,
-          player_name: playerProfile?.full_name || "Unknown Player",
-          player_avatar_url: playerProfile?.profile_image_url || null,
-          player_username: playerProfile?.username || null,
-        };
-      })
+      ((requestRpcRes.data || []) as any[]).map((request) => ({
+        id: request.id,
+        team_id: request.team_id,
+        club_team_id: request.club_team_id,
+        player_profile_id: request.player_profile_id,
+        player_user_id: request.player_user_id,
+        age_group: request.age_group,
+        requested_at: request.requested_at,
+        access_code_last4: request.access_code_last4,
+        player_name: request.player_name || "Unknown Player",
+        player_avatar_url: request.player_avatar_url || null,
+        player_username: request.player_username || null,
+      }))
     );
   };
 

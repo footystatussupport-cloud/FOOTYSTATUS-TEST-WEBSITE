@@ -155,18 +155,77 @@ const NotificationsPage = () => {
     await Promise.all([loadNotifications(), loadPendingInvites()]);
   };
 
+  const handlePlayerJoinRequestNotification = async (notification: AppNotification, approve: boolean) => {
+    if (!user) return;
+    const requestId = typeof notification.metadata?.request_id === "string" ? notification.metadata.request_id : notification.entity_id;
+    if (!requestId) {
+      toast({ title: "Request missing", description: "This notification is missing its request details.", variant: "destructive" });
+      return;
+    }
+
+    const { data: request, error: requestError } = await (supabase as any)
+      .from("team_join_requests")
+      .select("id, status")
+      .eq("id", requestId)
+      .maybeSingle();
+
+    if (requestError || !request) {
+      toast({ title: "Request not found", description: requestError?.message || "This request may have already been handled.", variant: "destructive" });
+      await markNotificationRead(notification.id, user.id);
+      await loadNotifications();
+      return;
+    }
+
+    if (request.status !== "pending") {
+      toast({ title: "Already handled", description: "This request is no longer pending." });
+      await markNotificationRead(notification.id, user.id);
+      await loadNotifications();
+      return;
+    }
+
+    // Same backend action as the Pending Daughter Team Requests section, so both
+    // surfaces stay synchronized (links the player to the requested daughter team
+    // on approval, clears this notification via the request-update trigger).
+    const { error } = await (supabase as any).rpc("review_team_join_request", {
+      _request_id: requestId,
+      _approve: approve,
+    });
+    if (error) {
+      toast({ title: "Update failed", description: error.message, variant: "destructive" });
+      return;
+    }
+
+    await markNotificationRead(notification.id, user.id);
+    toast({ title: approve ? "Player approved" : "Request declined" });
+    await Promise.all([loadNotifications(), loadPendingInvites()]);
+  };
+
   const renderNotificationActions = (notification: AppNotification) => {
-    if (notification.type !== "coach_staff_join_requested") return null;
-    return (
-      <div className="flex gap-2">
-        <Button size="sm" className="flex-1" onClick={() => handleCoachStaffRequestNotification(notification, true)}>
-          Accept
-        </Button>
-        <Button size="sm" variant="outline" className="flex-1" onClick={() => handleCoachStaffRequestNotification(notification, false)}>
-          Deny
-        </Button>
-      </div>
-    );
+    if (notification.type === "coach_staff_join_requested") {
+      return (
+        <div className="flex gap-2">
+          <Button size="sm" className="flex-1" onClick={() => handleCoachStaffRequestNotification(notification, true)}>
+            Accept
+          </Button>
+          <Button size="sm" variant="outline" className="flex-1" onClick={() => handleCoachStaffRequestNotification(notification, false)}>
+            Deny
+          </Button>
+        </div>
+      );
+    }
+    if (notification.type === "team_join_requested") {
+      return (
+        <div className="flex gap-2">
+          <Button size="sm" className="flex-1" onClick={() => handlePlayerJoinRequestNotification(notification, true)}>
+            Accept
+          </Button>
+          <Button size="sm" variant="outline" className="flex-1" onClick={() => handlePlayerJoinRequestNotification(notification, false)}>
+            Decline
+          </Button>
+        </div>
+      );
+    }
+    return null;
   };
 
   const handleRespondInvite = async (inviteId: string, accept: boolean) => {
