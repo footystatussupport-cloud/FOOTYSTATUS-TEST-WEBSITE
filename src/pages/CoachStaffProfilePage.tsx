@@ -72,6 +72,11 @@ const CoachStaffProfilePage = () => {
     loadProfile();
   }, [userId]);
 
+  // Must run on every render (before any early return) to keep hook order stable
+  // — otherwise React throws "rendered more hooks than during the previous
+  // render" (#310) once loading flips to false.
+  const coachStaffTeamGroups = useMemo(() => groupCoachStaffTeamLinksByMotherTeam(teams), [teams]);
+
   if (loading) {
     return (
       <div className="min-h-screen bg-background max-w-md mx-auto border-x border-border p-4">
@@ -97,7 +102,6 @@ const CoachStaffProfilePage = () => {
   const isScout = profile.account_role === "scout";
   const isAcademyStaff = profile.account_role === "academy_director";
   const isParent = profile.account_category === "parent" || profile.account_role === "parent";
-  const coachStaffTeamGroups = useMemo(() => groupCoachStaffTeamLinksByMotherTeam(teams), [teams]);
   const dedupedContacts = contacts.reduce<ContactItem[]>((result, contact) => {
     const normalizedKind = contact.contact_type.includes("email")
       ? "email"

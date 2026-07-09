@@ -10,6 +10,8 @@ interface ProfileHeaderProps {
   roleLabel: string;
   /** Username shown in grey immediately to the right of the role. */
   username?: string | null;
+  /** Optional badge rendered inline right after the @username (e.g. verified referee check). */
+  usernameBadge?: ReactNode;
   /** Bio shown directly beneath the header in normal black text. */
   bio?: string | null;
   /** Optional badge rendered inline next to the display name (verified / pro). */
@@ -35,6 +37,7 @@ const ProfileHeader = ({
   displayName,
   roleLabel,
   username,
+  usernameBadge,
   bio,
   nameBadge,
   below,
@@ -65,6 +68,7 @@ const ProfileHeader = ({
       <div className="mt-1 flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 text-sm">
         <span className="font-bold text-foreground">{roleLabel}</span>
         {username ? <span className="break-all text-muted-foreground">@{username}</span> : null}
+        {usernameBadge}
       </div>
 
       {below}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, Building2, Calendar, Shield, Star, Trophy, User } from "lucide-react";
+import { ArrowLeft, BadgeCheck, Building2, Calendar, Shield, Star, Trophy, User } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Skeleton } from "@/components/ui/skeleton";
 import { supabase } from "@/integrations/supabase/client";
@@ -106,6 +106,11 @@ const RefereeProfilePage = () => {
           displayName={profile.full_name || "Referee"}
           roleLabel="Referee"
           username={profile.username}
+          usernameBadge={
+            profile.referee_verification_status === "verified" ? (
+              <BadgeCheck className="h-4 w-4 shrink-0 text-green-600" aria-label="Verified referee" />
+            ) : null
+          }
           bio={profile.bio}
           fallbackIcon={<Shield className="h-12 w-12 text-background" />}
           topRight={<InlineProfileAdminControls targetUserId={profile.user_id} targetName={profile.full_name} />}

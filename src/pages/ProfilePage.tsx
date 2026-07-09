@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, ChangeEvent, PointerEvent, useMemo } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft, Camera, User, Calendar, Trophy, Edit, Save, X, Upload, Video, Crown, Lock, Link as LinkIcon, Phone, Mail, Shield, Star, Building2, Briefcase, MapPin, Users, Heart, Eye, Check } from "lucide-react";
+import { ArrowLeft, Camera, User, Calendar, Trophy, Edit, Save, X, Upload, Video, Crown, Lock, Link as LinkIcon, Phone, Mail, Shield, Star, Building2, Briefcase, MapPin, Users, Heart, Eye, Check, BadgeCheck } from "lucide-react";
 import Header from "@/components/Header";
 import ProfileHeader from "@/components/ProfileHeader";
 import LinkedParentTile from "@/components/LinkedParentTile";
@@ -113,6 +113,7 @@ interface ProfileData {
   scouting_positions?: string[] | null;
   scouting_accolades?: string | null;
   referee_certification_level?: string | null;
+  referee_verification_status?: string | null;
   referee_license_number?: string | null;
   referee_certifying_organization?: string | null;
   referee_years_experience?: number | null;
@@ -4904,6 +4905,11 @@ const ProfilePage = () => {
             displayName={profileDisplayName}
             roleLabel={isPlayerAccount ? "Player" : getAccountRoleLabel()}
             username={profile?.username}
+            usernameBadge={
+              isRefereeAccount && profile?.referee_verification_status === "verified" ? (
+                <BadgeCheck className="h-4 w-4 shrink-0 text-green-600" aria-label="Verified referee" />
+              ) : null
+            }
             bio={displayProfileBio}
             avatarOverlay={
               <button

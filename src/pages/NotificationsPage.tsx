@@ -17,7 +17,7 @@ import {
 import { PendingTeamInviteSummary, fetchPendingTeamInvitesForUser, formatTeamLeagueLine } from "@/lib/teamMemberships";
 import { useAuth } from "@/hooks/useAuth";
 import { reviewCoachStaffJoinRequest } from "@/lib/coachStaffTeams";
-import { reviewParentPlayerLink } from "@/lib/parentLinks";
+import { fetchLinkedParentsForPlayer, reviewParentPlayerLink } from "@/lib/parentLinks";
 
 const PAGE_SIZE = 25;
 
@@ -172,29 +172,11 @@ const NotificationsPage = () => {
       return;
     }
 
-    const { data: request, error: requestError } = await (supabase as any)
-      .from("team_join_requests")
-      .select("id, status")
-      .eq("id", requestId)
-      .maybeSingle();
-
-    if (requestError || !request) {
-      toast({ title: "Request not found", description: requestError?.message || "This request may have already been handled.", variant: "destructive" });
-      await markNotificationRead(notification.id, user.id);
-      await loadNotifications();
-      return;
-    }
-
-    if (request.status !== "pending") {
-      toast({ title: "Already handled", description: "This request is no longer pending." });
-      await markNotificationRead(notification.id, user.id);
-      await loadNotifications();
-      return;
-    }
-
-    // Same backend action as the Pending Daughter Team Requests section, so both
-    // surfaces stay synchronized (links the player to the requested daughter team
-    // on approval, clears this notification via the request-update trigger).
+    // Do not pre-read team_join_requests here. The direct read can be blocked by
+    // RLS for school/daughter-team requests even while the request is still
+    // pending, causing a false "request not found" message. The SECURITY
+    // DEFINER review RPC below is the single source of truth used by both the
+    // notification buttons and the Pending Daughter Team Requests list.
     const { error } = await (supabase as any).rpc("review_team_join_request", {
       _request_id: requestId,
       _approve: approve,
@@ -211,8 +193,30 @@ const NotificationsPage = () => {
 
   const handleParentLinkRequestNotification = async (notification: AppNotification, approve: boolean) => {
     if (!user) return;
-    const linkId =
+
+    const storedLinkId =
       typeof notification.metadata?.link_id === "string" ? notification.metadata.link_id : notification.entity_id;
+    const parentUserId =
+      typeof notification.metadata?.parent_user_id === "string" ? notification.metadata.parent_user_id : null;
+
+    // Resolve the CURRENT pending parent link from the same authoritative source
+    // the profile tile uses, so Accept/Decline always targets the real pending
+    // record even when the notification's stored id is stale (e.g. a request
+    // created before this fix, or an id that no longer matches). This keeps the
+    // notification action and the pending connection tied to the same record.
+    let linkId = storedLinkId;
+    try {
+      const linkedParents = await fetchLinkedParentsForPlayer(user.id);
+      const pending = linkedParents.filter((p) => p.status === "pending");
+      const match =
+        pending.find((p) => p.link_id === storedLinkId) ||
+        (parentUserId ? pending.find((p) => p.parent_user_id === parentUserId) : undefined) ||
+        (pending.length === 1 ? pending[0] : undefined);
+      if (match) linkId = match.link_id;
+    } catch {
+      /* fall back to the notification's stored id */
+    }
+
     if (!linkId) {
       toast({ title: "Request missing", description: "This notification is missing its request details.", variant: "destructive" });
       return;
@@ -220,6 +224,9 @@ const NotificationsPage = () => {
 
     const { error } = await reviewParentPlayerLink(linkId, approve);
     if (error) {
+      // The pending link may already have been handled elsewhere.
+      await markNotificationRead(notification.id, user.id);
+      await loadNotifications();
       toast({ title: "Update failed", description: error.message, variant: "destructive" });
       return;
     }
