@@ -164,12 +164,59 @@ export interface CoachStaffTeamLink {
   club_team_name?: string | null;
 }
 
+export interface CoachStaffTeamGroup {
+  team_id: string;
+  team_name: string;
+  team_logo_url: string | null;
+  coach_user_id: string;
+  mother_link: CoachStaffTeamLink | null;
+  daughter_links: CoachStaffTeamLink[];
+}
+
 export interface CoachStaffTeamAssignmentLine {
   id: string;
   club_team_id?: string | null;
   staff_role?: string | null;
   team_name: string;
 }
+
+export const groupCoachStaffTeamLinksByMotherTeam = (links: CoachStaffTeamLink[]) => {
+  const groups = new Map<string, CoachStaffTeamGroup>();
+
+  links.forEach((link) => {
+    const current =
+      groups.get(link.team_id) ||
+      {
+        team_id: link.team_id,
+        team_name: link.team_name,
+        team_logo_url: link.team_logo_url,
+        coach_user_id: link.coach_user_id,
+        mother_link: null,
+        daughter_links: [],
+      };
+
+    current.team_name = current.team_name || link.team_name;
+    current.team_logo_url = current.team_logo_url || link.team_logo_url;
+
+    if (link.club_team_id) {
+      current.daughter_links.push(link);
+    } else {
+      current.mother_link = link;
+    }
+
+    groups.set(link.team_id, current);
+  });
+
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      daughter_links: [...group.daughter_links].sort((a, b) =>
+        (a.club_team_name || "").localeCompare(b.club_team_name || "") ||
+        (a.staff_role || "").localeCompare(b.staff_role || "")
+      ),
+    }))
+    .sort((a, b) => a.team_name.localeCompare(b.team_name));
+};
 
 export const fetchCoachStaffProfiles = async (query?: string) => {
   let request = (supabase as any)

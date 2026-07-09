@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Briefcase, Link as LinkIcon, Mail, MapPin, Phone, Shield, Star, Trophy, User, Users } from "lucide-react";
 import Header from "@/components/Header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { supabase } from "@/integrations/supabase/client";
-import { CoachStaffProfile, CoachStaffTeamLink, fetchCoachStaffTeamLinksForUser, formatRoleDisplayLabel } from "@/lib/coachStaffTeams";
+import { CoachStaffProfile, CoachStaffTeamLink, fetchCoachStaffTeamLinksForUser, formatRoleDisplayLabel, groupCoachStaffTeamLinksByMotherTeam } from "@/lib/coachStaffTeams";
 import InlineProfileAdminControls from "@/components/admin/InlineProfileAdminControls";
 import ProfileHeader from "@/components/ProfileHeader";
 
@@ -97,6 +97,7 @@ const CoachStaffProfilePage = () => {
   const isScout = profile.account_role === "scout";
   const isAcademyStaff = profile.account_role === "academy_director";
   const isParent = profile.account_category === "parent" || profile.account_role === "parent";
+  const coachStaffTeamGroups = useMemo(() => groupCoachStaffTeamLinksByMotherTeam(teams), [teams]);
   const dedupedContacts = contacts.reduce<ContactItem[]>((result, contact) => {
     const normalizedKind = contact.contact_type.includes("email")
       ? "email"
@@ -142,38 +143,6 @@ const CoachStaffProfilePage = () => {
             bio={profile.bio}
             topRight={<InlineProfileAdminControls targetUserId={profile.user_id} targetName={profile.full_name} />}
           />
-
-          {teams.length ? (
-            <section className="mb-6">
-              <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-lg font-semibold text-navy">Current Teams</h2><InlineProfileAdminControls targetUserId={profile.user_id} targetName={profile.full_name} section="teams" label="Manage team links" /></div>
-              <div className="space-y-3">
-                {teams.map((team) => (
-                  <button
-                    key={team.id}
-                    onClick={() => navigate(`/team/${team.team_id}`)}
-                    className="w-full bg-card border-2 border-border rounded-xl p-4 flex items-center gap-3 hover:border-accent hover:shadow-md transition-all text-left"
-                  >
-                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-accent to-red-light flex items-center justify-center shadow-md overflow-hidden">
-                      {team.team_logo_url ? (
-                        <img src={team.team_logo_url} alt={team.team_name} className="w-full h-full object-cover" />
-                      ) : (
-                        <Shield className="h-6 w-6 text-white" />
-                      )}
-                    </div>
-                    <div>
-                      <p className="font-semibold text-foreground">{team.team_name}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {formatRoleDisplayLabel(
-                          team.staff_role || (isScout ? profile.scout_role_title : profile.coaching_role_type),
-                          isScout ? "Scout" : isAcademyStaff ? "Team Staff" : "Coaching Staff"
-                        )}
-                      </p>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </section>
-          ) : null}
 
           <section className="mb-6">
             <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-lg font-semibold text-navy mb-3">{isParent ? "Parent / Guardian Details" : isScout ? "Scout Details" : isAcademyStaff ? "Club Director / Team Staff Details" : "Coach / Staff Details"}</h2><InlineProfileAdminControls targetUserId={profile.user_id} targetName={profile.full_name} section="profile" label="Edit profile information" /></div>
@@ -268,6 +237,47 @@ const CoachStaffProfilePage = () => {
               </div>
             </div>
           </section>
+
+          {coachStaffTeamGroups.length ? (
+            <section className="mb-6">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <h2 className="text-lg font-semibold text-navy">Current Teams</h2>
+                <InlineProfileAdminControls targetUserId={profile.user_id} targetName={profile.full_name} section="teams" label="Manage team links" />
+              </div>
+              <div className="space-y-3">
+                {coachStaffTeamGroups.map((group) => (
+                  <button
+                    key={group.team_id}
+                    onClick={() => navigate(`/team/${group.team_id}`)}
+                    className="w-full bg-card border border-border rounded-xl p-4 flex items-start gap-3 hover:border-accent hover:shadow-sm transition-all text-left"
+                  >
+                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-accent to-red-light flex items-center justify-center shadow-md overflow-hidden shrink-0">
+                      {group.team_logo_url ? (
+                        <img src={group.team_logo_url} alt={group.team_name} className="w-full h-full object-cover" />
+                      ) : (
+                        <Shield className="h-6 w-6 text-white" />
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="font-semibold text-foreground">{group.team_name}</p>
+                      <div className="mt-1 space-y-0.5">
+                        {group.mother_link ? (
+                          <p className="text-xs text-muted-foreground">
+                            Mother Team — {formatRoleDisplayLabel(group.mother_link.staff_role || (isScout ? profile.scout_role_title : profile.coaching_role_type), isScout ? "Scout" : isAcademyStaff ? "Team Staff" : "Coaching Staff")}
+                          </p>
+                        ) : null}
+                        {group.daughter_links.map((link) => (
+                          <p key={link.id} className="text-xs text-muted-foreground">
+                            {link.club_team_name || "Daughter Team"} — {formatRoleDisplayLabel(link.staff_role || (isScout ? profile.scout_role_title : profile.coaching_role_type), isScout ? "Scout" : isAcademyStaff ? "Team Staff" : "Coaching Staff")}
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </section>
+          ) : null}
 
           {dedupedContacts.length ? (
             <section className="mb-6">

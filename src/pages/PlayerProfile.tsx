@@ -10,9 +10,10 @@ import ProBadge from "@/components/ProBadge";
 import CurrentStatsSection, { CurrentStats } from "@/components/CurrentStatsSection";
 import ClubHistorySection, { ClubHistoryEntry } from "@/components/ClubHistorySection";
 import { getIsPro, recordProfileView } from "@/lib/subscriptions";
-import { PrivateParentContact, fetchPrivateParentContactsForPlayer } from "@/lib/parentLinks";
+import { LinkedParentTile as LinkedParentTileData, fetchLinkedParentsForPlayer } from "@/lib/parentLinks";
 import InlineProfileAdminControls from "@/components/admin/InlineProfileAdminControls";
 import ProfileHeader from "@/components/ProfileHeader";
+import LinkedParentTile from "@/components/LinkedParentTile";
 
 interface Player {
   id: string;
@@ -121,7 +122,7 @@ const PlayerProfile = () => {
   const [team, setTeam] = useState<Team | null>(null);
   const [league, setLeague] = useState<League | null>(null);
   const [contacts, setContacts] = useState<ContactItem[]>([]);
-  const [parentContacts, setParentContacts] = useState<PrivateParentContact[]>([]);
+  const [parentContacts, setParentContacts] = useState<LinkedParentTileData[]>([]);
   const [activeMembership, setActiveMembership] = useState<ActiveMembership | null>(null);
   const [teamStanding] = useState<LiveStandingSummary | null>(null);
   const [linkedTeamLogoUrl, setLinkedTeamLogoUrl] = useState<string | null>(null);
@@ -308,8 +309,7 @@ const PlayerProfile = () => {
           .rpc("get_profile_contact_info", { _target_user_id: viewedUserId });
 
         setContacts((contactData || []) as ContactItem[]);
-        const { data: privateParentContacts } = await fetchPrivateParentContactsForPlayer(viewedUserId);
-        setParentContacts(privateParentContacts);
+        setParentContacts(await fetchLinkedParentsForPlayer(viewedUserId));
       } else {
         setContacts([]);
         setParentContacts([]);
@@ -465,23 +465,15 @@ const PlayerProfile = () => {
             <div className="rounded-xl border border-amber-300 bg-amber-50 p-4">
               <div className="mb-2 flex items-center gap-2">
                 <Users className="h-4 w-4 text-amber-800" />
-                <h2 className="text-sm font-bold tracking-wide text-amber-900">PARENT / GUARDIAN CONTACT</h2>
+                <h2 className="text-sm font-bold tracking-wide text-amber-900">PARENT / GUARDIAN</h2>
               </div>
               <div className="space-y-3">
-                {parentContacts.map((parentContact) => (
-                  <div key={parentContact.link_id} className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="font-semibold text-foreground">{parentContact.parent_full_name}</p>
-                      <p className="text-xs capitalize text-muted-foreground">{parentContact.relationship_to_player || "Parent / Guardian"}</p>
-                    </div>
-                    {parentContact.contact_phone ? (
-                      <a href={`tel:${parentContact.contact_phone}`} className="shrink-0 text-sm font-medium text-navy hover:underline">
-                        {parentContact.contact_phone}
-                      </a>
-                    ) : (
-                      <span className="shrink-0 text-xs text-muted-foreground">No phone on file</span>
-                    )}
-                  </div>
+                {parentContacts.map((parentTile) => (
+                  <LinkedParentTile
+                    key={parentTile.link_id}
+                    tile={parentTile}
+                    onOpen={(parentUserId) => navigate(`/parent/${parentUserId}`)}
+                  />
                 ))}
               </div>
             </div>
@@ -582,19 +574,14 @@ const PlayerProfile = () => {
 
         {!isYoungPlayer && parentContacts.length > 0 && (
           <section className="mb-6">
-            <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-sm font-bold tracking-wide">PARENT / GUARDIAN CONTACTS</h2><InlineProfileAdminControls targetUserId={player.user_id} targetName={player.name} section="parents" label="Manage parent links" onChanged={() => setReloadToken((value) => value + 1)} /></div>
+            <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-sm font-bold tracking-wide">PARENTS / GUARDIANS</h2><InlineProfileAdminControls targetUserId={player.user_id} targetName={player.name} section="parents" label="Manage parent links" onChanged={() => setReloadToken((value) => value + 1)} /></div>
             <div className="bg-card border border-border rounded-lg p-4 space-y-3">
-              {parentContacts.map((parentContact) => (
-                <div key={parentContact.link_id} className="rounded-lg border border-border p-3">
-                  <p className="font-medium text-foreground">{parentContact.parent_full_name}</p>
-                  <p className="text-xs text-muted-foreground capitalize">{parentContact.relationship_to_player || "Parent / Guardian"}</p>
-                  <div className="mt-2 space-y-1 text-sm text-muted-foreground">
-                    {parentContact.contact_phone ? <p>Phone: {parentContact.contact_phone}</p> : null}
-                    {parentContact.contact_email ? <p>Email: {parentContact.contact_email}</p> : null}
-                    {parentContact.emergency_contact ? <p>Emergency: {parentContact.emergency_contact}</p> : null}
-                    {parentContact.notes ? <p>Notes: {parentContact.notes}</p> : null}
-                  </div>
-                </div>
+              {parentContacts.map((parentTile) => (
+                <LinkedParentTile
+                  key={parentTile.link_id}
+                  tile={parentTile}
+                  onOpen={(parentUserId) => navigate(`/parent/${parentUserId}`)}
+                />
               ))}
             </div>
           </section>

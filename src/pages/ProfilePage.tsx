@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { ArrowLeft, Camera, User, Calendar, Trophy, Edit, Save, X, Upload, Video, Crown, Lock, Link as LinkIcon, Phone, Mail, Shield, Star, Building2, Briefcase, MapPin, Users, Heart, Eye, Check } from "lucide-react";
 import Header from "@/components/Header";
 import ProfileHeader from "@/components/ProfileHeader";
+import LinkedParentTile from "@/components/LinkedParentTile";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useSettings } from "@/hooks/useSettings";
@@ -22,6 +23,7 @@ import { Badge } from "@/components/ui/badge";
 import ProBadge from "@/components/ProBadge";
 import ReportContentReview from "@/components/admin/ReportContentReview";
 import NextUpClipReviewBank from "@/components/admin/NextUpClipReviewBank";
+import RefereeVerificationQueue from "@/components/admin/RefereeVerificationQueue";
 
 import CurrentStatsSection, { CurrentStats } from "@/components/CurrentStatsSection";
 import ClubHistorySection, { ClubHistoryEntry } from "@/components/ClubHistorySection";
@@ -38,6 +40,7 @@ import {
   fetchCoachStaffTeamLinksForUser,
   formatRoleDisplayLabel,
   formatSpecificRoleDisplayLabel,
+  groupCoachStaffTeamLinksByMotherTeam,
   inviteCoachStaffToTeam,
   requestCoachClubLink,
   reviewCoachStaffJoinRequest,
@@ -54,10 +57,11 @@ import {
 } from "@/lib/subscriptions";
 import { FOOTY_STATUS_SUPER_ADMIN_EMAIL, isFootyStatusSuperAdminEmail } from "@/lib/superAdmin";
 import {
+  LinkedParentTile as LinkedParentTileData,
   ParentPlayerLink,
   ParentProfileDetails,
+  fetchLinkedParentsForPlayer,
   fetchParentLinksForParentUser,
-  fetchParentLinksForPlayerUser,
   fetchParentProfileForUser,
   removeOwnParentPlayerLink,
   requestParentPlayerLink,
@@ -66,6 +70,7 @@ import {
 import { USERNAME_MAX_LENGTH, getUsernameErrorMessage, normalizeUsername, validateUsername } from "@/lib/usernames";
 import { UsernameAvailabilityHint, useUsernameAvailability } from "@/components/UsernameAvailability";
 import { containsProfanityInFields } from "@/lib/profanityFilter";
+import { trimVideoToMp4 } from "@/lib/videoTrim";
 
 interface ProfileData {
   id: string;
@@ -559,7 +564,7 @@ const ProfilePage = () => {
   const [staffAccountData, setStaffAccountData] = useState<StaffAccountData | null>(null);
   const [parentAccountData, setParentAccountData] = useState<ParentProfileDetails | null>(null);
   const [parentChildLinks, setParentChildLinks] = useState<ParentPlayerLink[]>([]);
-  const [playerParentLinks, setPlayerParentLinks] = useState<ParentPlayerLink[]>([]);
+  const [playerParentLinks, setPlayerParentLinks] = useState<LinkedParentTileData[]>([]);
   const [parentPlayerSearchQuery, setParentPlayerSearchQuery] = useState("");
   const [parentPlayerSearchResults, setParentPlayerSearchResults] = useState<any[]>([]);
   const [requestingParentLink, setRequestingParentLink] = useState(false);
@@ -640,6 +645,9 @@ const ProfilePage = () => {
   const [avatarCropOffsetX, setAvatarCropOffsetX] = useState(0);
   const [avatarCropOffsetY, setAvatarCropOffsetY] = useState(0);
   const [uploadingClip, setUploadingClip] = useState(false);
+  // Progress (0-100) while the trimmed clip is being exported in the browser
+  // before upload; null when no processing is in progress.
+  const [clipProcessingProgress, setClipProcessingProgress] = useState<number | null>(null);
   const [selectedVideoFile, setSelectedVideoFile] = useState<File | null>(null);
   const [selectedVideoDuration, setSelectedVideoDuration] = useState<number | null>(null);
   const [selectedVideoPreviewUrl, setSelectedVideoPreviewUrl] = useState<string | null>(null);
@@ -651,7 +659,13 @@ const ProfilePage = () => {
   const [clipTrimStart, setClipTrimStart] = useState(0);
   const [clipTrimEnd, setClipTrimEnd] = useState(0);
   const [clipPlaybackVolume, setClipPlaybackVolume] = useState(1);
-  const [clipFitMode, setClipFitMode] = useState<ClipFitMode>("cover");
+  // Most Next Up clips come from wide match footage (Veo/Trace/Hudl/sideline
+  // cameras), so default to showing the whole clip instead of cropping the field.
+  const [clipFitMode, setClipFitMode] = useState<ClipFitMode>("contain");
+  // Post-approval caption editing (display setting + caption only; the approved
+  // video file itself can never be replaced).
+  const [clipCaptionDrafts, setClipCaptionDrafts] = useState<Record<string, string>>({});
+  const [savingClipCaptionId, setSavingClipCaptionId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<EditFormState>({});
   const offeredClubTeamsByLeague = useMemo(() => {
     const activeTeams = offeredClubTeams.filter((team) => team.status !== "archived");
@@ -848,8 +862,9 @@ const ProfilePage = () => {
   const isParentAccount = resolvedAccountCategory === "parent" || resolvedAccountRole === "parent";
   const playerBirthYear = Number(String(profile?.age_birth_year || "").match(/(19|20)\d{2}/)?.[0]);
   const playerAge = playerBirthYear ? new Date().getFullYear() - playerBirthYear : null;
-  // Parent linking is available to player accounts of any age.
-  const isYoungPlayerParentLinkAge = isPlayerAccount;
+  // Parent linking is available to player accounts of any age. The age check
+  // only controls where linked parent info is displayed on player profiles.
+  const isYoungPlayerParentLinkAge = isPlayerAccount && playerAge !== null && playerAge >= 6 && playerAge <= 13;
   const isOfficialFootyStatusAccount = isFootyStatusSuperAdminEmail(user?.email || profile?.email);
   const profileDisplayName = isTeamAccount
     ? teamAccountData?.club_name || profile?.club_name || profile?.full_name || "No organization set"
@@ -2045,7 +2060,7 @@ const ProfilePage = () => {
         height: prev.height || playerAccount?.height || "",
         weight: prev.weight || playerAccount?.weight || "",
       }));
-      setPlayerParentLinks(await fetchParentLinksForPlayerUser(activeProfile.user_id));
+      setPlayerParentLinks(await fetchLinkedParentsForPlayer(activeProfile.user_id));
     }
   };
 
@@ -3387,7 +3402,7 @@ const ProfilePage = () => {
       toast({ title: "Could not review parent link", description: error.message, variant: "destructive" });
     } else {
       toast({ title: approve ? "Parent link approved" : "Parent link denied" });
-      if (user?.id) setPlayerParentLinks(await fetchParentLinksForPlayerUser(user.id));
+      if (user?.id) setPlayerParentLinks(await fetchLinkedParentsForPlayer(user.id));
     }
     setReviewingParentLinkId(null);
   };
@@ -3649,7 +3664,7 @@ const ProfilePage = () => {
     setClipTrimStart(0);
     setClipTrimEnd(0);
     setClipPlaybackVolume(1);
-    setClipFitMode("cover");
+    setClipFitMode("contain");
     if (clipInputRef.current) clipInputRef.current.value = "";
   };
 
@@ -3684,7 +3699,7 @@ const ProfilePage = () => {
       setClipTrimStart(0);
       setClipTrimEnd(initialTrimEnd);
       setClipPlaybackVolume(1);
-      setClipFitMode("cover");
+      setClipFitMode("contain");
       toast({
         title: "Video ready",
         description:
@@ -3741,12 +3756,49 @@ const ProfilePage = () => {
 
     setUploadingClip(true);
 
-    const fileExt = selectedVideoFile.name.split('.').pop();
-    const fileName = `${user.id}/${Date.now()}.${fileExt}`;
+    // Export ONLY the trimmed segment as a small MP4 in the browser before
+    // uploading. Unused portions of the original recording are never uploaded,
+    // so a long source recording no longer trips the storage size limit.
+    let uploadFile: File = selectedVideoFile;
+    let outputDurationSeconds = editedClipDurationSeconds;
+    setClipProcessingProgress(0);
+    try {
+      const trimmed = await trimVideoToMp4(
+        selectedVideoFile,
+        clipTrimStart,
+        clipTrimEnd,
+        (ratio) => setClipProcessingProgress(Math.round(ratio * 100))
+      );
+      uploadFile = trimmed.file;
+      if (trimmed.durationSeconds > 0) outputDurationSeconds = trimmed.durationSeconds;
+    } catch {
+      setClipProcessingProgress(null);
+      setUploadingClip(false);
+      toast({
+        title: "Could not process video",
+        description: "This video couldn't be trimmed in your browser. Try a shorter selection or a smaller source file, then upload again.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setClipProcessingProgress(null);
+
+    const MAX_CLIP_UPLOAD_BYTES = 200 * 1024 * 1024; // matches the clips storage bucket limit
+    if (uploadFile.size > MAX_CLIP_UPLOAD_BYTES) {
+      setUploadingClip(false);
+      toast({
+        title: "Clip is too large to upload",
+        description: "Even after trimming, this clip is over 200 MB. Trim it shorter or use a lower-resolution source.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const fileName = `${user.id}/${Date.now()}.mp4`;
 
     const { error: uploadError } = await supabase.storage
       .from('clips')
-      .upload(fileName, selectedVideoFile, { cacheControl: '3600', upsert: false });
+      .upload(fileName, uploadFile, { cacheControl: '3600', upsert: false, contentType: 'video/mp4' });
 
     if (uploadError) {
       toast({ title: "Upload failed", description: uploadError.message, variant: "destructive" });
@@ -3794,9 +3846,11 @@ const ProfilePage = () => {
         player_id: null,
         user_id: user.id,
         visibility: clipVisibility,
-        duration: roundClipSeconds(editedClipDurationSeconds),
-        trim_start_seconds: roundClipSeconds(clipTrimStart),
-        trim_end_seconds: roundClipSeconds(clipTrimEnd),
+        duration: roundClipSeconds(outputDurationSeconds),
+        // The uploaded file is already the trimmed segment, so playback uses the
+        // whole file from the start — there is no second trim to apply.
+        trim_start_seconds: 0,
+        trim_end_seconds: roundClipSeconds(outputDurationSeconds),
         playback_volume: clipPlaybackVolume,
         fit_mode: clipFitMode,
       });
@@ -3809,7 +3863,7 @@ const ProfilePage = () => {
       setClipCaption("");
       setClipVisibility("public");
       setClipPlaybackVolume(1);
-      setClipFitMode("cover");
+      setClipFitMode("contain");
       resetSelectedClip();
       setShowPostConfirmation(false);
       fetchClips();
@@ -3821,7 +3875,7 @@ const ProfilePage = () => {
     if (!canDeleteClip(profile)) {
       toast({
         title: "Deletion limit reached",
-        description: "Free accounts include 2 clip deletions. Upgrade to Pro for unlimited deletions.",
+        description: `Free accounts can delete ${FREE_DELETION_LIMIT} clips. You need a Footy Status Pro account to delete more clips.`,
         variant: "destructive",
       });
       navigate("/pro");
@@ -3862,6 +3916,63 @@ const ProfilePage = () => {
       prev.map((clip) => (clip.id === clipId ? { ...clip, visibility: nextVisibility } : clip))
     );
     toast({ title: "Clip visibility updated" });
+  };
+
+  // Approved clips: players may only change how the existing video is displayed.
+  // This never touches the video file and never triggers another review.
+  const handleClipFitModeChange = async (clipId: string, nextFit: ClipFitMode) => {
+    const { error } = await (supabase as any)
+      .from("clips")
+      .update({ fit_mode: nextFit })
+      .eq("id", clipId)
+      .eq("user_id", user?.id || "");
+
+    if (error) {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+      return;
+    }
+
+    setClips((prev) => prev.map((clip) => (clip.id === clipId ? { ...clip, fit_mode: nextFit } : clip)));
+    toast({ title: "Display updated" });
+  };
+
+  // Approved clips: the caption stays editable but is run through the same
+  // profanity filter as the original upload (client check for instant feedback;
+  // the database enforces it as well). The video file is never replaced.
+  const handleClipCaptionSave = async (clip: ClipData) => {
+    const nextCaption = (clipCaptionDrafts[clip.id] ?? clip.caption ?? "").trim();
+
+    if (containsProfanityInFields([nextCaption])) {
+      toast({
+        title: "Inappropriate language",
+        description: "Please remove profanity or banned words from the caption and try again.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setSavingClipCaptionId(clip.id);
+    const { error } = await supabase
+      .from("clips")
+      .update({ caption: nextCaption || null, description: nextCaption || null })
+      .eq("id", clip.id)
+      .eq("user_id", user?.id || "");
+    setSavingClipCaptionId(null);
+
+    if (error) {
+      toast({ title: "Could not update caption", description: error.message, variant: "destructive" });
+      return;
+    }
+
+    setClips((prev) =>
+      prev.map((item) => (item.id === clip.id ? { ...item, caption: nextCaption || null } : item))
+    );
+    setClipCaptionDrafts((prev) => {
+      const next = { ...prev };
+      delete next[clip.id];
+      return next;
+    });
+    toast({ title: "Caption updated" });
   };
 
   const handleJoinTeam = async () => {
@@ -4518,6 +4629,7 @@ const ProfilePage = () => {
         CONTACT_DISPLAY_ORDER.indexOf(a.contact_type as keyof ContactFormState) -
         CONTACT_DISPLAY_ORDER.indexOf(b.contact_type as keyof ContactFormState)
     );
+  const playerParentLinksInContactSection = isPlayerAccount && !isYoungPlayerParentLinkAge ? playerParentLinks : [];
   const getContactLabel = (contactType: string) => {
     if (!isPlayerAccount && contactType === "player_email") return "Email";
     if (!isPlayerAccount && contactType === "player_phone") return "Phone Number";
@@ -4573,6 +4685,10 @@ const ProfilePage = () => {
           : true
       )
     : [];
+  const coachStaffTeamGroups = useMemo(
+    () => groupCoachStaffTeamLinksByMotherTeam(coachStaffTeamLinks),
+    [coachStaffTeamLinks]
+  );
 
   if (authLoading || loading) {
     return (
@@ -4694,6 +4810,7 @@ const ProfilePage = () => {
           />
         ) : null}
 
+        {isOfficialFootyStatusAccount ? <RefereeVerificationQueue /> : null}
         {isOfficialFootyStatusAccount ? <NextUpClipReviewBank /> : null}
         {isOfficialFootyStatusAccount ? <ReportContentReview /> : null}
 
@@ -4701,7 +4818,7 @@ const ProfilePage = () => {
         {isOfficialFootyStatusAccount ? (
           <section className="mb-6">
             <div className="mb-3 flex items-center justify-between gap-3">
-              <h3 className="text-lg font-semibold text-navy">Referee Applications</h3>
+              <h3 className="text-lg font-semibold text-navy">Referee Fixture Requests</h3>
               <Badge variant="secondary" className="rounded-full">{adminRefereeClaims.length}</Badge>
             </div>
             <div className="space-y-3 rounded-xl border border-border bg-card p-4">
@@ -5153,39 +5270,59 @@ const ProfilePage = () => {
                   </div>
                 ) : null}
                 <div className="p-4 space-y-3">
-                  <p className="text-sm font-semibold text-foreground">Linked Children / Players</p>
+                  <p className="text-sm font-semibold text-foreground">Linked Children</p>
                   {parentChildLinks.length ? (
-                    parentChildLinks.map((link) => (
-                      <div key={link.id} className="rounded-lg border border-border p-3">
-                        <button
-                          type="button"
-                          className="text-left"
-                          onClick={() => link.player?.id && navigate(`/player/${link.player.id}`)}
-                        >
-                          <p className="font-medium hover:text-primary">{link.player?.full_name || parentAccountData?.child_full_name || "Player"}</p>
-                        </button>
-                        <p className="text-sm text-muted-foreground">
-                          {[link.player?.team_name || link.player?.team, link.player?.current_league_name, link.player?.current_age_group]
-                            .filter(Boolean)
-                            .join(" - ")}
-                        </p>
-                        <p className="mt-1 text-xs font-medium capitalize text-muted-foreground">Status: {link.status}</p>
-                        {link.status === "approved" ? (
-                          <Button
+                    parentChildLinks.map((link) => {
+                      const childBirthYear = Number(String(link.player?.age_birth_year || "").match(/(19|20)\d{2}/)?.[0]);
+                      const childAge = childBirthYear ? new Date().getFullYear() - childBirthYear : null;
+                      const childTeam = [link.player?.team_name || link.player?.team, link.player?.current_age_group]
+                        .filter(Boolean)
+                        .join(" - ");
+                      return (
+                        <div key={link.id} className="rounded-lg border border-border p-3">
+                          <button
                             type="button"
-                            size="sm"
-                            variant="outline"
-                            className="mt-3"
-                            disabled={reviewingParentLinkId === link.id}
-                            onClick={() => handleRemoveParentLink(link.id)}
+                            className="flex w-full items-center gap-3 text-left"
+                            onClick={() => link.player?.id && navigate(`/player/${link.player.id}`)}
                           >
-                            Remove My Connection
-                          </Button>
-                        ) : null}
-                      </div>
-                    ))
+                            <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full bg-foreground">
+                              {link.player?.avatar_url ? (
+                                <img src={link.player.avatar_url} alt={link.player?.full_name || "Player"} className="h-full w-full object-cover" />
+                              ) : (
+                                <User className="h-6 w-6 text-background" />
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate font-medium hover:text-primary">{link.player?.full_name || parentAccountData?.child_full_name || "Player"}</p>
+                              <p className="truncate text-xs text-muted-foreground">
+                                <span className="font-medium text-foreground">Player</span>
+                                {link.player?.username ? <span> - @{link.player.username}</span> : null}
+                              </p>
+                              {(childAge !== null || childTeam) ? (
+                                <p className="truncate text-xs text-muted-foreground">
+                                  {[childAge !== null ? `Age ${childAge}` : null, childTeam || null].filter(Boolean).join(" - ")}
+                                </p>
+                              ) : null}
+                            </div>
+                          </button>
+                          <p className="mt-2 text-xs font-medium capitalize text-muted-foreground">Status: {link.status}</p>
+                          {link.status === "approved" ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="mt-3"
+                              disabled={reviewingParentLinkId === link.id}
+                              onClick={() => handleRemoveParentLink(link.id)}
+                            >
+                              Remove My Connection
+                            </Button>
+                          ) : null}
+                        </div>
+                      );
+                    })
                   ) : (
-                    <p className="text-sm text-muted-foreground">No linked players yet.</p>
+                    <p className="text-sm text-muted-foreground">No linked children yet.</p>
                   )}
                 </div>
                 <div className="p-4 space-y-3">
@@ -5773,35 +5910,17 @@ const ProfilePage = () => {
                 {isYoungPlayerParentLinkAge ? (
                   <div className="border-b border-border p-4 space-y-3">
                     <div>
-                      <p className="text-sm font-semibold text-foreground">Parents / Emergency Contacts</p>
+                      <p className="text-sm font-semibold text-foreground">Parents / Guardians</p>
                       <p className="text-xs text-muted-foreground">Up to two parents can be connected. Once approved, only the linked parent can remove their connection.</p>
                     </div>
                     {playerParentLinks.map((link) => (
-                      <div key={link.id} className="rounded-lg border border-border p-3 space-y-2">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="font-medium">{link.parent?.full_name || "Parent / Guardian"}</p>
-                            <p className="text-xs text-muted-foreground capitalize">{link.relationship_to_player || link.parent?.relationship_to_player || "Parent"} - {link.status}</p>
-                          </div>
-                          {link.status === "pending" ? (
-                            <div className="flex gap-2">
-                              <Button size="sm" onClick={() => handleReviewParentLink(link.id, true)} disabled={reviewingParentLinkId === link.id}>
-                                Approve
-                              </Button>
-                              <Button size="sm" variant="outline" onClick={() => handleReviewParentLink(link.id, false)} disabled={reviewingParentLinkId === link.id}>
-                                Deny
-                              </Button>
-                            </div>
-                          ) : null}
-                        </div>
-                        {link.status === "approved" ? (
-                          <div className="text-sm text-muted-foreground">
-                            {link.parent?.contact_phone ? <p>Phone: {link.parent.contact_phone}</p> : null}
-                            {link.parent?.contact_email ? <p>Email: {link.parent.contact_email}</p> : null}
-                            {link.parent?.emergency_contact ? <p>Emergency: {link.parent.emergency_contact}</p> : null}
-                          </div>
-                        ) : null}
-                      </div>
+                      <LinkedParentTile
+                        key={link.link_id}
+                        tile={link}
+                        onOpen={(parentUserId) => navigate(`/parent/${parentUserId}`)}
+                        onReview={handleReviewParentLink}
+                        reviewing={reviewingParentLinkId === link.link_id}
+                      />
                     ))}
                     {!playerParentLinks.length ? (
                       <p className="rounded-lg border border-dashed border-border p-3 text-sm text-muted-foreground">
@@ -6120,36 +6239,71 @@ const ProfilePage = () => {
           <section className="mb-6">
             <h3 className="text-lg font-semibold text-navy mb-3">Team Connection</h3>
             <div className="bg-card border border-border rounded-xl p-4 space-y-4">
-              {coachStaffTeamLinks.length > 0 ? (
+              {coachStaffTeamGroups.length > 0 ? (
                 <div className="space-y-3">
                   <p className="text-sm text-muted-foreground">Current linked teams</p>
-                  {coachStaffTeamLinks.map((link) => (
-                    <div key={link.id} className="rounded-xl border border-border p-3 space-y-3">
+                  {coachStaffTeamGroups.map((group) => (
+                    <div key={group.team_id} className="rounded-xl border border-border p-3 space-y-3">
                       <button
-                        onClick={() => navigate(link.club_team_id ? `/club-team/${link.club_team_id}` : `/team/${link.team_id}`)}
+                        onClick={() => navigate(`/team/${group.team_id}`)}
                         className="w-full flex items-center gap-3 text-left"
                       >
                         <div className="w-12 h-12 rounded-full bg-gradient-to-br from-accent to-red-light flex items-center justify-center shadow-md overflow-hidden">
-                          {link.team_logo_url ? (
-                            <img src={link.team_logo_url} alt={link.team_name} className="w-full h-full object-cover" />
+                          {group.team_logo_url ? (
+                            <img src={group.team_logo_url} alt={group.team_name} className="w-full h-full object-cover" />
                           ) : (
                             <Shield className="h-6 w-6 text-white" />
                           )}
                         </div>
                         <div className="min-w-0">
-                          <p className="font-semibold text-foreground">{link.team_name}</p>
-                          <p className="text-sm text-muted-foreground">{formatRoleDisplayLabel(link.staff_role || staffAccountData?.coaching_role_type, "Coaching Staff")}</p>
-                          {link.club_team_name ? <p className="text-xs text-muted-foreground">{link.club_team_name}</p> : null}
+                          <p className="font-semibold text-foreground">{group.team_name}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {group.daughter_links.length
+                              ? `${group.daughter_links.length} daughter team${group.daughter_links.length === 1 ? "" : "s"}`
+                              : formatRoleDisplayLabel(group.mother_link?.staff_role || staffAccountData?.coaching_role_type, "Coaching Staff")}
+                          </p>
                         </div>
                       </button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => link.club_team_id ? handleCoachStaffLeaveTeam(link.id) : handleCoachStaffLeaveClub(link)}
-                        disabled={saving}
-                      >
-                        {link.club_team_id ? "Leave Daughter Team" : "Leave Club"}
-                      </Button>
+                      <div className="space-y-2 rounded-lg bg-muted/30 p-3">
+                        {group.mother_link ? (
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="min-w-0 text-xs text-muted-foreground">
+                              Mother Team — {formatRoleDisplayLabel(group.mother_link.staff_role || staffAccountData?.coaching_role_type, "Coaching Staff")}
+                            </p>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 shrink-0 px-2 text-xs"
+                              onClick={() => handleCoachStaffLeaveClub(group.mother_link!)}
+                              disabled={saving}
+                            >
+                              Leave Club
+                            </Button>
+                          </div>
+                        ) : null}
+                        {group.daughter_links.map((link) => (
+                          <div key={link.id} className="flex items-center justify-between gap-3">
+                            <button
+                              type="button"
+                              onClick={() => navigate(`/club-team/${link.club_team_id}`)}
+                              className="min-w-0 text-left text-xs text-muted-foreground hover:text-foreground"
+                            >
+                              <span className="font-medium">{link.club_team_name || "Daughter Team"}</span>
+                              {" — "}
+                              {formatRoleDisplayLabel(link.staff_role || staffAccountData?.coaching_role_type, "Coaching Staff")}
+                            </button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 shrink-0 px-2 text-xs"
+                              onClick={() => handleCoachStaffLeaveTeam(link.id)}
+                              disabled={saving}
+                            >
+                              Leave
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -6615,41 +6769,60 @@ const ProfilePage = () => {
                   <Save className="h-4 w-4 mr-2" /> {saving ? "Saving..." : "Save"}
                 </Button>
               </div>
-            ) : isPlayerAccount && visibleContacts.length > 0 ? (
-              visibleContacts.map((contact) => (
-                <div key={contact.id} className="flex items-center gap-3 p-4">
-                  {contact.contact_type.includes("phone") ? (
-                    <Phone className="h-5 w-5 text-muted-foreground" />
-                  ) : contact.contact_type.includes("email") ? (
-                    <Mail className="h-5 w-5 text-muted-foreground" />
-                  ) : (
-                    <LinkIcon className="h-5 w-5 text-muted-foreground" />
-                  )}
-                  <div>
-                    <p className="text-sm text-muted-foreground">
-                      {getContactLabel(contact.contact_type)}
-                    </p>
-                    {contact.contact_type.includes("phone") ? (
-                      <a href={`tel:${contact.value}`} className="font-medium text-navy hover:underline">
-                        {contact.value}
-                      </a>
-                    ) : contact.contact_type.includes("email") ? (
-                      <a href={`mailto:${contact.value}`} className="font-medium text-navy hover:underline">
-                        {contact.value}
-                      </a>
-                    ) : (
-                      <a
-                        href={contact.value.startsWith("http") ? contact.value : `https://${contact.value}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="font-medium text-navy hover:underline"
-                      >
-                        {contact.value}
-                      </a>
-                    )}
+            ) : isPlayerAccount && (visibleContacts.length > 0 || playerParentLinksInContactSection.length > 0) ? (
+              <>
+                {playerParentLinksInContactSection.length > 0 ? (
+                  <div className="border-b border-border p-4 space-y-3">
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">Parents / Guardians</p>
+                      <p className="text-xs text-muted-foreground">Your linked parent accounts and their contact information.</p>
+                    </div>
+                    {playerParentLinksInContactSection.map((link) => (
+                      <LinkedParentTile
+                        key={link.link_id}
+                        tile={link}
+                        onOpen={(parentUserId) => navigate(`/parent/${parentUserId}`)}
+                        onReview={handleReviewParentLink}
+                        reviewing={reviewingParentLinkId === link.link_id}
+                      />
+                    ))}
                   </div>
-                </div>
-              ))
+                ) : null}
+                {visibleContacts.map((contact) => (
+                  <div key={contact.id} className="flex items-center gap-3 p-4">
+                    {contact.contact_type.includes("phone") ? (
+                      <Phone className="h-5 w-5 text-muted-foreground" />
+                    ) : contact.contact_type.includes("email") ? (
+                      <Mail className="h-5 w-5 text-muted-foreground" />
+                    ) : (
+                      <LinkIcon className="h-5 w-5 text-muted-foreground" />
+                    )}
+                    <div>
+                      <p className="text-sm text-muted-foreground">
+                        {getContactLabel(contact.contact_type)}
+                      </p>
+                      {contact.contact_type.includes("phone") ? (
+                        <a href={`tel:${contact.value}`} className="font-medium text-navy hover:underline">
+                          {contact.value}
+                        </a>
+                      ) : contact.contact_type.includes("email") ? (
+                        <a href={`mailto:${contact.value}`} className="font-medium text-navy hover:underline">
+                          {contact.value}
+                        </a>
+                      ) : (
+                        <a
+                          href={contact.value.startsWith("http") ? contact.value : `https://${contact.value}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-medium text-navy hover:underline"
+                        >
+                          {contact.value}
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </>
             ) : !isPlayerAccount && (teamStaffContacts.length > 0 || sharedNonPlayerContacts.length > 0 || (!isOfficialFootyStatusAccount && (teamStaffMembers.length > 0 || sortedLinkedTeamClubStaff.length > 0))) ? (
               <>
                 {teamStaffContacts.map((contact) => (
@@ -6826,9 +6999,14 @@ const ProfilePage = () => {
         <section className="mb-6">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-lg font-semibold text-navy">My Clips</h3>
-            <span className="text-sm text-muted-foreground">
-              {!isActivePro ? `${activeClipCount}/${MAX_FREE_CLIPS} active clips` : `${clipCount} clips`}
-            </span>
+            <div className="flex items-center gap-3 text-sm text-muted-foreground">
+              {!isActivePro ? (
+                <span>{Number(profile?.clip_deletions_used || 0)}/{FREE_DELETION_LIMIT} deletions</span>
+              ) : null}
+              <span>
+                {!isActivePro ? `${activeClipCount}/${MAX_FREE_CLIPS} active clips` : `${clipCount} clips`}
+              </span>
+            </div>
           </div>
           <div className="mb-3 flex gap-2">
             <Button variant="outline" size="sm" className="gap-2" onClick={() => navigate("/analytics")}>
@@ -6970,7 +7148,7 @@ const ProfilePage = () => {
                           size="sm"
                           onClick={() => setClipFitMode("cover")}
                         >
-                          Fill Frame
+                          Fit Whole Frame
                         </Button>
                         <Button
                           type="button"
@@ -7049,7 +7227,51 @@ const ProfilePage = () => {
                           <Button size="sm" variant="outline" className="mt-2 w-full" onClick={() => clipInputRef.current?.click()}>Upload Revised Video</Button>
                         </div>
                       ) : null}
-                    </div>                    <Select
+                    </div>
+                    {clip.review_status === "approved" ? (
+                      <div className="space-y-2 rounded-lg border border-border p-2">
+                        <p className="text-xs font-medium text-muted-foreground">Display</p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={clip.fit_mode === "cover" ? "default" : "outline"}
+                            onClick={() => handleClipFitModeChange(clip.id, "cover")}
+                          >
+                            Fit Whole Frame
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={clip.fit_mode !== "cover" ? "default" : "outline"}
+                            onClick={() => handleClipFitModeChange(clip.id, "contain")}
+                          >
+                            Fit Whole Clip
+                          </Button>
+                        </div>
+                        <p className="text-xs font-medium text-muted-foreground">Caption</p>
+                        <Input
+                          value={clipCaptionDrafts[clip.id] ?? clip.caption ?? ""}
+                          onChange={(e) => setClipCaptionDrafts((prev) => ({ ...prev, [clip.id]: e.target.value }))}
+                          placeholder="Add a caption"
+                          className="h-9 text-sm"
+                        />
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="w-full"
+                          onClick={() => handleClipCaptionSave(clip)}
+                          disabled={
+                            savingClipCaptionId === clip.id ||
+                            (clipCaptionDrafts[clip.id] ?? clip.caption ?? "") === (clip.caption ?? "")
+                          }
+                        >
+                          {savingClipCaptionId === clip.id ? "Saving..." : "Save Caption"}
+                        </Button>
+                      </div>
+                    ) : null}
+                    <Select
                       value={(clip.visibility as ClipVisibility) || "public"}
                       onValueChange={(value) => handleClipVisibilityChange(clip.id, value as ClipVisibility)}
                     >
@@ -8081,14 +8303,23 @@ const ProfilePage = () => {
             {selectedVideoDuration !== null && <p><span className="font-medium">Edited length:</span> {formatClipSeconds(editedClipDurationSeconds)} seconds</p>}
             <p><span className="font-medium">Trim:</span> {formatClipSeconds(clipTrimStart)}s to {formatClipSeconds(clipTrimEnd)}s</p>
             <p><span className="font-medium">Volume:</span> {Math.round(clipPlaybackVolume * 100)}%</p>
-            <p><span className="font-medium">Sizing:</span> {clipFitMode === "cover" ? "Fill frame" : "Fit whole clip"}</p>
+            <p><span className="font-medium">Sizing:</span> {clipFitMode === "cover" ? "Fit whole frame" : "Fit whole clip"}</p>
           </div>
+          {clipProcessingProgress !== null ? (
+            <p className="text-sm text-muted-foreground">
+              Trimming your clip… {clipProcessingProgress}% (only the trimmed part is uploaded)
+            </p>
+          ) : null}
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowPostConfirmation(false)} disabled={uploadingClip}>
               Cancel
             </Button>
             <Button onClick={handleConfirmPostClip} disabled={uploadingClip}>
-              {uploadingClip ? "Posting..." : "Confirm"}
+              {clipProcessingProgress !== null
+                ? `Trimming ${clipProcessingProgress}%`
+                : uploadingClip
+                  ? "Uploading..."
+                  : "Confirm"}
             </Button>
           </DialogFooter>
         </DialogContent>

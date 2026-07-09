@@ -91,27 +91,42 @@ const RefereeDashboardPage = () => {
     loadDashboard();
   }, [user?.id]);
 
-  const handleSubmitReplacementProof = async () => {
-    if (!user?.id || !replacementProofFile) return;
-    const validationError = validateRefereeProofFile(replacementProofFile);
-    if (validationError) {
-      toast({ title: "Certification upload", description: validationError, variant: "destructive" });
+  const handleResubmitApplication = async () => {
+    if (!user?.id) return;
+
+    // A new document is optional: referees who only corrected their written
+    // information can resubmit the application reusing the document already on
+    // file. A brand-new referee with nothing uploaded must attach one first.
+    if (replacementProofFile) {
+      const validationError = validateRefereeProofFile(replacementProofFile);
+      if (validationError) {
+        toast({ title: "Certification upload", description: validationError, variant: "destructive" });
+        return;
+      }
+    } else if (!verification?.certification_proof_url) {
+      toast({
+        title: "Upload your certification",
+        description: "Attach your referee certification document before submitting for review.",
+        variant: "destructive",
+      });
       return;
     }
 
     setSubmittingProof(true);
     try {
-      const proofPath = await uploadRefereeCertification(user.id, replacementProofFile);
+      const proofPath = replacementProofFile
+        ? await uploadRefereeCertification(user.id, replacementProofFile)
+        : (verification?.certification_proof_url as string);
       const { error } = await resubmitRefereeCertification(proofPath);
       if (error) throw error;
       toast({
-        title: "Certification submitted",
+        title: "Application submitted",
         description: "Your application is back in the Footy Status verification queue.",
       });
       setReplacementProofFile(null);
       setVerification(await fetchRefereeVerification(user.id));
     } catch (error: any) {
-      toast({ title: "Could not submit certification", description: error.message, variant: "destructive" });
+      toast({ title: "Could not submit application", description: error.message, variant: "destructive" });
     }
     setSubmittingProof(false);
   };
@@ -271,21 +286,30 @@ const RefereeDashboardPage = () => {
                 <p className="text-muted-foreground">Footy Status note: {verification.note}</p>
               ) : null}
               <p className="text-muted-foreground">
-                Upload a replacement certification and your application returns to the verification queue automatically.
+                Fix what Footy Status asked for, then resubmit. You can edit your referee information from{" "}
+                <button type="button" className="font-medium text-navy underline" onClick={() => navigate("/profile")}>your profile</button>,
+                upload a corrected document below (optional if you only changed your details), and submit again for another review.
               </p>
               <Input type="file" accept={REFEREE_PROOF_ACCEPT} onChange={(e) => setReplacementProofFile(e.target.files?.[0] || null)} />
-              <Button size="sm" className="w-full" onClick={handleSubmitReplacementProof} disabled={!replacementProofFile || submittingProof}>
+              <Button size="sm" className="w-full" onClick={handleResubmitApplication} disabled={submittingProof}>
                 <Upload className="mr-2 h-4 w-4" />
-                {submittingProof ? "Submitting..." : "Submit replacement certification"}
+                {submittingProof ? "Submitting..." : "Submit application for review"}
               </Button>
             </div>
           ) : verification?.status === "rejected" ? (
-            <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm">
-              <p className="font-semibold text-foreground">Verification Denied</p>
-              {verification.note ? <p className="mt-1 text-muted-foreground">Footy Status note: {verification.note}</p> : null}
-              <p className="mt-1 text-muted-foreground">
-                Your account stays active, but referee fixture features remain locked. Contact Footy Status support if you believe this is a mistake.
+            <div className="space-y-3 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm">
+              <p className="font-semibold text-foreground">Application Declined</p>
+              {verification.note ? <p className="text-muted-foreground">Footy Status reason: {verification.note}</p> : null}
+              <p className="text-muted-foreground">
+                Referee fixture features stay locked until you are approved. Fix what was flagged — edit your referee information from{" "}
+                <button type="button" className="font-medium text-navy underline" onClick={() => navigate("/profile")}>your profile</button>,
+                upload a corrected document below (optional if you only changed your details), and resubmit as many times as you need.
               </p>
+              <Input type="file" accept={REFEREE_PROOF_ACCEPT} onChange={(e) => setReplacementProofFile(e.target.files?.[0] || null)} />
+              <Button size="sm" className="w-full" onClick={handleResubmitApplication} disabled={submittingProof}>
+                <Upload className="mr-2 h-4 w-4" />
+                {submittingProof ? "Submitting..." : "Submit application for review"}
+              </Button>
             </div>
           ) : (
             <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm">

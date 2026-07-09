@@ -14,6 +14,8 @@ import ClubNewsSection from "@/components/club-news/ClubNewsSection";
 import ProfileHeader from "@/components/ProfileHeader";
 import ProBadge from "@/components/ProBadge";
 import {
+  assignCoachStaffToClubTeam,
+  CLUB_COACH_REQUEST_ROLE_OPTIONS,
   CoachStaffProfile,
   fetchCoachStaffForTeam,
   fetchCoachStaffProfiles,
@@ -142,6 +144,7 @@ const TeamProfile = () => {
   const [coachStaffResults, setCoachStaffResults] = useState<CoachStaffProfile[]>([]);
   const [coachStaffRequests, setCoachStaffRequests] = useState<any[]>([]);
   const [coachStaffInvites, setCoachStaffInvites] = useState<any[]>([]);
+  const [coachAssignmentDrafts, setCoachAssignmentDrafts] = useState<Record<string, { clubTeamId: string; role: string }>>({});
   const [teamBio, setTeamBio] = useState<string | null>(null);
   const [teamUsername, setTeamUsername] = useState<string | null>(null);
   const [clubId, setClubId] = useState<string | null>(null);
@@ -605,6 +608,43 @@ const TeamProfile = () => {
       setCoachStaffSearch("");
       await fetchTeamData();
     }
+    setActionLoading(false);
+  };
+
+  const handleAssignCoachToDaughterTeam = async (staff: any) => {
+    if (!team) return;
+    const draft = coachAssignmentDrafts[staff.coach_user_id];
+    const selectedClubTeam = clubTeams.find((clubTeam) => clubTeam.id === draft?.clubTeamId);
+
+    if (!selectedClubTeam) {
+      toast({ title: "Choose a daughter team", description: "Select the daughter team this coach should be assigned to.", variant: "destructive" });
+      return;
+    }
+
+    const role = draft?.role || staff.staff_role || staff.profile?.coaching_role_type || staff.profiles?.coaching_role_type || "Head Coach";
+    setActionLoading(true);
+    const { error } = await assignCoachStaffToClubTeam(
+      team.id,
+      selectedClubTeam.id,
+      staff.coach_user_id,
+      role,
+      {
+        league_id: selectedClubTeam.league_id || null,
+        age_group: selectedClubTeam.age_group || null,
+      }
+    );
+
+    if (error) {
+      toast({ title: "Could not assign coach", description: error.message, variant: "destructive" });
+    } else {
+      toast({ title: "Coach assigned", description: "This coach is now linked to that daughter team." });
+      setCoachAssignmentDrafts((prev) => ({
+        ...prev,
+        [staff.coach_user_id]: { clubTeamId: "", role: "Head Coach" },
+      }));
+      await fetchTeamData();
+    }
+
     setActionLoading(false);
   };
 
@@ -1189,6 +1229,62 @@ const TeamProfile = () => {
                             ) : null}
                           </div>
                         </button>
+                        {canManageTeam && clubTeams.length > 0 ? (
+                          <div className="space-y-2 rounded-lg bg-muted/30 p-3">
+                            <p className="text-xs font-medium text-muted-foreground">Assign this coach to a daughter team</p>
+                            <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                              <select
+                                value={coachAssignmentDrafts[staff.coach_user_id]?.clubTeamId || ""}
+                                onChange={(event) =>
+                                  setCoachAssignmentDrafts((prev) => ({
+                                    ...prev,
+                                    [staff.coach_user_id]: {
+                                      clubTeamId: event.target.value,
+                                      role: prev[staff.coach_user_id]?.role || staff.staff_role || "Head Coach",
+                                    },
+                                  }))
+                                }
+                                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                              >
+                                <option value="">Choose daughter team</option>
+                                {clubTeams
+                                  .filter((clubTeam) => clubTeam.status !== "archived")
+                                  .map((clubTeam) => (
+                                    <option key={clubTeam.id} value={clubTeam.id}>
+                                      {[clubTeam.age_group, formatTeamGender(clubTeam.gender), clubTeam.level, clubTeam.league_name].filter(Boolean).join(" - ") || "Daughter Team"}
+                                    </option>
+                                  ))}
+                              </select>
+                              <select
+                                value={coachAssignmentDrafts[staff.coach_user_id]?.role || staff.staff_role || "Head Coach"}
+                                onChange={(event) =>
+                                  setCoachAssignmentDrafts((prev) => ({
+                                    ...prev,
+                                    [staff.coach_user_id]: {
+                                      clubTeamId: prev[staff.coach_user_id]?.clubTeamId || "",
+                                      role: event.target.value,
+                                    },
+                                  }))
+                                }
+                                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                              >
+                                {CLUB_COACH_REQUEST_ROLE_OPTIONS.map((role) => (
+                                  <option key={role} value={role}>
+                                    {role}
+                                  </option>
+                                ))}
+                              </select>
+                              <Button
+                                size="sm"
+                                className="h-9"
+                                onClick={() => handleAssignCoachToDaughterTeam(staff)}
+                                disabled={actionLoading}
+                              >
+                                Assign
+                              </Button>
+                            </div>
+                          </div>
+                        ) : null}
                         {canManageTeam ? (
                           <Button size="sm" variant="outline" onClick={() => handleRemoveCoachStaffFromTeam(staff)} disabled={actionLoading}>
                             Remove

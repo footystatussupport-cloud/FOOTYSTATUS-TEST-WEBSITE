@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, RefreshCw, RotateCcw, Video } from "lucide-react";
+import { Ban, Check, RefreshCw, RotateCcw, Video } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 type ReviewClip = {
   clip_id: string;
   player_user_id: string;
+  player_profile_id: string | null;
   player_name: string;
   player_username: string | null;
   player_gender: string | null;
@@ -31,6 +32,15 @@ const formatPlayerGender = (gender?: string | null) => {
   return "Gender not set";
 };
 
+const formatAccountType = (role?: string | null) => {
+  const normalized = String(role || "player").trim().toLowerCase();
+  if (!normalized || normalized === "player") return "Player";
+  return normalized
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+};
+
 const NextUpClipReviewBank = () => {
   const { toast } = useToast();
   const [clips, setClips] = useState<ReviewClip[]>([]);
@@ -38,6 +48,8 @@ const NextUpClipReviewBank = () => {
   const [workingId, setWorkingId] = useState<string | null>(null);
   const [revisionClip, setRevisionClip] = useState<ReviewClip | null>(null);
   const [revisionNote, setRevisionNote] = useState("");
+  const [rejectClip, setRejectClip] = useState<ReviewClip | null>(null);
+  const [rejectNote, setRejectNote] = useState("");
 
   const load = async () => {
     setLoading(true);
@@ -54,7 +66,7 @@ const NextUpClipReviewBank = () => {
     load();
   }, []);
 
-  const decide = async (clip: ReviewClip, decision: "approve" | "revise", note?: string) => {
+  const decide = async (clip: ReviewClip, decision: "approve" | "revise" | "reject", note?: string) => {
     setWorkingId(clip.clip_id);
     const { error } = await (supabase as any).rpc("review_next_up_clip", {
       _clip_id: clip.clip_id,
@@ -67,11 +79,23 @@ const NextUpClipReviewBank = () => {
       return;
     }
     toast({
-      title: decision === "approve" ? "Clip approved and published" : "Revision request sent",
-      description: decision === "approve" ? "The player has been notified." : "The clip remains hidden from public view.",
+      title:
+        decision === "approve"
+          ? "Clip approved and published"
+          : decision === "revise"
+            ? "Revision request sent"
+            : "Clip rejected",
+      description:
+        decision === "approve"
+          ? "The player has been notified and the clip is now live."
+          : decision === "revise"
+            ? "The clip stays hidden until the player resubmits."
+            : "The clip was removed and the player was told why.",
     });
     setRevisionClip(null);
     setRevisionNote("");
+    setRejectClip(null);
+    setRejectNote("");
     await load();
   };
 
@@ -83,8 +107,8 @@ const NextUpClipReviewBank = () => {
             <Video className="h-5 w-5" />
           </span>
           <div>
-            <h3 className="font-semibold text-foreground">Next Up Clip Review Bank</h3>
-            <p className="text-sm text-muted-foreground">{clips.length} clips awaiting a decision</p>
+            <h3 className="font-semibold text-foreground">Next Up Clip Review</h3>
+            <p className="text-sm text-muted-foreground">{clips.length} clip{clips.length === 1 ? "" : "s"} awaiting review</p>
           </div>
         </div>
         <Button size="icon" variant="outline" onClick={load} disabled={loading}>
@@ -104,14 +128,23 @@ const NextUpClipReviewBank = () => {
               <div className="space-y-3 p-4">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
-                    <p className="font-semibold">{clip.player_name}</p>
+                    {clip.player_profile_id ? (
+                      <a
+                        href={`/player/${clip.player_profile_id}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-semibold hover:underline"
+                      >
+                        {clip.player_name}
+                      </a>
+                    ) : (
+                      <p className="font-semibold">{clip.player_name}</p>
+                    )}
                     <p className="text-sm text-muted-foreground">
-                      {clip.player_username ? `@${clip.player_username}` : "No username"} · {formatPlayerGender(clip.player_gender)}
+                      {clip.player_username ? `@${clip.player_username}` : "No username"} · {formatAccountType(clip.account_role)} · {formatPlayerGender(clip.player_gender)}
                     </p>
                   </div>
-                  <Badge variant={clip.review_status === "pending_review" ? "secondary" : "outline"}>
-                    {clip.review_status === "pending_review" ? "Pending Review" : "Needs Revision"}
-                  </Badge>
+                  <Badge variant="secondary">Pending Review</Badge>
                 </div>
                 <div>
                   <p className="font-medium">{clip.title}</p>
@@ -123,12 +156,15 @@ const NextUpClipReviewBank = () => {
                     <strong>Previous revision note:</strong> {clip.revision_note}
                   </div>
                 ) : null}
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <Button className="flex-1" disabled={workingId === clip.clip_id} onClick={() => decide(clip, "approve")}>
-                    <Check className="mr-2 h-4 w-4" />Approve
+                    <Check className="mr-2 h-4 w-4" />Accept
                   </Button>
                   <Button className="flex-1" variant="outline" disabled={workingId === clip.clip_id} onClick={() => { setRevisionClip(clip); setRevisionNote(clip.revision_note || ""); }}>
                     <RotateCcw className="mr-2 h-4 w-4" />Revise
+                  </Button>
+                  <Button className="flex-1" variant="destructive" disabled={workingId === clip.clip_id} onClick={() => { setRejectClip(clip); setRejectNote(""); }}>
+                    <Ban className="mr-2 h-4 w-4" />Reject
                   </Button>
                 </div>
               </div>
@@ -148,6 +184,21 @@ const NextUpClipReviewBank = () => {
           <DialogFooter>
             <Button variant="outline" onClick={() => setRevisionClip(null)}>Cancel</Button>
             <Button disabled={revisionNote.trim().length < 3 || workingId === revisionClip?.clip_id} onClick={() => revisionClip && decide(revisionClip, "revise", revisionNote)}>Send Revision Request</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(rejectClip)} onOpenChange={(open) => !open && setRejectClip(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Reject this clip</DialogTitle></DialogHeader>
+          <div className="space-y-2">
+            <Label>Reason sent to the player</Label>
+            <Textarea value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} placeholder="Explain exactly why this clip is being rejected — the guideline or requirement it failed and anything the player should know. The clip will be permanently removed." maxLength={500} />
+            <p className="text-right text-xs text-muted-foreground">{rejectNote.length}/500</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRejectClip(null)}>Cancel</Button>
+            <Button variant="destructive" disabled={rejectNote.trim().length < 3 || workingId === rejectClip?.clip_id} onClick={() => rejectClip && decide(rejectClip, "reject", rejectNote)}>Reject Clip</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

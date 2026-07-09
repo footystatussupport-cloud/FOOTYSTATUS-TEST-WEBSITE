@@ -27,6 +27,8 @@ export interface ParentPlayerLink {
     id: string;
     user_id: string;
     full_name: string | null;
+    username: string | null;
+    avatar_url: string | null;
     team: string | null;
     team_name: string | null;
     age_birth_year: string | null;
@@ -35,6 +37,25 @@ export interface ParentPlayerLink {
     current_league_name?: string | null;
     current_age_group?: string | null;
   } | null;
+}
+
+// A linked parent account rendered as an interactive profile tile on the player
+// side. Identity fields mirror the parent's live public profile so the tile
+// stays in sync; contact fields are only populated for viewers the player's
+// contact-privacy setting allows.
+export interface LinkedParentTile {
+  link_id: string;
+  status: "pending" | "approved";
+  parent_user_id: string;
+  full_name: string;
+  username: string | null;
+  avatar_url: string | null;
+  relationship_to_player: string | null;
+  notes: string | null;
+  contact_email: string | null;
+  contact_phone: string | null;
+  emergency_contact: string | null;
+  can_review: boolean;
 }
 
 export interface PrivateParentContact {
@@ -96,7 +117,7 @@ export const fetchParentLinksForParentUser = async (userId: string) => {
   if (playerProfileIds.length) {
     const { data: liveRows } = await (supabase as any)
       .from("player_profiles_public")
-      .select("id, team, team_name, current_league_name, current_age_group")
+      .select("id, full_name, username, avatar_url, profile_image_url, team, team_name, current_league_name, current_age_group, age_birth_year")
       .in("id", playerProfileIds);
     liveById = Object.fromEntries((liveRows || []).map((row: any) => [row.id, row]));
   }
@@ -115,10 +136,12 @@ export const fetchParentLinksForParentUser = async (userId: string) => {
       player: {
         id: row.player_profile_id,
         user_id: row.player_user_id,
-        full_name: row.player_full_name,
+        full_name: live.full_name ?? row.player_full_name,
+        username: live.username ?? row.player_username ?? null,
+        avatar_url: live.avatar_url ?? live.profile_image_url ?? row.player_avatar_url ?? null,
         team: live.team ?? row.player_team,
         team_name: live.team_name ?? row.player_team_name,
-        age_birth_year: row.player_age_birth_year,
+        age_birth_year: live.age_birth_year ?? row.player_age_birth_year,
         position: row.player_position,
         current_league_name: live.current_league_name ?? null,
         current_age_group: live.current_age_group ?? null,
@@ -147,6 +170,32 @@ export const fetchParentLinksForPlayerUser = async (userId: string) => {
     ...link,
     parent: link.parent_profiles || null,
   })) as ParentPlayerLink[];
+};
+
+// Authoritative list of a player's linked parent accounts as interactive
+// profile tiles (identity + gated contact + review flag). Used on both the
+// player's own profile and, for allowed viewers, their public profile.
+export const fetchLinkedParentsForPlayer = async (playerUserId: string) => {
+  const { data, error } = await (supabase as any).rpc("get_player_linked_parents", {
+    _player_user_id: playerUserId,
+  });
+
+  if (error || !data) return [] as LinkedParentTile[];
+
+  return (data as any[]).map((row) => ({
+    link_id: row.link_id,
+    status: row.status,
+    parent_user_id: row.parent_user_id,
+    full_name: row.parent_full_name || "Parent / Guardian",
+    username: row.parent_username || null,
+    avatar_url: row.parent_avatar_url || null,
+    relationship_to_player: row.relationship_to_player || null,
+    notes: row.notes || null,
+    contact_email: row.contact_email || null,
+    contact_phone: row.contact_phone || null,
+    emergency_contact: row.emergency_contact || null,
+    can_review: !!row.can_review,
+  })) as LinkedParentTile[];
 };
 
 export const fetchPrivateParentContactsForPlayer = async (playerUserId: string) => {

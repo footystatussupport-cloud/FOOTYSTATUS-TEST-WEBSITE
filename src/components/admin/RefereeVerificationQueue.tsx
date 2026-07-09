@@ -49,21 +49,21 @@ const RefereeVerificationQueue = () => {
 
   const handleReview = async (
     application: RefereeVerificationApplication,
-    action: "verify" | "request_revision" | "reject"
+    action: "verify" | "reject"
   ) => {
     const note = (notes[application.user_id] || "").trim();
 
-    if (action === "request_revision" && !note) {
+    if (action === "reject" && !note) {
       toast({
-        title: "Add a note first",
-        description: "Tell the referee exactly what needs to be corrected before requesting a revision.",
+        title: "Add a reason first",
+        description: "Explain exactly why the application is being declined and what the referee needs to fix before resubmitting.",
         variant: "destructive",
       });
       return;
     }
 
-    if (action === "verify" && !window.confirm(`Verify ${application.full_name || "this referee"} as a Footy Status Verified Referee?`)) return;
-    if (action === "reject" && !window.confirm(`Reject the verification request from ${application.full_name || "this referee"}?`)) return;
+    if (action === "verify" && !window.confirm(`Accept ${application.full_name || "this referee"} as a Footy Status Verified Referee?`)) return;
+    if (action === "reject" && !window.confirm(`Decline the application from ${application.full_name || "this referee"}? They will be sent your reason and can resubmit.`)) return;
 
     setActingUserId(application.user_id);
     const { error } = await reviewRefereeVerification({
@@ -79,12 +79,7 @@ const RefereeVerificationQueue = () => {
     }
 
     toast({
-      title:
-        action === "verify"
-          ? "Referee verified"
-          : action === "request_revision"
-            ? "Revision requested"
-            : "Verification rejected",
+      title: action === "verify" ? "Referee accepted" : "Application declined",
       description: "The referee has been notified.",
     });
     setNotes((current) => ({ ...current, [application.user_id]: "" }));
@@ -97,9 +92,9 @@ const RefereeVerificationQueue = () => {
         <div className="flex items-center gap-3">
           <span className="rounded-full bg-navy p-2 text-white"><ShieldQuestion className="h-5 w-5" /></span>
           <div>
-            <h3 className="font-semibold text-foreground">Pending Referee Verifications</h3>
+            <h3 className="font-semibold text-foreground">Referee Account Approval</h3>
             <p className="text-sm text-muted-foreground">
-              Every new referee application appears here automatically until it is reviewed.
+              Every referee waiting to be reviewed appears here. Review their application, then Accept or Decline.
             </p>
           </div>
         </div>
@@ -175,8 +170,8 @@ const RefereeVerificationQueue = () => {
                     <Textarea
                       value={notes[application.user_id] || ""}
                       onChange={(event) => setNotes((current) => ({ ...current, [application.user_id]: event.target.value }))}
-                      placeholder="Note to the referee (required for revision requests, optional for rejections)"
-                      className="min-h-16 text-sm"
+                      placeholder="Reason for declining — explain what was missing, what document was incorrect, and exactly what the referee needs to fix or upload before they can be approved. Required to Decline."
+                      className="min-h-24 text-sm"
                     />
                     <div className="flex flex-wrap gap-2">
                       <Button
@@ -184,15 +179,7 @@ const RefereeVerificationQueue = () => {
                         onClick={() => handleReview(application, "verify")}
                         disabled={actingUserId === application.user_id}
                       >
-                        <BadgeCheck className="mr-2 h-4 w-4" /> Verify Referee
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleReview(application, "request_revision")}
-                        disabled={actingUserId === application.user_id}
-                      >
-                        Request Revision
+                        <BadgeCheck className="mr-2 h-4 w-4" /> Accept
                       </Button>
                       <Button
                         size="sm"
@@ -200,7 +187,7 @@ const RefereeVerificationQueue = () => {
                         onClick={() => handleReview(application, "reject")}
                         disabled={actingUserId === application.user_id}
                       >
-                        <XCircle className="mr-2 h-4 w-4" /> Reject
+                        <XCircle className="mr-2 h-4 w-4" /> Decline
                       </Button>
                     </div>
                   </div>

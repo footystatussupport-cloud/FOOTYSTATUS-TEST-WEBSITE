@@ -57,6 +57,7 @@ const App = () => (
               <Route path="/coach/:userId" element={<ProtectedRoute><CoachStaffProfilePage /></ProtectedRoute>} />
               <Route path="/staff/:userId" element={<ProtectedRoute><CoachStaffProfilePage /></ProtectedRoute>} />
               <Route path="/scout/:userId" element={<ProtectedRoute><CoachStaffProfilePage /></ProtectedRoute>} />
+              <Route path="/parent/:userId" element={<ProtectedRoute><CoachStaffProfilePage /></ProtectedRoute>} />
               <Route path="/match/:id" element={<ProtectedRoute><MatchDetails /></ProtectedRoute>} />
               <Route path="/team/:id" element={<ProtectedRoute><TeamProfile /></ProtectedRoute>} />
               <Route path="/club-team/:id" element={<ProtectedRoute><ClubTeamProfile /></ProtectedRoute>} />
