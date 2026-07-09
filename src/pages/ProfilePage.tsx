@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, ChangeEvent, PointerEvent, useMemo } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Camera, User, Calendar, Trophy, Edit, Save, X, Upload, Video, Crown, Lock, Link as LinkIcon, Phone, Mail, Shield, Star, Building2, Briefcase, MapPin, Users, Heart, Eye, Check } from "lucide-react";
 import Header from "@/components/Header";
 import ProfileHeader from "@/components/ProfileHeader";
@@ -14,6 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 import { ActiveMembership, LiveStandingSummary, TeamRosterPlayer, fetchActiveMembershipsForUser, fetchLiveStandingForMembership, fetchRosterForTeam, formatTeamLeagueLine, getMembershipTeamDestination, removeTeamRosterPlayer } from "@/lib/teamMemberships";
 import { OfferedClubTeam } from "@/components/club/ClubTeamsManager";
 import DaughterTeamEditDialog from "@/components/club/DaughterTeamEditDialog";
@@ -206,6 +207,9 @@ interface ClipData {
   fit_mode?: ClipFitMode | null;
   review_status?: "pending_review" | "approved" | "needs_revision";
   revision_note?: string | null;
+  original_file_name?: string | null;
+  original_file_size?: number | null;
+  original_duration_seconds?: number | null;
 }
 
 type ClipVisibility = "public" | "restricted" | "private";
@@ -565,6 +569,19 @@ const ProfilePage = () => {
   const [parentAccountData, setParentAccountData] = useState<ParentProfileDetails | null>(null);
   const [parentChildLinks, setParentChildLinks] = useState<ParentPlayerLink[]>([]);
   const [playerParentLinks, setPlayerParentLinks] = useState<LinkedParentTileData[]>([]);
+  const [searchParams] = useSearchParams();
+
+  // When arriving from a "Parent connection request" notification tile, scroll
+  // to and briefly highlight the parent links / review section.
+  useEffect(() => {
+    if (searchParams.get("focus") !== "parent-links") return;
+    const el = document.getElementById("parent-links-section");
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.add("ring-2", "ring-primary", "rounded-lg");
+    const timer = setTimeout(() => el.classList.remove("ring-2", "ring-primary", "rounded-lg"), 2500);
+    return () => clearTimeout(timer);
+  }, [searchParams, playerParentLinks]);
   const [parentPlayerSearchQuery, setParentPlayerSearchQuery] = useState("");
   const [parentPlayerSearchResults, setParentPlayerSearchResults] = useState<any[]>([]);
   const [requestingParentLink, setRequestingParentLink] = useState(false);
@@ -664,8 +681,18 @@ const ProfilePage = () => {
   const [clipFitMode, setClipFitMode] = useState<ClipFitMode>("contain");
   // Post-approval caption editing (display setting + caption only; the approved
   // video file itself can never be replaced).
-  const [clipCaptionDrafts, setClipCaptionDrafts] = useState<Record<string, string>>({});
-  const [savingClipCaptionId, setSavingClipCaptionId] = useState<string | null>(null);
+  // Clean edit modal for an approved clip (title / caption / display only).
+  const [editingClip, setEditingClip] = useState<ClipData | null>(null);
+  const [editClipTitle, setEditClipTitle] = useState("");
+  const [editClipCaption, setEditClipCaption] = useState("");
+  const [editClipFitMode, setEditClipFitMode] = useState<ClipFitMode>("contain");
+  const [savingClipEdit, setSavingClipEdit] = useState(false);
+  // Pro length-extension from the re-picked ORIGINAL video (never a new file).
+  const [extendFile, setExtendFile] = useState<File | null>(null);
+  const [extendSourceDuration, setExtendSourceDuration] = useState<number | null>(null);
+  const [extendStart, setExtendStart] = useState(0);
+  const [extendEnd, setExtendEnd] = useState(0);
+  const [extendingClip, setExtendingClip] = useState(false);
   const [editForm, setEditForm] = useState<EditFormState>({});
   const offeredClubTeamsByLeague = useMemo(() => {
     const activeTeams = offeredClubTeams.filter((team) => team.status !== "archived");
@@ -2069,7 +2096,7 @@ const ProfilePage = () => {
     const [{ data: userClips }, { count }] = await Promise.all([
       supabase
         .from('clips')
-        .select('id, title, caption, description, video_url, thumbnail_url, likes_count, views_count, created_at, visibility, duration, trim_start_seconds, trim_end_seconds, playback_volume, fit_mode, review_status, revision_note')
+        .select('id, title, caption, description, video_url, thumbnail_url, likes_count, views_count, created_at, visibility, duration, trim_start_seconds, trim_end_seconds, playback_volume, fit_mode, review_status, revision_note, original_file_name, original_file_size, original_duration_seconds')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false }),
       supabase
@@ -3853,6 +3880,11 @@ const ProfilePage = () => {
         trim_end_seconds: roundClipSeconds(outputDurationSeconds),
         playback_volume: clipPlaybackVolume,
         fit_mode: clipFitMode,
+        // Fingerprint of the original recording so a later Pro upgrade can
+        // re-pick the SAME file to extend the clip (never a different video).
+        original_file_name: selectedVideoFile.name,
+        original_file_size: selectedVideoFile.size,
+        original_duration_seconds: selectedVideoDuration != null ? roundClipSeconds(selectedVideoDuration) : null,
       });
 
     if (insertError) {
@@ -3920,59 +3952,168 @@ const ProfilePage = () => {
 
   // Approved clips: players may only change how the existing video is displayed.
   // This never touches the video file and never triggers another review.
-  const handleClipFitModeChange = async (clipId: string, nextFit: ClipFitMode) => {
-    const { error } = await (supabase as any)
-      .from("clips")
-      .update({ fit_mode: nextFit })
-      .eq("id", clipId)
-      .eq("user_id", user?.id || "");
-
-    if (error) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-      return;
-    }
-
-    setClips((prev) => prev.map((clip) => (clip.id === clipId ? { ...clip, fit_mode: nextFit } : clip)));
-    toast({ title: "Display updated" });
+  // Open the clean edit modal for an approved clip, pre-filled with its current
+  // title, caption, and display setting. The approved video itself is shown but
+  // cannot be replaced.
+  const openClipEditor = (clip: ClipData) => {
+    setEditingClip(clip);
+    setEditClipTitle(clip.title || "");
+    setEditClipCaption(clip.caption || "");
+    setEditClipFitMode((clip.fit_mode as ClipFitMode) === "cover" ? "cover" : "contain");
+    setExtendFile(null);
+    setExtendSourceDuration(null);
+    setExtendStart(0);
+    setExtendEnd(0);
   };
 
-  // Approved clips: the caption stays editable but is run through the same
-  // profanity filter as the original upload (client check for instant feedback;
-  // the database enforces it as well). The video file is never replaced.
-  const handleClipCaptionSave = async (clip: ClipData) => {
-    const nextCaption = (clipCaptionDrafts[clip.id] ?? clip.caption ?? "").trim();
+  // Room to extend only exists for Pro accounts whose approved clip is shorter
+  // than both the Pro cap and the original recording they first uploaded.
+  const canExtendEditingClip = Boolean(
+    editingClip &&
+      isActivePro &&
+      editingClip.original_duration_seconds != null &&
+      (editingClip.original_duration_seconds as number) > (editingClip.duration || 0) + 0.3 &&
+      (editingClip.duration || 0) < MAX_PRO_CLIP_DURATION_SECONDS
+  );
 
-    if (containsProfanityInFields([nextCaption])) {
+  // Re-picking the ORIGINAL file: fingerprint-check it against what was first
+  // uploaded so a different video can never be swapped in.
+  const handleSelectExtendFile = async (file: File | null) => {
+    if (!file || !editingClip) return;
+
+    const nameMatches = !editingClip.original_file_name || file.name === editingClip.original_file_name;
+    const sizeMatches = editingClip.original_file_size == null || file.size === editingClip.original_file_size;
+    if (!nameMatches || !sizeMatches) {
       toast({
-        title: "Inappropriate language",
-        description: "Please remove profanity or banned words from the caption and try again.",
+        title: "That's not the same video",
+        description: "You can only extend using the exact original file you first uploaded, not a different one.",
         variant: "destructive",
       });
       return;
     }
 
-    setSavingClipCaptionId(clip.id);
-    const { error } = await supabase
+    let sourceDuration = 0;
+    try {
+      sourceDuration = await getVideoDuration(file);
+    } catch {
+      toast({ title: "Could not read that video", description: "Please choose the original file again.", variant: "destructive" });
+      return;
+    }
+
+    // Duration must line up with the original recording (guards against a
+    // renamed/resized different file that happens to share name + size).
+    const expectedOriginal = editingClip.original_duration_seconds as number | null;
+    if (expectedOriginal != null && Math.abs(sourceDuration - expectedOriginal) > 1) {
+      toast({
+        title: "That's not the same video",
+        description: "This file's length doesn't match your original clip. Please choose the exact original file.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const cap = Math.min(sourceDuration, MAX_PRO_CLIP_DURATION_SECONDS);
+    setExtendFile(file);
+    setExtendSourceDuration(sourceDuration);
+    setExtendStart(0);
+    setExtendEnd(roundClipSeconds(cap));
+  };
+
+  const handleSaveExtendedClip = async () => {
+    if (!editingClip || !extendFile || !user?.id) return;
+    const start = roundClipSeconds(extendStart);
+    const end = roundClipSeconds(extendEnd);
+    const length = end - start;
+
+    if (length <= 0) {
+      toast({ title: "Trim needed", description: "Choose at least 0.1 seconds of video.", variant: "destructive" });
+      return;
+    }
+    if (length > MAX_PRO_CLIP_DURATION_SECONDS) {
+      toast({ title: "Too long", description: `Pro clips can be up to ${MAX_PRO_CLIP_DURATION_SECONDS} seconds.`, variant: "destructive" });
+      return;
+    }
+
+    setExtendingClip(true);
+    try {
+      const trimmed = await trimVideoToMp4(extendFile, start, end);
+      const outDuration = trimmed.durationSeconds > 0 ? trimmed.durationSeconds : length;
+      const fileName = `${user.id}/${Date.now()}.mp4`;
+      const uploadRes = await supabase.storage
+        .from("clips")
+        .upload(fileName, trimmed.file, { cacheControl: "3600", upsert: false, contentType: "video/mp4" });
+      if (uploadRes.error) throw uploadRes.error;
+
+      const { data: urlData } = supabase.storage.from("clips").getPublicUrl(fileName);
+
+      const { error } = await (supabase as any).rpc("extend_pro_clip", {
+        _clip_id: editingClip.id,
+        _video_url: urlData.publicUrl,
+        _duration: roundClipSeconds(outDuration),
+        _trim_start: 0,
+        _trim_end: roundClipSeconds(outDuration),
+      });
+      if (error) throw error;
+
+      setClips((prev) =>
+        prev.map((item) =>
+          item.id === editingClip.id
+            ? { ...item, video_url: urlData.publicUrl, duration: roundClipSeconds(outDuration), trim_start_seconds: 0, trim_end_seconds: roundClipSeconds(outDuration) }
+            : item
+        )
+      );
+      toast({ title: "Clip extended", description: "Your longer clip is saved." });
+      setEditingClip(null);
+    } catch (error: any) {
+      toast({ title: "Could not extend clip", description: error.message || "Please try again.", variant: "destructive" });
+    }
+    setExtendingClip(false);
+  };
+
+  // Save title / caption / display changes for an approved clip in a single
+  // update. The approved video file is never touched (the database also locks
+  // it), captions/titles run through the same profanity filter as upload, and
+  // the clip stays approved with no re-review.
+  const handleSaveClipEdits = async () => {
+    if (!editingClip || !user?.id) return;
+    const title = editClipTitle.trim();
+    const caption = editClipCaption.trim();
+
+    if (!title) {
+      toast({ title: "Title required", description: "Add a title before saving.", variant: "destructive" });
+      return;
+    }
+    if (containsProfanityInFields([title, caption])) {
+      toast({
+        title: "Inappropriate language",
+        description: "Please remove profanity or banned words from the title or caption and try again.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setSavingClipEdit(true);
+    const { error } = await (supabase as any)
       .from("clips")
-      .update({ caption: nextCaption || null, description: nextCaption || null })
-      .eq("id", clip.id)
-      .eq("user_id", user?.id || "");
-    setSavingClipCaptionId(null);
+      .update({ title, caption: caption || null, description: caption || null, fit_mode: editClipFitMode })
+      .eq("id", editingClip.id)
+      .eq("user_id", user.id);
+    setSavingClipEdit(false);
 
     if (error) {
-      toast({ title: "Could not update caption", description: error.message, variant: "destructive" });
+      toast({ title: "Could not save changes", description: error.message, variant: "destructive" });
       return;
     }
 
     setClips((prev) =>
-      prev.map((item) => (item.id === clip.id ? { ...item, caption: nextCaption || null } : item))
+      prev.map((item) =>
+        item.id === editingClip.id
+          ? { ...item, title, caption: caption || null, fit_mode: editClipFitMode }
+          : item
+      )
     );
-    setClipCaptionDrafts((prev) => {
-      const next = { ...prev };
-      delete next[clip.id];
-      return next;
-    });
-    toast({ title: "Caption updated" });
+    toast({ title: "Clip updated" });
+    setEditingClip(null);
   };
 
   const handleJoinTeam = async () => {
@@ -5908,7 +6049,7 @@ const ProfilePage = () => {
             ) : (
               <>
                 {isYoungPlayerParentLinkAge ? (
-                  <div className="border-b border-border p-4 space-y-3">
+                  <div id="parent-links-section" className="border-b border-border p-4 space-y-3">
                     <div>
                       <p className="text-sm font-semibold text-foreground">Parents / Guardians</p>
                       <p className="text-xs text-muted-foreground">Up to two parents can be connected. Once approved, only the linked parent can remove their connection.</p>
@@ -6772,7 +6913,7 @@ const ProfilePage = () => {
             ) : isPlayerAccount && (visibleContacts.length > 0 || playerParentLinksInContactSection.length > 0) ? (
               <>
                 {playerParentLinksInContactSection.length > 0 ? (
-                  <div className="border-b border-border p-4 space-y-3">
+                  <div id="parent-links-section" className="border-b border-border p-4 space-y-3">
                     <div>
                       <p className="text-sm font-semibold text-foreground">Parents / Guardians</p>
                       <p className="text-xs text-muted-foreground">Your linked parent accounts and their contact information.</p>
@@ -7229,47 +7370,15 @@ const ProfilePage = () => {
                       ) : null}
                     </div>
                     {clip.review_status === "approved" ? (
-                      <div className="space-y-2 rounded-lg border border-border p-2">
-                        <p className="text-xs font-medium text-muted-foreground">Display</p>
-                        <div className="grid grid-cols-2 gap-2">
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant={clip.fit_mode === "cover" ? "default" : "outline"}
-                            onClick={() => handleClipFitModeChange(clip.id, "cover")}
-                          >
-                            Fit Whole Frame
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant={clip.fit_mode !== "cover" ? "default" : "outline"}
-                            onClick={() => handleClipFitModeChange(clip.id, "contain")}
-                          >
-                            Fit Whole Clip
-                          </Button>
-                        </div>
-                        <p className="text-xs font-medium text-muted-foreground">Caption</p>
-                        <Input
-                          value={clipCaptionDrafts[clip.id] ?? clip.caption ?? ""}
-                          onChange={(e) => setClipCaptionDrafts((prev) => ({ ...prev, [clip.id]: e.target.value }))}
-                          placeholder="Add a caption"
-                          className="h-9 text-sm"
-                        />
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          className="w-full"
-                          onClick={() => handleClipCaptionSave(clip)}
-                          disabled={
-                            savingClipCaptionId === clip.id ||
-                            (clipCaptionDrafts[clip.id] ?? clip.caption ?? "") === (clip.caption ?? "")
-                          }
-                        >
-                          {savingClipCaptionId === clip.id ? "Saving..." : "Save Caption"}
-                        </Button>
-                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="w-full gap-2"
+                        onClick={() => openClipEditor(clip)}
+                      >
+                        <Edit className="h-4 w-4" /> Edit clip
+                      </Button>
                     ) : null}
                     <Select
                       value={(clip.visibility as ClipVisibility) || "public"}
@@ -8320,6 +8429,131 @@ const ProfilePage = () => {
                 : uploadingClip
                   ? "Uploading..."
                   : "Confirm"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!editingClip} onOpenChange={(open) => !open && setEditingClip(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit clip</DialogTitle>
+            <DialogDescription>
+              Update the title, caption, and display. The approved video can’t be changed.
+            </DialogDescription>
+          </DialogHeader>
+
+          {editingClip ? (
+            <div className="space-y-4">
+              <div className="overflow-hidden rounded-lg border border-border bg-black">
+                <video
+                  src={editingClip.video_url}
+                  controls
+                  playsInline
+                  className={`aspect-video w-full ${editClipFitMode === "cover" ? "object-cover" : "object-contain"}`}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">Title</label>
+                <Input
+                  value={editClipTitle}
+                  onChange={(e) => setEditClipTitle(e.target.value)}
+                  placeholder="Clip title"
+                  maxLength={80}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">Caption</label>
+                <Textarea
+                  value={editClipCaption}
+                  onChange={(e) => setEditClipCaption(e.target.value)}
+                  placeholder="Add a caption"
+                  className="min-h-20"
+                  maxLength={300}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">Display</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    type="button"
+                    variant={editClipFitMode === "cover" ? "default" : "outline"}
+                    onClick={() => setEditClipFitMode("cover")}
+                  >
+                    Fit Whole Frame
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={editClipFitMode === "contain" ? "default" : "outline"}
+                    onClick={() => setEditClipFitMode("contain")}
+                  >
+                    Fit Whole Clip
+                  </Button>
+                </div>
+              </div>
+
+              {canExtendEditingClip ? (
+                <div className="space-y-3 rounded-lg border border-primary/30 bg-primary/5 p-3">
+                  <div>
+                    <p className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+                      <Crown className="h-4 w-4" /> Extend length (Pro)
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Re-select your original video to pick a longer section (up to {MAX_PRO_CLIP_DURATION_SECONDS}s). Same file only — a different video can’t be used.
+                    </p>
+                  </div>
+                  <Input type="file" accept="video/*" onChange={(e) => handleSelectExtendFile(e.target.files?.[0] || null)} />
+                  {extendFile && extendSourceDuration != null ? (
+                    <div className="space-y-3">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-xs">
+                          <span>Start</span>
+                          <span>{formatClipSeconds(extendStart)}s</span>
+                        </div>
+                        <Slider
+                          min={0}
+                          max={Math.max(0, roundTrimStep(Math.min(extendSourceDuration, MAX_PRO_CLIP_DURATION_SECONDS) - 0.1))}
+                          step={0.1}
+                          value={[extendStart]}
+                          onValueChange={(v) => setExtendStart(roundTrimStep(Math.min(v[0] || 0, Math.max(0, extendEnd - 0.1))))}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-xs">
+                          <span>End</span>
+                          <span>{formatClipSeconds(extendEnd)}s</span>
+                        </div>
+                        <Slider
+                          min={0.1}
+                          max={roundTrimStep(extendSourceDuration)}
+                          step={0.1}
+                          value={[extendEnd]}
+                          onValueChange={(v) => {
+                            const next = roundTrimStep(Math.max(v[0] || 0.1, extendStart + 0.1));
+                            setExtendEnd(Math.min(next, extendStart + MAX_PRO_CLIP_DURATION_SECONDS));
+                          }}
+                        />
+                      </div>
+                      <p className="text-xs text-muted-foreground">New length: {formatClipSeconds(Math.max(0, extendEnd - extendStart))}s</p>
+                      <Button type="button" size="sm" className="w-full" onClick={handleSaveExtendedClip} disabled={extendingClip}>
+                        {extendingClip ? "Extending..." : "Save extended clip"}
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingClip(null)} disabled={savingClipEdit || extendingClip}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveClipEdits} disabled={savingClipEdit || extendingClip}>
+              {savingClipEdit ? "Saving..." : "Save"}
             </Button>
           </DialogFooter>
         </DialogContent>

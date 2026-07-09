@@ -17,6 +17,7 @@ import {
 import { PendingTeamInviteSummary, fetchPendingTeamInvitesForUser, formatTeamLeagueLine } from "@/lib/teamMemberships";
 import { useAuth } from "@/hooks/useAuth";
 import { reviewCoachStaffJoinRequest } from "@/lib/coachStaffTeams";
+import { reviewParentPlayerLink } from "@/lib/parentLinks";
 
 const PAGE_SIZE = 25;
 
@@ -96,6 +97,14 @@ const NotificationsPage = () => {
         toast({ title: "Could not mark notification as read", description: error.message, variant: "destructive" });
         return;
       }
+    }
+
+    // Deep-link the parent link request tile straight to the review section on
+    // the player's profile so tapping the tile (not the buttons) still lands them
+    // where they can accept or decline.
+    if (notification.type === "parent_link_requested") {
+      navigate("/profile?focus=parent-links");
+      return;
     }
 
     if (notification.link_path) {
@@ -200,7 +209,39 @@ const NotificationsPage = () => {
     await Promise.all([loadNotifications(), loadPendingInvites()]);
   };
 
+  const handleParentLinkRequestNotification = async (notification: AppNotification, approve: boolean) => {
+    if (!user) return;
+    const linkId =
+      typeof notification.metadata?.link_id === "string" ? notification.metadata.link_id : notification.entity_id;
+    if (!linkId) {
+      toast({ title: "Request missing", description: "This notification is missing its request details.", variant: "destructive" });
+      return;
+    }
+
+    const { error } = await reviewParentPlayerLink(linkId, approve);
+    if (error) {
+      toast({ title: "Update failed", description: error.message, variant: "destructive" });
+      return;
+    }
+
+    await markNotificationRead(notification.id, user.id);
+    toast({ title: approve ? "Parent connection approved" : "Parent connection declined" });
+    await loadNotifications();
+  };
+
   const renderNotificationActions = (notification: AppNotification) => {
+    if (notification.type === "parent_link_requested") {
+      return (
+        <div className="flex gap-2">
+          <Button size="sm" className="flex-1" onClick={() => handleParentLinkRequestNotification(notification, true)}>
+            Accept
+          </Button>
+          <Button size="sm" variant="outline" className="flex-1" onClick={() => handleParentLinkRequestNotification(notification, false)}>
+            Decline
+          </Button>
+        </div>
+      );
+    }
     if (notification.type === "coach_staff_join_requested") {
       return (
         <div className="flex gap-2">
