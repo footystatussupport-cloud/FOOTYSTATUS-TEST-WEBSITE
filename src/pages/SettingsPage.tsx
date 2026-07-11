@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ArrowLeft, Moon, Globe, Smartphone, Volume2, Download, Trash2, ChevronRight } from "lucide-react";
 import Header from "@/components/Header";
@@ -11,6 +11,10 @@ import NotificationSettingsSection from "@/components/notifications/Notification
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
+import {
+  assertUserCanBeDeleted,
+  isCurrentUserDeletionProtected,
+} from "@/lib/protectedAccounts";
 
 interface SettingItem {
   id: keyof UserSettings;
@@ -29,6 +33,28 @@ const SettingsPage = () => {
   const { user, profile, refreshProfile } = useAuth();
   const [clearingCache, setClearingCache] = useState(false);
   const [deletingAccount, setDeletingAccount] = useState(false);
+  // Server-authoritative: hide the Delete Account control for the permanently
+  // protected Footy Status Official Admin account. Real enforcement is in the
+  // database; this only prevents showing a button that would always fail.
+  const [deletionProtected, setDeletionProtected] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    if (!user?.id) {
+      setDeletionProtected(false);
+      return;
+    }
+    isCurrentUserDeletionProtected()
+      .then((protectedAccount) => {
+        if (active) setDeletionProtected(protectedAccount);
+      })
+      .catch(() => {
+        if (active) setDeletionProtected(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [user?.id]);
 
   const role = profile?.account_role || profile?.account_type || profile?.role;
   const canUseNextUpGenderPreference = Boolean(
@@ -112,6 +138,13 @@ const SettingsPage = () => {
     setDeletingAccount(true);
 
     try {
+      // Shared guard: refuse before any deletion begins if this account is the
+      // permanently protected Footy Status Official Admin. The database enforces
+      // the same rule; this gives a clear, immediate message.
+      if (user?.id) {
+        await assertUserCanBeDeleted(user.id);
+      }
+
       const { error } = await supabase.rpc("delete_my_account");
 
       if (error) {
@@ -412,23 +445,27 @@ const SettingsPage = () => {
                 {clearingCache ? "Clearing..." : "Clear"}
               </button>
             </div>
-            <Separator />
-            <div className="flex items-center justify-between py-4">
-              <div className="flex items-center gap-3 flex-1">
-                <Trash2 className="h-5 w-5 text-destructive" />
-                <div className="flex-1">
-                  <p className="text-base font-medium text-destructive">Delete Account</p>
-                  <p className="text-sm text-muted-foreground">Permanently delete your account and all data</p>
+            {!deletionProtected && (
+              <>
+                <Separator />
+                <div className="flex items-center justify-between py-4">
+                  <div className="flex items-center gap-3 flex-1">
+                    <Trash2 className="h-5 w-5 text-destructive" />
+                    <div className="flex-1">
+                      <p className="text-base font-medium text-destructive">Delete Account</p>
+                      <p className="text-sm text-muted-foreground">Permanently delete your account and all data</p>
+                    </div>
+                  </div>
+                  <button
+                    className="text-sm font-medium text-destructive hover:underline disabled:cursor-not-allowed disabled:opacity-60"
+                    onClick={handleDeleteAccount}
+                    disabled={deletingAccount || clearingCache}
+                  >
+                    {deletingAccount ? "Deleting..." : "Delete"}
+                  </button>
                 </div>
-              </div>
-              <button
-                className="text-sm font-medium text-destructive hover:underline disabled:cursor-not-allowed disabled:opacity-60"
-                onClick={handleDeleteAccount}
-                disabled={deletingAccount || clearingCache}
-              >
-                {deletingAccount ? "Deleting..." : "Delete"}
-              </button>
-            </div>
+              </>
+            )}
           </div>
         </section>
       </main>

@@ -9,6 +9,7 @@
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
     "test:subscriptions": "node tests/subscriptionRules.test.mjs",
+    "test:protection": "node tests/protectedAccounts.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Ban, Check, RefreshCw, RotateCcw, Video } from "lucide-react";
+import { Ban, Check, RefreshCw, RotateCcw, ShieldAlert, Video } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +23,7 @@ type ReviewClip = {
   uploaded_at: string;
   review_status: "pending_review" | "needs_revision";
   revision_note: string | null;
+  active_strike_count: number;
 };
 
 const formatPlayerGender = (gender?: string | null) => {
@@ -50,6 +51,7 @@ const NextUpClipReviewBank = () => {
   const [revisionNote, setRevisionNote] = useState("");
   const [rejectClip, setRejectClip] = useState<ReviewClip | null>(null);
   const [rejectNote, setRejectNote] = useState("");
+  const [rejectDecision, setRejectDecision] = useState<"reject" | "reject_strike">("reject");
 
   const load = async () => {
     setLoading(true);
@@ -66,7 +68,7 @@ const NextUpClipReviewBank = () => {
     load();
   }, []);
 
-  const decide = async (clip: ReviewClip, decision: "approve" | "revise" | "reject", note?: string) => {
+  const decide = async (clip: ReviewClip, decision: "approve" | "revise" | "reject" | "reject_strike", note?: string) => {
     setWorkingId(clip.clip_id);
     const { error } = await (supabase as any).rpc("review_next_up_clip", {
       _clip_id: clip.clip_id,
@@ -84,18 +86,23 @@ const NextUpClipReviewBank = () => {
           ? "Clip approved and published"
           : decision === "revise"
             ? "Revision request sent"
-            : "Clip rejected",
+            : decision === "reject_strike"
+              ? "Clip rejected and strike added"
+              : "Clip rejected",
       description:
         decision === "approve"
           ? "The player has been notified and the clip is now live."
           : decision === "revise"
             ? "The clip stays hidden until the player resubmits."
-            : "The clip was removed and the player was told why.",
+            : decision === "reject_strike"
+              ? "The clip was removed, the player was notified, and a strike was added."
+              : "The clip was removed and the player was told why.",
     });
     setRevisionClip(null);
     setRevisionNote("");
     setRejectClip(null);
     setRejectNote("");
+    setRejectDecision("reject");
     await load();
   };
 
@@ -143,6 +150,9 @@ const NextUpClipReviewBank = () => {
                     <p className="text-sm text-muted-foreground">
                       {clip.player_username ? `@${clip.player_username}` : "No username"} · {formatAccountType(clip.account_role)} · {formatPlayerGender(clip.player_gender)}
                     </p>
+                    <p className="mt-1 text-xs font-medium text-muted-foreground">
+                      Current strikes: <span className={Number(clip.active_strike_count || 0) >= 2 ? "text-destructive" : "text-foreground"}>{Math.min(3, Number(clip.active_strike_count || 0))}/3</span>
+                    </p>
                   </div>
                   <Badge variant="secondary">Pending Review</Badge>
                 </div>
@@ -163,8 +173,11 @@ const NextUpClipReviewBank = () => {
                   <Button className="flex-1" variant="outline" disabled={workingId === clip.clip_id} onClick={() => { setRevisionClip(clip); setRevisionNote(clip.revision_note || ""); }}>
                     <RotateCcw className="mr-2 h-4 w-4" />Revise
                   </Button>
-                  <Button className="flex-1" variant="destructive" disabled={workingId === clip.clip_id} onClick={() => { setRejectClip(clip); setRejectNote(""); }}>
+                  <Button className="flex-1" variant="destructive" disabled={workingId === clip.clip_id} onClick={() => { setRejectClip(clip); setRejectNote(""); setRejectDecision("reject"); }}>
                     <Ban className="mr-2 h-4 w-4" />Reject
+                  </Button>
+                  <Button className="flex-1" variant="destructive" disabled={workingId === clip.clip_id} onClick={() => { setRejectClip(clip); setRejectNote(""); setRejectDecision("reject_strike"); }}>
+                    <ShieldAlert className="mr-2 h-4 w-4" />Reject + Strike
                   </Button>
                 </div>
               </div>
@@ -190,7 +203,7 @@ const NextUpClipReviewBank = () => {
 
       <Dialog open={Boolean(rejectClip)} onOpenChange={(open) => !open && setRejectClip(null)}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Reject this clip</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{rejectDecision === "reject_strike" ? "Reject and strike this clip" : "Reject this clip"}</DialogTitle></DialogHeader>
           <div className="space-y-2">
             <Label>Reason sent to the player</Label>
             <Textarea value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} placeholder="Explain exactly why this clip is being rejected — the guideline or requirement it failed and anything the player should know. The clip will be permanently removed." maxLength={500} />
@@ -198,7 +211,9 @@ const NextUpClipReviewBank = () => {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRejectClip(null)}>Cancel</Button>
-            <Button variant="destructive" disabled={rejectNote.trim().length < 3 || workingId === rejectClip?.clip_id} onClick={() => rejectClip && decide(rejectClip, "reject", rejectNote)}>Reject Clip</Button>
+            <Button variant="destructive" disabled={rejectNote.trim().length < 3 || workingId === rejectClip?.clip_id} onClick={() => rejectClip && decide(rejectClip, rejectDecision, rejectNote)}>
+              {rejectDecision === "reject_strike" ? "Reject + Add Strike" : "Reject Clip"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

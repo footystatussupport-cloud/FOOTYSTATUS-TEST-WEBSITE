@@ -133,7 +133,7 @@ const ExploreTab = () => {
         (supabase as any)
           .from("profiles")
           .select("user_id, full_name, username, avatar_url, bio, parent_profiles(relationship_to_player)")
-          .eq("account_category", "parent"),
+          .or("account_category.eq.parent,account_role.eq.parent,role.eq.parent"),
       ]);
 
       const profileUserIds = [...new Set((playerProfilesRes.data || []).map((player) => player.user_id).filter(Boolean))];
@@ -834,7 +834,7 @@ const ExploreTab = () => {
           {parents.map((parent) => (
             <button
               key={parent.user_id}
-              onClick={() => navigate(parent.user_id === user?.id ? "/profile" : `/staff/${parent.user_id}`)}
+              onClick={() => navigate(parent.user_id === user?.id ? "/profile" : `/parent/${parent.user_id}`)}
               className="w-full bg-card border-2 border-border rounded-xl p-4 flex items-center gap-3 hover:border-accent hover:shadow-md transition-all text-left"
             >
               <div className="w-12 h-12 rounded-full bg-gradient-to-br from-navy to-primary flex items-center justify-center shadow-md overflow-hidden">
@@ -847,7 +847,7 @@ const ExploreTab = () => {
               <div className="min-w-0">
                 <p className="font-semibold text-foreground truncate">{parent.full_name || "Parent / Guardian"}</p>
                 <p className="text-sm text-muted-foreground truncate">
-                  {parent.relationship_to_player || "Parent / Guardian"}
+                  {[parent.username ? `@${parent.username}` : null, parent.relationship_to_player || "Parent / Guardian"].filter(Boolean).join(" - ")}
                 </p>
               </div>
             </button>

@@ -35,7 +35,7 @@ interface StrikeHistoryItem {
   removed_at: string | null;
   removal_reason: string | null;
 }
-type PendingAction = { type: "dismiss" | "strike_delete" | "ban_3" | "ban_6" | "remove_strike"; strikeId?: string } | null;
+type PendingAction = { type: "dismiss" | "delete_clip" | "strike" | "strike_delete" | "ban_3" | "ban_6" | "remove_strike"; strikeId?: string } | null;
 const reasonLabels: Record<string, string> = {
   inappropriate: "Inappropriate Content",
   harassment: "Harassment or Abuse",
@@ -81,7 +81,16 @@ const ReportContentReview = () => {
         toast({ title: "Strike removed" });
         await loadStrikes(selected.reported_account_id);
       } else {
-        const action = pendingAction.type === "dismiss" ? "dismiss" : pendingAction.type === "strike_delete" ? "strike_delete" : "temporary_ban";
+        const action =
+          pendingAction.type === "dismiss"
+            ? "dismiss"
+            : pendingAction.type === "delete_clip"
+              ? "delete_clip"
+              : pendingAction.type === "strike"
+                ? "strike"
+                : pendingAction.type === "strike_delete"
+                  ? "strike_delete"
+                  : "temporary_ban";
         const months = pendingAction.type === "ban_3" ? 3 : pendingAction.type === "ban_6" ? 6 : null;
         const { error } = await (supabase as any).rpc("review_content_report", {
           _report_id: selected.id,
@@ -90,7 +99,18 @@ const ReportContentReview = () => {
           _note: action === "dismiss" ? "Dismissed by Footy Status Official" : null,
         });
         if (error) throw error;
-        toast({ title: action === "dismiss" ? "Report dismissed" : action === "strike_delete" ? "Strike added and video removed" : `${months}-month ban applied` });
+        toast({
+          title:
+            action === "dismiss"
+              ? "Report dismissed"
+              : action === "delete_clip"
+                ? "Video deleted"
+                : action === "strike"
+                  ? "Strike added"
+                  : action === "strike_delete"
+                    ? "Strike added and video removed"
+                    : `${months}-month ban applied`,
+        });
         await loadReports();
         setSelected(null);
       }
@@ -105,6 +125,10 @@ const ReportContentReview = () => {
   const pendingCount = reports.filter((report) => report.report_status === "pending").length;
   const confirmationText = pendingAction?.type === "dismiss"
     ? "Dismiss this report without taking action against the clip or account?"
+    : pendingAction?.type === "delete_clip"
+      ? "Delete this reported video without adding a strike?"
+    : pendingAction?.type === "strike"
+      ? "Add a strike to the reported account without deleting this video?"
     : pendingAction?.type === "strike_delete"
       ? "Add a strike to the reported account and permanently remove this video from Footy Status?"
       : pendingAction?.type === "remove_strike"
@@ -166,7 +190,9 @@ const ReportContentReview = () => {
 
               {selected.report_status === "pending" ? <div className="grid gap-2 sm:grid-cols-2">
                 <Button variant="outline" onClick={() => setPendingAction({ type: "dismiss" })}><Eye className="mr-2 h-4 w-4" />Dismiss Report</Button>
-                <Button variant="destructive" onClick={() => setPendingAction({ type: "strike_delete" })}><Trash2 className="mr-2 h-4 w-4" />Strike + Delete Video</Button>
+                <Button variant="outline" onClick={() => setPendingAction({ type: "delete_clip" })}><Trash2 className="mr-2 h-4 w-4" />Delete Video</Button>
+                <Button variant="outline" onClick={() => setPendingAction({ type: "strike" })}><AlertTriangle className="mr-2 h-4 w-4" />Give Strike</Button>
+                <Button variant="destructive" onClick={() => setPendingAction({ type: "strike_delete" })}><Trash2 className="mr-2 h-4 w-4" />Delete + Strike</Button>
                 <Button variant="outline" onClick={() => setPendingAction({ type: "ban_3" })}><UserX className="mr-2 h-4 w-4" />Ban 3 Months</Button>
                 <Button variant="outline" onClick={() => setPendingAction({ type: "ban_6" })}><ShieldAlert className="mr-2 h-4 w-4" />Ban 6 Months</Button>
               </div> : null}

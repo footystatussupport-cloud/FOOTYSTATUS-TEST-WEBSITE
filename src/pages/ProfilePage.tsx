@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, ChangeEvent, PointerEvent, useMemo } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft, Camera, User, Calendar, Trophy, Edit, Save, X, Upload, Video, Crown, Lock, Link as LinkIcon, Phone, Mail, Shield, Star, Building2, Briefcase, MapPin, Users, Heart, Eye, Check, BadgeCheck } from "lucide-react";
+import { ArrowLeft, Camera, User, Calendar, Trophy, Edit, Save, X, Upload, Video, Crown, Lock, Link as LinkIcon, Phone, Mail, Shield, Star, Building2, Briefcase, MapPin, Users, Heart, Eye, Check, BadgeCheck, Info } from "lucide-react";
 import Header from "@/components/Header";
 import ProfileHeader from "@/components/ProfileHeader";
 import LinkedParentTile from "@/components/LinkedParentTile";
@@ -554,6 +554,7 @@ const ProfilePage = () => {
   const [profile, setProfile] = useState<ProfileData | null>(null);
   const [clips, setClips] = useState<ClipData[]>([]);
   const [clipCount, setClipCount] = useState(0);
+  const [playerStrikeCount, setPlayerStrikeCount] = useState(0);
   const [contacts, setContacts] = useState<ContactItem[]>([]);
   const [contactForm, setContactForm] = useState<ContactFormState>(emptyContactForm());
   const [seasonStats, setSeasonStats] = useState<SeasonStats[]>([]);
@@ -1141,8 +1142,10 @@ const ProfilePage = () => {
     }
     if (isPlayerAccount) {
       fetchClubHistory();
+      fetchPlayerStrikeCount();
     } else {
       setClubHistory([]);
+      setPlayerStrikeCount(0);
     }
     fetchTeamConnectionData();
     fetchCoachStaffConnectionData();
@@ -1155,7 +1158,17 @@ const ProfilePage = () => {
         "postgres_changes",
         { event: "*", schema: "public", table: "clips" },
         () => {
-          if (user) fetchClips();
+          if (user) {
+            fetchClips();
+            if (isPlayerAccount) fetchPlayerStrikeCount();
+          }
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "account_strikes" },
+        () => {
+          if (user && isPlayerAccount) fetchPlayerStrikeCount();
         }
       )
       .on(
@@ -2110,6 +2123,22 @@ const ProfilePage = () => {
 
     setClips((userClips || []) as ClipData[]);
     setClipCount(count || 0);
+  };
+
+  const fetchPlayerStrikeCount = async () => {
+    if (!user) {
+      setPlayerStrikeCount(0);
+      return;
+    }
+
+    const { data, error } = await (supabase as any).rpc("get_my_moderation_status");
+    if (error) {
+      console.warn("Could not load player strike counter", error);
+      return;
+    }
+
+    const count = Number((data as any)?.strike_count || 0);
+    setPlayerStrikeCount(Math.max(0, Math.min(3, count)));
   };
 
   const fetchSeasonStats = async () => {
@@ -7146,12 +7175,21 @@ const ProfilePage = () => {
         <section className="mb-6">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-lg font-semibold text-navy">My Clips</h3>
-            <div className="flex items-center gap-3 text-sm text-muted-foreground">
+            <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-sm text-muted-foreground">
+              <span className="inline-flex items-center gap-1">
+                Strikes {playerStrikeCount}/3
+                <span className="group relative inline-flex" aria-label="How strikes work">
+                  <Info className="h-3.5 w-3.5 cursor-help text-muted-foreground" />
+                  <span className="pointer-events-none absolute right-0 top-5 z-20 hidden w-64 rounded-lg border border-border bg-popover px-3 py-2 text-xs text-popover-foreground shadow-lg group-hover:block">
+                    Strikes are given for content violations. Reaching 3 strikes causes a 3-month account and email ban.
+                  </span>
+                </span>
+              </span>
               {!isActivePro ? (
-                <span>{Number(profile?.clip_deletions_used || 0)}/{FREE_DELETION_LIMIT} deletions</span>
+                <span>Deletions {Number(profile?.clip_deletions_used || 0)}/{FREE_DELETION_LIMIT}</span>
               ) : null}
               <span>
-                {!isActivePro ? `${activeClipCount}/${MAX_FREE_CLIPS} active clips` : `${clipCount} clips`}
+                {!isActivePro ? `Active Clips ${activeClipCount}/${MAX_FREE_CLIPS}` : `Active Clips ${clipCount}`}
               </span>
             </div>
           </div>

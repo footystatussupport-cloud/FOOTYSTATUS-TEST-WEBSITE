@@ -69,6 +69,11 @@ const LeaguePage = () => {
   const [fixtureForm, setFixtureForm] = useState(initialFixtureForm);
   const [leagueEditForm, setLeagueEditForm] = useState(initialLeagueEditForm);
   const [submitting, setSubmitting] = useState(false);
+  // Smart venue autofill: the selected home team's saved locations, plus a
+  // manual "Enter New Venue" mode (does not create a permanent team address).
+  const [homeVenueOptions, setHomeVenueOptions] = useState<{ id: string; name: string; address: string }[]>([]);
+  const [venueChoice, setVenueChoice] = useState<string>("");
+  const [manualVenue, setManualVenue] = useState({ name: "", street: "", city: "", state: "", zip: "", country: "" });
 
   const upcomingMatches = useMemo(() => matches.filter((match) => match.status === "scheduled" || match.status === "live"), [matches]);
   const completedMatches = useMemo(
@@ -112,6 +117,61 @@ const LeaguePage = () => {
         .filter((row: any) => row.selectionId && row.teamId),
     [leagueTeams]
   );
+
+  const combineManualAddress = (m: typeof manualVenue) => {
+    const cityState = [m.city, [m.state, m.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+    return [m.street, cityState, m.country].map((part) => part.trim()).filter(Boolean).join(", ");
+  };
+
+  const applyManualVenue = (next: typeof manualVenue) => {
+    setManualVenue(next);
+    setFixtureForm((prev) => ({ ...prev, venue: next.name.trim(), venueAddress: combineManualAddress(next) }));
+  };
+
+  const chooseVenue = (choice: string) => {
+    setVenueChoice(choice);
+    if (choice === "__manual__") {
+      setFixtureForm((prev) => ({ ...prev, venue: manualVenue.name.trim(), venueAddress: combineManualAddress(manualVenue) }));
+      return;
+    }
+    const opt = homeVenueOptions.find((o) => o.id === choice);
+    setFixtureForm((prev) => ({ ...prev, venue: opt?.name || "", venueAddress: opt?.address || "" }));
+  };
+
+  // When the Home Team changes, load that team's saved locations for the venue
+  // dropdown and smart-default to the only one if there is a single address.
+  useEffect(() => {
+    const option = fixtureTeamOptions.find((team) => team.selectionId === fixtureForm.homeSelectionId);
+    if (!option) {
+      setHomeVenueOptions([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const { data } = await (supabase as any)
+        .from("team_profiles")
+        .select("home_stadium, training_ground, city, country")
+        .eq("team_id", option.teamId)
+        .maybeSingle();
+      if (cancelled) return;
+      const locale = [data?.city, data?.country].filter(Boolean).join(", ");
+      const opts: { id: string; name: string; address: string }[] = [];
+      if (data?.home_stadium) opts.push({ id: "home_stadium", name: data.home_stadium, address: [data.home_stadium, locale].filter(Boolean).join(", ") });
+      if (data?.training_ground) opts.push({ id: "training_ground", name: data.training_ground, address: [data.training_ground, locale].filter(Boolean).join(", ") });
+      setHomeVenueOptions(opts);
+      if (opts.length === 1) {
+        setVenueChoice(opts[0].id);
+        setFixtureForm((prev) => ({ ...prev, venue: opts[0].name, venueAddress: opts[0].address }));
+      } else if (opts.length === 0) {
+        setVenueChoice("__manual__");
+      } else {
+        setVenueChoice("");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [fixtureForm.homeSelectionId, fixtureTeamOptions]);
 
   const loadLeague = async () => {
     if (!id) return;
@@ -249,6 +309,9 @@ const LeaguePage = () => {
     } else {
       toast({ title: "Fixture created" });
       setFixtureForm(initialFixtureForm);
+      setVenueChoice("");
+      setHomeVenueOptions([]);
+      setManualVenue({ name: "", street: "", city: "", state: "", zip: "", country: "" });
       setShowFixtureDialog(false);
       await loadLeague();
     }
@@ -513,16 +576,43 @@ const LeaguePage = () => {
                   </div>
                   <div>
                     <Label>Venue</Label>
-                    <Input value={fixtureForm.venue} onChange={(e) => setFixtureForm((prev) => ({ ...prev, venue: e.target.value }))} placeholder="Main Stadium" />
+                    <select
+                      value={venueChoice}
+                      onChange={(e) => chooseVenue(e.target.value)}
+                      className="mt-1 flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    >
+                      {homeVenueOptions.length ? (
+                        <>
+                          <option value="">Select a saved venue</option>
+                          {homeVenueOptions.map((o) => (
+                            <option key={o.id} value={o.id}>{o.name}</option>
+                          ))}
+                        </>
+                      ) : (
+                        <option value="" disabled>{fixtureForm.homeSelectionId ? "No saved venues for this team" : "Select a home team first"}</option>
+                      )}
+                      <option value="__manual__">+ Enter New Venue</option>
+                    </select>
+                    {venueChoice && venueChoice !== "__manual__" && fixtureForm.venueAddress ? (
+                      <p className="mt-1 text-xs text-muted-foreground">{fixtureForm.venueAddress}</p>
+                    ) : null}
                   </div>
-                  <div>
-                    <Label>Full Address</Label>
-                    <Input
-                      value={fixtureForm.venueAddress}
-                      onChange={(e) => setFixtureForm((prev) => ({ ...prev, venueAddress: e.target.value }))}
-                      placeholder="123 Main St, City, State"
-                    />
-                  </div>
+                  {venueChoice === "__manual__" ? (
+                    <div className="space-y-2 rounded-md border border-border p-3">
+                      <p className="text-xs text-muted-foreground">Enter a one-off venue for this fixture. This does not save a permanent team address.</p>
+                      <Input placeholder="Venue name (e.g. Providence High School)" value={manualVenue.name} onChange={(e) => applyManualVenue({ ...manualVenue, name: e.target.value })} />
+                      <Input placeholder="Street address" value={manualVenue.street} onChange={(e) => applyManualVenue({ ...manualVenue, street: e.target.value })} />
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input placeholder="City" value={manualVenue.city} onChange={(e) => applyManualVenue({ ...manualVenue, city: e.target.value })} />
+                        <Input placeholder="State" value={manualVenue.state} onChange={(e) => applyManualVenue({ ...manualVenue, state: e.target.value })} />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input placeholder="Zip code" value={manualVenue.zip} onChange={(e) => applyManualVenue({ ...manualVenue, zip: e.target.value })} />
+                        <Input placeholder="Country" value={manualVenue.country} onChange={(e) => applyManualVenue({ ...manualVenue, country: e.target.value })} />
+                      </div>
+                      {fixtureForm.venueAddress ? <p className="text-xs text-muted-foreground">Full address: {fixtureForm.venueAddress}</p> : null}
+                    </div>
+                  ) : null}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <Label>Home Jersey</Label>

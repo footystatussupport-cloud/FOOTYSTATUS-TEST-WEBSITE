@@ -569,6 +569,32 @@ const releaseUsernameConflictForSignup = async (username: string) => {
   return Boolean(releaseResult.data);
 };
 
+const ensureEmailNotTemporarilyBanned = async (emailValue: string | null | undefined) => {
+  const normalizedEmail = normalizeEmailValue(emailValue);
+  if (!normalizedEmail) return;
+
+  const { data, error } = await (supabase as any).rpc("get_email_ban_status", {
+    _email: normalizedEmail,
+  });
+
+  // The database SQL is the true enforcement point. If this RPC is not present
+  // yet in a local/dev database, do not break normal signup; the SQL trigger
+  // will block banned emails once the migration is applied.
+  if (error) {
+    console.warn("Could not check email ban status before signup", {
+      email: normalizedEmail,
+      error,
+    });
+    return;
+  }
+
+  if ((data as any)?.banned) {
+    const endAt = (data as any)?.ban_end_at;
+    const formattedEnd = endAt ? new Date(endAt).toLocaleDateString() : "the ban expires";
+    throw new Error(`This email is temporarily banned from Footy Status until ${formattedEnd}.`);
+  }
+};
+
 const AuthShell = ({ children, backAction }: { children: React.ReactNode; backAction: () => void }) => (
   <div className="min-h-screen bg-background">
     <div className="min-h-screen w-full bg-background max-w-md mx-auto border-x border-border overflow-x-hidden flex flex-col items-center justify-center px-4 relative">
@@ -1044,6 +1070,7 @@ const AuthPage = () => {
           authUserId: sessionUserId,
           restoredRole: role,
         });
+        await ensureEmailNotTemporarilyBanned(normalizedEmail);
         await ensureUsernameAvailableForSignup(normalizedUsername, sessionUserId);
       } else if (recoveredGoogleUser) {
         sessionUserId = recoveredGoogleUser.id;
@@ -1054,6 +1081,7 @@ const AuthPage = () => {
           authUserId: sessionUserId,
           restoredRole: role,
         });
+        await ensureEmailNotTemporarilyBanned(normalizedEmail);
         await ensureUsernameAvailableForSignup(normalizedUsername, sessionUserId);
       } else {
         if (signupMethod === "google") {
@@ -1065,6 +1093,7 @@ const AuthPage = () => {
           throw new Error(parsed.error.issues[0]?.message || "Please enter a valid email and password.");
         }
 
+        await ensureEmailNotTemporarilyBanned(parsed.data.email);
         await ensureUsernameAvailableForSignup(normalizedUsername, null);
 
         const { data: authData, error: signUpError } = await supabase.auth.signUp({

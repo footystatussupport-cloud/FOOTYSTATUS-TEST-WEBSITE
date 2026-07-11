@@ -539,6 +539,31 @@ export const updateMatchDetails = async (payload: {
 export const deleteMatch = async (matchId: string) =>
   (supabase as any).rpc("delete_match", { _match_id: matchId });
 
+export const updateMatchExtraDetails = async (payload: {
+  matchId: string;
+  matchWeek?: string | null;
+  groupName?: string | null;
+  knockoutRound?: string | null;
+  timezone?: string | null;
+  assistantReferee1?: string | null;
+  assistantReferee2?: string | null;
+  fourthOfficial?: string | null;
+  weather?: string | null;
+  attendance?: number | null;
+}) =>
+  (supabase as any).rpc("update_match_extra_details", {
+    _match_id: payload.matchId,
+    _match_week: payload.matchWeek || null,
+    _group_name: payload.groupName || null,
+    _knockout_round: payload.knockoutRound || null,
+    _timezone: payload.timezone || null,
+    _assistant_referee_1: payload.assistantReferee1 || null,
+    _assistant_referee_2: payload.assistantReferee2 || null,
+    _fourth_official: payload.fourthOfficial || null,
+    _weather: payload.weather || null,
+    _attendance: payload.attendance ?? null,
+  });
+
 export const addMatchEvent = async (payload: {
   eventId?: string | null;
   matchId: string;
@@ -585,6 +610,21 @@ export const addMatchEvent = async (payload: {
 
 export const deleteMatchEvent = async (eventId: string) =>
   (supabase as any).rpc("delete_match_event", { _event_id: eventId });
+
+export interface BatchMatchEventInput {
+  team_id: string | null;
+  event_type: string;
+  player_profile_id?: string | null;
+  jersey_number?: string | null;
+  event_minute?: number | null;
+  metadata?: Record<string, any>;
+}
+
+// Saves many events in ONE database transaction (each stored as its own row).
+// Atomic: if any event is invalid the whole batch is rejected, so there are no
+// partial or duplicate-on-retry saves.
+export const saveMatchEventsBatch = async (matchId: string, events: BatchMatchEventInput[]) =>
+  (supabase as any).rpc("save_match_events_batch", { _match_id: matchId, _events: events });
 
 export const createMatchComment = async (matchId: string, userId: string, body: string) => {
   if (containsProfanity(body)) {
@@ -750,19 +790,19 @@ export const fetchClubTeamPageData = async (clubTeamId: string): Promise<ClubTea
           .eq("team_id", parentTeamId)
           .maybeSingle()
       : Promise.resolve({ data: null }),
-    clubTeam.league_id
+    // A daughter team's fixtures are identified purely by club_team_id
+    // membership (home OR away) — NOT by the team's stored league_id, which may
+    // be null or differ from the fixture's league. This guarantees a fixture
+    // between two daughter teams shows on BOTH profiles.
+    (supabase as any)
+      .from("league_match_details")
+      .select("*")
+      .or(`home_club_team_id.eq.${clubTeamId},away_club_team_id.eq.${clubTeamId}`)
+      .order("scheduled_at", { ascending: true }),
+    parentTeamId
       ? (supabase as any)
           .from("league_match_details")
           .select("*")
-          .eq("league_id", clubTeam.league_id)
-          .or(`home_club_team_id.eq.${clubTeamId},away_club_team_id.eq.${clubTeamId}`)
-          .order("scheduled_at", { ascending: true })
-      : Promise.resolve({ data: [] }),
-    clubTeam.league_id && parentTeamId
-      ? (supabase as any)
-          .from("league_match_details")
-          .select("*")
-          .eq("league_id", clubTeam.league_id)
           .or(`home_team_id.eq.${parentTeamId},away_team_id.eq.${parentTeamId}`)
           .order("scheduled_at", { ascending: true })
       : Promise.resolve({ data: [] }),

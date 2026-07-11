@@ -18,8 +18,11 @@ import {
   claimMatchAssist,
   createMatchFilmLink,
   createMatchComment,
+  deleteMatch,
   deleteMatchComment,
   deleteMatchEvent,
+  updateMatchDetails,
+  updateMatchExtraDetails,
   fetchMatchAdminContext,
   fetchMatchPageData,
   formatMatchDateTime,
@@ -49,6 +52,8 @@ import {
 } from "@/lib/referees";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { isFootyStatusSuperAdminEmail } from "@/lib/superAdmin";
+import MatchTimeline from "@/components/matches/MatchTimeline";
+import MatchEventAdmin from "@/components/matches/MatchEventAdmin";
 
 const initialResultForm = {
   status: "completed",
@@ -73,6 +78,7 @@ const MatchDetails = () => {
   const { toast } = useToast();
   const [match, setMatch] = useState<MatchFeedItem | null>(null);
   const [events, setEvents] = useState<MatchEventRecord[]>([]);
+  const [editingEvent, setEditingEvent] = useState<MatchEventRecord | null>(null);
   const [comments, setComments] = useState<MatchCommentRecord[]>([]);
   const [proCommentAuthors, setProCommentAuthors] = useState<Set<string>>(new Set());
   const [reports, setReports] = useState<MatchReportRecord[]>([]);
@@ -89,6 +95,15 @@ const MatchDetails = () => {
   const [eventForm, setEventForm] = useState(initialEventForm);
   const [savingResult, setSavingResult] = useState(false);
   const [savingEvent, setSavingEvent] = useState(false);
+  // Admin full-fixture edit + delete.
+  const [editFixtureForm, setEditFixtureForm] = useState({
+    scheduledAt: "", venue: "", venueAddress: "",
+    matchWeek: "", groupName: "", knockoutRound: "", timezone: "",
+    assistantReferee1: "", assistantReferee2: "", fourthOfficial: "", weather: "", attendance: "",
+  });
+  const [savingFixture, setSavingFixture] = useState(false);
+  const [showDeleteFixture, setShowDeleteFixture] = useState(false);
+  const [deletingFixture, setDeletingFixture] = useState(false);
   const [uploadingReport, setUploadingReport] = useState(false);
   const [filmLinkUrl, setFilmLinkUrl] = useState("");
   const [filmLinkLabel, setFilmLinkLabel] = useState("");
@@ -193,6 +208,21 @@ const MatchDetails = () => {
         awayScore: String(pageData.match?.away_score ?? 0),
         notes: pageData.match?.notes || "",
       }));
+      const m = pageData.match as any;
+      setEditFixtureForm({
+        scheduledAt: m?.scheduled_at ? new Date(m.scheduled_at).toISOString().slice(0, 16) : "",
+        venue: m?.venue || "",
+        venueAddress: m?.venue_address || "",
+        matchWeek: m?.match_week || "",
+        groupName: m?.group_name || "",
+        knockoutRound: m?.knockout_round || "",
+        timezone: m?.timezone || "",
+        assistantReferee1: m?.assistant_referee_1 || "",
+        assistantReferee2: m?.assistant_referee_2 || "",
+        fourthOfficial: m?.fourth_official || "",
+        weather: m?.weather || "",
+        attendance: m?.attendance != null ? String(m.attendance) : "",
+      });
     } else {
       setHomeRoster([]);
       setAwayRoster([]);
@@ -396,6 +426,63 @@ const MatchDetails = () => {
     setSavingResult(false);
   };
 
+  const handleSaveFixture = async () => {
+    if (!id || !match) return;
+    setSavingFixture(true);
+    const core = await updateMatchDetails({
+      matchId: id,
+      homeTeamId: match.home_team_id,
+      awayTeamId: match.away_team_id,
+      homeClubTeamId: (match as any).home_club_team_id || null,
+      awayClubTeamId: (match as any).away_club_team_id || null,
+      scheduledAt: editFixtureForm.scheduledAt ? new Date(editFixtureForm.scheduledAt).toISOString() : match.scheduled_at,
+      venue: editFixtureForm.venue || null,
+      venueAddress: editFixtureForm.venueAddress || null,
+      homeJerseyColor: (match as any).home_jersey_color || null,
+      awayJerseyColor: (match as any).away_jersey_color || null,
+      notes: resultForm.notes || null,
+      status: resultForm.status || null,
+    });
+    if (core.error) {
+      setSavingFixture(false);
+      toast({ title: "Could not save fixture", description: core.error.message, variant: "destructive" });
+      return;
+    }
+    const extra = await updateMatchExtraDetails({
+      matchId: id,
+      matchWeek: editFixtureForm.matchWeek || null,
+      groupName: editFixtureForm.groupName || null,
+      knockoutRound: editFixtureForm.knockoutRound || null,
+      timezone: editFixtureForm.timezone || null,
+      assistantReferee1: editFixtureForm.assistantReferee1 || null,
+      assistantReferee2: editFixtureForm.assistantReferee2 || null,
+      fourthOfficial: editFixtureForm.fourthOfficial || null,
+      weather: editFixtureForm.weather || null,
+      attendance: editFixtureForm.attendance ? Number(editFixtureForm.attendance) : null,
+    });
+    setSavingFixture(false);
+    if (extra.error) {
+      toast({ title: "Could not save extra details", description: extra.error.message, variant: "destructive" });
+      return;
+    }
+    toast({ title: "Fixture updated" });
+    await loadMatch();
+  };
+
+  const handleDeleteFixture = async () => {
+    if (!id || !match) return;
+    setDeletingFixture(true);
+    const { error } = await deleteMatch(id);
+    setDeletingFixture(false);
+    if (error) {
+      toast({ title: "Could not delete fixture", description: error.message, variant: "destructive" });
+      return;
+    }
+    setShowDeleteFixture(false);
+    toast({ title: "Fixture deleted", description: "It has been removed from all schedules." });
+    navigate(match.league_id ? `/league/${match.league_id}` : "/");
+  };
+
   const handleAddEvent = async () => {
     if (!id || !eventForm.teamId || !eventForm.eventType) return;
     setSavingEvent(true);
@@ -422,6 +509,10 @@ const MatchDetails = () => {
 
   const handleDeleteEvent = async (eventId: string) => {
     if (!canManageMatch) return;
+    if (!window.confirm("Delete this match event? This cannot be undone and will update the score and player stats.")) {
+      return;
+    }
+    if (editingEvent?.id === eventId) setEditingEvent(null);
     const { error } = await deleteMatchEvent(eventId);
     if (error) {
       toast({ title: "Could not remove event", description: error.message, variant: "destructive" });
@@ -755,6 +846,24 @@ const MatchDetails = () => {
           ) : null}
         </section>
 
+        <Dialog open={showDeleteFixture} onOpenChange={(open) => !open && setShowDeleteFixture(false)}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Delete fixture?</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">
+              Are you sure you want to permanently delete this fixture? This action cannot be undone. It will be removed
+              from both teams' schedules and everywhere else on Footy Status.
+            </p>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowDeleteFixture(false)} disabled={deletingFixture}>Cancel</Button>
+              <Button variant="destructive" onClick={handleDeleteFixture} disabled={deletingFixture}>
+                {deletingFixture ? "Deleting..." : "Delete Fixture"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         <Dialog open={showVerificationRequiredDialog} onOpenChange={setShowVerificationRequiredDialog}>
           <DialogContent className="max-w-md">
             <DialogHeader>
@@ -835,6 +944,76 @@ const MatchDetails = () => {
             </div>
             <Button className="w-full" onClick={handleSaveResult} disabled={savingResult}>
               {savingResult ? "Saving..." : "Save Match Result"}
+            </Button>
+          </section>
+        ) : null}
+
+        {canManageMatch ? (
+          <section className="space-y-3 rounded-xl border border-border bg-card p-4">
+            <h2 className="text-sm font-bold tracking-wide text-navy">EDIT FIXTURE</h2>
+            <div>
+              <Label>Date / Time</Label>
+              <Input type="datetime-local" value={editFixtureForm.scheduledAt} onChange={(e) => setEditFixtureForm((p) => ({ ...p, scheduledAt: e.target.value }))} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Venue</Label>
+                <Input value={editFixtureForm.venue} onChange={(e) => setEditFixtureForm((p) => ({ ...p, venue: e.target.value }))} />
+              </div>
+              <div>
+                <Label>Timezone</Label>
+                <Input value={editFixtureForm.timezone} onChange={(e) => setEditFixtureForm((p) => ({ ...p, timezone: e.target.value }))} placeholder="e.g. EST" />
+              </div>
+            </div>
+            <div>
+              <Label>Full Address</Label>
+              <Input value={editFixtureForm.venueAddress} onChange={(e) => setEditFixtureForm((p) => ({ ...p, venueAddress: e.target.value }))} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Match Week</Label>
+                <Input value={editFixtureForm.matchWeek} onChange={(e) => setEditFixtureForm((p) => ({ ...p, matchWeek: e.target.value }))} />
+              </div>
+              <div>
+                <Label>Group</Label>
+                <Input value={editFixtureForm.groupName} onChange={(e) => setEditFixtureForm((p) => ({ ...p, groupName: e.target.value }))} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Knockout Round</Label>
+                <Input value={editFixtureForm.knockoutRound} onChange={(e) => setEditFixtureForm((p) => ({ ...p, knockoutRound: e.target.value }))} />
+              </div>
+              <div>
+                <Label>Attendance</Label>
+                <Input inputMode="numeric" value={editFixtureForm.attendance} onChange={(e) => setEditFixtureForm((p) => ({ ...p, attendance: e.target.value }))} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Assistant Referee 1</Label>
+                <Input value={editFixtureForm.assistantReferee1} onChange={(e) => setEditFixtureForm((p) => ({ ...p, assistantReferee1: e.target.value }))} />
+              </div>
+              <div>
+                <Label>Assistant Referee 2</Label>
+                <Input value={editFixtureForm.assistantReferee2} onChange={(e) => setEditFixtureForm((p) => ({ ...p, assistantReferee2: e.target.value }))} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Fourth Official</Label>
+                <Input value={editFixtureForm.fourthOfficial} onChange={(e) => setEditFixtureForm((p) => ({ ...p, fourthOfficial: e.target.value }))} />
+              </div>
+              <div>
+                <Label>Weather</Label>
+                <Input value={editFixtureForm.weather} onChange={(e) => setEditFixtureForm((p) => ({ ...p, weather: e.target.value }))} />
+              </div>
+            </div>
+            <Button className="w-full" onClick={handleSaveFixture} disabled={savingFixture}>
+              {savingFixture ? "Saving..." : "Save Fixture Details"}
+            </Button>
+            <Button variant="destructive" className="w-full" onClick={() => setShowDeleteFixture(true)}>
+              Delete Fixture
             </Button>
           </section>
         ) : null}
@@ -940,158 +1119,45 @@ const MatchDetails = () => {
         ) : null}
 
         {canManageMatch ? (
-          <section className="space-y-3 rounded-xl border border-border bg-card p-4">
-            <h2 className="text-sm font-bold tracking-wide text-navy">MATCH EVENTS</h2>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label>Team</Label>
-                <select
-                  value={eventForm.teamId}
-                  onChange={(e) => setEventForm((prev) => ({ ...prev, teamId: e.target.value, playerProfileId: "" }))}
-                  className="mt-1 flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                >
-                  <option value={match.home_team_id}>{match.home_team_name}</option>
-                  <option value={match.away_team_id}>{match.away_team_name}</option>
-                </select>
-              </div>
-              <div>
-                <Label>Event Type</Label>
-                <select
-                  value={eventForm.eventType}
-                  onChange={(e) => setEventForm((prev) => ({ ...prev, eventType: e.target.value }))}
-                  className="mt-1 flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                >
-                  <option value="goal">Goal</option>
-                  <option value="assist">Assist</option>
-                  <option value="penalty_awarded">Penalty Awarded</option>
-                  <option value="yellow_card">Yellow Card</option>
-                  <option value="red_card">Red Card</option>
-                  <option value="sub_in">Sub In</option>
-                  <option value="sub_out">Sub Out</option>
-                  <option value="substitution">Substitution</option>
-                  <option value="penalty_scored">Penalty Scored</option>
-                  <option value="penalty_missed">Penalty Missed</option>
-                  <option value="penalty_saved">Penalty Saved</option>
-                  <option value="save">Save</option>
-                  <option value="injury">Injury</option>
-                  <option value="halftime">Halftime</option>
-                  <option value="fulltime">Fulltime</option>
-                  <option value="minutes_played">Minutes Played</option>
-                </select>
-              </div>
-              {eventForm.eventType === "minutes_played" ? (
-                <div>
-                  <Label>Playing Time Type</Label>
-                  <select
-                    value={eventForm.started}
-                    onChange={(e) => setEventForm((prev) => ({ ...prev, started: e.target.value }))}
-                    className="mt-1 flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  >
-                    <option value="true">Started match</option>
-                    <option value="false">Substitute appearance</option>
-                  </select>
-                </div>
-              ) : null}
-              <div className="col-span-2">
-                <Label>Player</Label>
-                <select
-                  value={eventForm.playerProfileId}
-                  onChange={(e) => {
-                    const selected = combinedRoster.find((player) => player.player_profile_id === e.target.value);
-                    setEventForm((prev) => ({
-                      ...prev,
-                      playerProfileId: e.target.value,
-                      jerseyNumber: selected?.player_jersey_number || prev.jerseyNumber,
-                      teamId: selected?.team_id || prev.teamId,
-                    }));
-                  }}
-                  className="mt-1 flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                >
-                  <option value="">Choose rostered player</option>
-                  {selectedTeamRoster.map((player) => (
-                    <option key={player.player_profile_id} value={player.player_profile_id}>
-                      {player.player_name} {player.player_jersey_number ? `#${player.player_jersey_number}` : ""}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <Label>Jersey #</Label>
-                <Input value={eventForm.jerseyNumber} onChange={(e) => setEventForm((prev) => ({ ...prev, jerseyNumber: e.target.value }))} placeholder="10" />
-              </div>
-              <div>
-                <Label>Minute</Label>
-                <Input value={eventForm.minute} onChange={(e) => setEventForm((prev) => ({ ...prev, minute: e.target.value }))} placeholder="67" inputMode="numeric" />
-              </div>
-            </div>
-            <Button className="w-full" onClick={handleAddEvent} disabled={savingEvent}>
-              {savingEvent ? "Saving..." : "Save Event"}
-            </Button>
-          </section>
+          <MatchEventAdmin
+            matchId={id || ""}
+            homeTeamId={match.home_team_id}
+            awayTeamId={match.away_team_id}
+            homeTeamName={match.home_team_name}
+            awayTeamName={match.away_team_name}
+            homeRoster={homeRoster}
+            awayRoster={awayRoster}
+            editingEvent={editingEvent}
+            onClearEditing={() => setEditingEvent(null)}
+            onSaved={loadMatch}
+          />
         ) : null}
 
-        <section className="space-y-3">
-          <h2 className="text-sm font-bold tracking-wide text-navy">EVENT TIMELINE</h2>
-          {events.length ? (
-            <div className="space-y-3">
-              {events
-                .filter((event) => event.status === "approved")
-                .map((event) => {
-                  const isHomeTeam = event.team_id === match.home_team_id;
-                  const attachedAssists = groupedAssistsByGoalId.get(event.id) || [];
-                  const canClaimAssist =
-                    event.event_type === "goal" &&
-                    adminContext.playerProfileId &&
-                    adminContext.linkedTeamId === event.team_id &&
-                    event.player_profile_id !== adminContext.playerProfileId &&
-                    !pendingClaimsByGoalId.get(event.id)?.some((claim) => claim.claimant_player_profile_id === adminContext.playerProfileId) &&
-                    !attachedAssists.some((assist) => assist.player_profile_id === adminContext.playerProfileId);
-
-                  return (
-                    <div key={event.id} className="rounded-xl border border-border bg-card p-4">
-                      <div className="flex items-start gap-4">
-                        <div className="min-w-[58px] rounded-lg bg-navy/10 px-2 py-3 text-center">
-                          <p className="text-[10px] font-bold tracking-[0.18em] text-navy/70">MIN</p>
-                          <p className="mt-1 text-2xl font-extrabold leading-none text-navy">{event.event_minute != null ? event.event_minute : "--"}</p>
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <p className="font-semibold text-foreground">
-                                {event.player_name || `#${event.jersey_number || "--"}`} • {event.event_type.replaceAll("_", " ")}
-                              </p>
-                              <p className="text-sm text-muted-foreground mt-1">
-                                {(isHomeTeam ? match.home_team_name : match.away_team_name) || "Team"}
-                              </p>
-                              {attachedAssists.length ? (
-                                <p className="text-sm text-muted-foreground mt-2">
-                                  Assist: {attachedAssists.map((assist) => assist.player_name || `#${assist.jersey_number || "--"}`).join(", ")}
-                                </p>
-                              ) : null}
-                            </div>
-                            <div className="flex items-center gap-2">
-                              {canClaimAssist ? (
-                                <Button size="sm" variant="outline" onClick={() => handleClaimAssist(event.id)}>
-                                  Claim Assist
-                                </Button>
-                              ) : null}
-                              {canManageMatch ? (
-                                <Button size="icon" variant="ghost" onClick={() => handleDeleteEvent(event.id)} aria-label="Delete event">
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                              ) : null}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-            </div>
-          ) : (
-            <div className="rounded-xl border border-border bg-card p-6 text-center text-muted-foreground">No official events yet.</div>
-          )}
-        </section>
+        <MatchTimeline
+          events={events}
+          homeTeamId={match.home_team_id}
+          awayTeamId={match.away_team_id}
+          homeTeamName={match.home_team_name}
+          awayTeamName={match.away_team_name}
+          groupedAssistsByGoalId={groupedAssistsByGoalId}
+          canManageMatch={canManageMatch}
+          onDeleteEvent={handleDeleteEvent}
+          onEditEvent={canManageMatch ? setEditingEvent : undefined}
+          onClaimAssist={handleClaimAssist}
+          canClaimAssist={(event) => {
+            const attachedAssists = groupedAssistsByGoalId.get(event.id) || [];
+            return Boolean(
+              event.event_type === "goal" &&
+                adminContext.playerProfileId &&
+                adminContext.linkedTeamId === event.team_id &&
+                event.player_profile_id !== adminContext.playerProfileId &&
+                !pendingClaimsByGoalId
+                  .get(event.id)
+                  ?.some((claim) => claim.claimant_player_profile_id === adminContext.playerProfileId) &&
+                !attachedAssists.some((assist) => assist.player_profile_id === adminContext.playerProfileId),
+            );
+          }}
+        />
 
         {(assistClaims.length || canManageMatch) ? (
           <section className="space-y-3">

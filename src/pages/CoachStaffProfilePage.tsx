@@ -7,6 +7,12 @@ import { supabase } from "@/integrations/supabase/client";
 import { CoachStaffProfile, CoachStaffTeamLink, fetchCoachStaffTeamLinksForUser, formatRoleDisplayLabel, groupCoachStaffTeamLinksByMotherTeam } from "@/lib/coachStaffTeams";
 import InlineProfileAdminControls from "@/components/admin/InlineProfileAdminControls";
 import ProfileHeader from "@/components/ProfileHeader";
+import {
+  ParentPlayerLink,
+  ParentProfileDetails,
+  fetchParentLinksForParentUser,
+  fetchParentProfileForUser,
+} from "@/lib/parentLinks";
 
 interface ContactItem {
   id: string;
@@ -39,13 +45,15 @@ const CoachStaffProfilePage = () => {
   const [teams, setTeams] = useState<CoachStaffTeamLink[]>([]);
   const [contacts, setContacts] = useState<ContactItem[]>([]);
   const [staffRecord, setStaffRecord] = useState<StaffRecordDetails | null>(null);
+  const [parentRecord, setParentRecord] = useState<ParentProfileDetails | null>(null);
+  const [parentChildLinks, setParentChildLinks] = useState<ParentPlayerLink[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const loadProfile = async () => {
       if (!userId) return;
 
-      const [{ data }, linkedTeams, contactRes, staffRes] = await Promise.all([
+      const [{ data }, linkedTeams, contactRes, staffRes, parentRes, linkedChildren] = await Promise.all([
         (supabase as any)
           .from("profiles")
           .select("user_id, full_name, avatar_url, username, account_category, account_role, coaching_role_type, teams_currently_coaching, past_coaching_experience, coaching_licenses, coaching_accolades, coaching_location, scout_role_title, scout_organization, scouting_licenses, scouting_experience, scouting_regions, scouting_age_groups, scouting_positions, scouting_accolades, bio")
@@ -60,12 +68,16 @@ const CoachStaffProfilePage = () => {
           .select("country, city, years_experience")
           .eq("user_id", userId)
           .maybeSingle(),
+        fetchParentProfileForUser(userId).catch(() => ({ data: null, error: null })),
+        fetchParentLinksForParentUser(userId).catch(() => []),
       ]);
 
       setProfile((data || null) as CoachStaffProfile | null);
       setTeams(linkedTeams);
       setContacts((contactRes?.data || []) as ContactItem[]);
       setStaffRecord((staffRes?.data || null) as StaffRecordDetails | null);
+      setParentRecord(parentRes?.data || null);
+      setParentChildLinks(linkedChildren || []);
       setLoading(false);
     };
 
@@ -151,6 +163,42 @@ const CoachStaffProfilePage = () => {
           <section className="mb-6">
             <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-lg font-semibold text-navy mb-3">{isParent ? "Parent / Guardian Details" : isScout ? "Scout Details" : isAcademyStaff ? "Club Director / Team Staff Details" : "Coach / Staff Details"}</h2><InlineProfileAdminControls targetUserId={profile.user_id} targetName={profile.full_name} section="profile" label="Edit profile information" /></div>
             <div className="bg-card border border-border rounded-xl">
+              {isParent ? (
+                <>
+                  <div className="flex items-center gap-3 p-4">
+                    <Users className="h-5 w-5 text-muted-foreground" />
+                    <div><p className="text-sm text-muted-foreground">Parent / Guardian</p><p className="font-medium">{parentRecord?.full_name || profile.full_name || "Parent / Guardian"}</p></div>
+                  </div>
+                  {(parentRecord?.relationship_to_player || parentRecord?.child_full_name || parentRecord?.child_where_plays || parentRecord?.parent_notes) ? (
+                    <>
+                      {parentRecord?.relationship_to_player ? (
+                        <div className="flex items-center gap-3 p-4">
+                          <User className="h-5 w-5 text-muted-foreground" />
+                          <div><p className="text-sm text-muted-foreground">Relationship</p><p className="font-medium capitalize">{parentRecord.relationship_to_player.replaceAll("_", " ")}</p></div>
+                        </div>
+                      ) : null}
+                      {parentRecord?.child_full_name ? (
+                        <div className="flex items-center gap-3 p-4">
+                          <Users className="h-5 w-5 text-muted-foreground" />
+                          <div><p className="text-sm text-muted-foreground">Child / Player</p><p className="font-medium">{parentRecord.child_full_name}</p></div>
+                        </div>
+                      ) : null}
+                      {parentRecord?.child_where_plays ? (
+                        <div className="flex items-center gap-3 p-4">
+                          <Trophy className="h-5 w-5 text-muted-foreground" />
+                          <div><p className="text-sm text-muted-foreground">Child Plays For</p><p className="font-medium">{parentRecord.child_where_plays}</p></div>
+                        </div>
+                      ) : null}
+                      {parentRecord?.parent_notes ? (
+                        <div className="flex items-center gap-3 p-4">
+                          <Star className="h-5 w-5 text-muted-foreground" />
+                          <div><p className="text-sm text-muted-foreground">Notes</p><p className="font-medium">{parentRecord.parent_notes}</p></div>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : null}
+                </>
+              ) : null}
               {isAcademyStaff && profile.teams_currently_coaching ? (
                 <div className="flex items-center gap-3 p-4">
                   <Users className="h-5 w-5 text-muted-foreground" />
@@ -237,12 +285,62 @@ const CoachStaffProfilePage = () => {
               ) : null}
               <div className="flex items-center gap-3 p-4">
                 <Briefcase className="h-5 w-5 text-muted-foreground" />
-                <div><p className="text-sm text-muted-foreground">Role</p><p className="font-medium">{formatRoleDisplayLabel(isScout ? profile.scout_role_title : profile.coaching_role_type || profile.account_role, isScout ? "Scout" : isAcademyStaff ? "Team Staff" : "Coaching Staff")}</p></div>
+                <div><p className="text-sm text-muted-foreground">Role</p><p className="font-medium">{formatRoleDisplayLabel(isParent ? "parent" : isScout ? profile.scout_role_title : profile.coaching_role_type || profile.account_role, isParent ? "Parent" : isScout ? "Scout" : isAcademyStaff ? "Team Staff" : "Coaching Staff")}</p></div>
               </div>
             </div>
           </section>
 
-          {coachStaffTeamGroups.length ? (
+          {isParent ? (
+            <section className="mb-6">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <h2 className="text-lg font-semibold text-navy">Linked Children</h2>
+                <InlineProfileAdminControls targetUserId={profile.user_id} targetName={profile.full_name} section="parents" label="Manage parent links" />
+              </div>
+              <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+                {parentChildLinks.length ? (
+                  parentChildLinks.map((link) => {
+                    const childAvatar = link.player?.avatar_url || null;
+                    const childName = link.player?.full_name || parentRecord?.child_full_name || "Player";
+                    const childSubtitle = [
+                      link.player?.username ? `@${link.player.username}` : null,
+                      link.player?.team_name || link.player?.team || null,
+                      link.player?.position || null,
+                    ].filter(Boolean).join(" - ");
+
+                    return (
+                      <button
+                        key={link.id}
+                        type="button"
+                        onClick={() => navigate(`/player/${link.player?.id || link.player_profile_id}`)}
+                        className="w-full rounded-lg border border-border p-3 text-left hover:border-accent hover:shadow-sm transition-all"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted">
+                            {childAvatar ? (
+                              <img src={childAvatar} alt={childName} className="h-full w-full object-cover" />
+                            ) : (
+                              <User className="h-6 w-6 text-muted-foreground" />
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="truncate font-medium text-foreground">{childName}</p>
+                            {childSubtitle ? <p className="truncate text-sm text-muted-foreground">{childSubtitle}</p> : null}
+                            <p className="text-xs capitalize text-muted-foreground">
+                              {[link.relationship_to_player || parentRecord?.relationship_to_player || "Parent / Guardian", link.status].filter(Boolean).join(" - ")}
+                            </p>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })
+                ) : (
+                  <p className="text-sm text-muted-foreground">No linked children are visible yet.</p>
+                )}
+              </div>
+            </section>
+          ) : null}
+
+          {!isParent && coachStaffTeamGroups.length ? (
             <section className="mb-6">
               <div className="mb-3 flex items-center justify-between gap-2">
                 <h2 className="text-lg font-semibold text-navy">Current Teams</h2>

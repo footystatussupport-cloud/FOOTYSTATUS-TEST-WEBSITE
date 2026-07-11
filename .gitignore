@@ -28,3 +28,4 @@ dist-ssr
 ._*
 *.zip
 vite-*.log
+supabase/.temp/

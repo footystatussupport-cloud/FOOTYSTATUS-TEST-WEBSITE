@@ -1,4 +1,8 @@
 import { supabase } from "@/integrations/supabase/client";
+import { containsProfanityInFields } from "@/lib/profanityFilter";
+
+export const CLUB_NEWS_PROFANITY_MESSAGE =
+  "Your post contains language that isn't allowed. Please remove the inappropriate words and try again.";
 
 export const CLUB_NEWS_MAX_IMAGES = 5;
 export const CLUB_NEWS_MAX_VIDEOS = 3;
@@ -320,6 +324,9 @@ export const fetchNearbyClubNews = async (coordinates: ViewerCoordinates, limit 
 };
 
 export const createClubNewsPost = async (payload: ClubNewsComposerPayload) => {
+  if (containsProfanityInFields([payload.title, payload.body])) {
+    throw new Error(CLUB_NEWS_PROFANITY_MESSAGE);
+  }
   const { data, error } = await (supabase as any)
     .from("club_news_posts")
     .insert({
@@ -343,6 +350,9 @@ export const updateClubNewsPost = async (
   postId: string,
   payload: Pick<ClubNewsComposerPayload, "title" | "body" | "latitude" | "longitude" | "city">
 ) => {
+  if (containsProfanityInFields([payload.title, payload.body])) {
+    throw new Error(CLUB_NEWS_PROFANITY_MESSAGE);
+  }
   const { error } = await (supabase as any)
     .from("club_news_posts")
     .update({

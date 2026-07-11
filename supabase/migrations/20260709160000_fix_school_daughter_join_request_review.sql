@@ -51,7 +51,7 @@ as $$
     r.access_code_last4,
     r.requested_at,
     coalesce(pp.full_name, prof.full_name, 'Unknown Player') as player_name,
-    coalesce(pp.username, prof.username) as player_username,
+    prof.username as player_username,
     coalesce(pp.profile_image_url, prof.avatar_url) as player_avatar_url,
     pp.position as player_position,
     ct.age_group as club_team_age_group,
