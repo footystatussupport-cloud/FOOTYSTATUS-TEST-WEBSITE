@@ -164,7 +164,7 @@ const PlayerProfile = () => {
         supabase.from("players").select("*").eq("id", id).maybeSingle(),
         (supabase as any)
           .from("current_player_statistics")
-          .select("team_id, team_name, team_logo_url, season, goals, assists, appearances, substitute_ins, starts, minutes_played, clean_sheets, saves, tackles, interceptions, passes, chances_created, yellow_cards, red_cards, player_rating")
+          .select("team_id, team_name, team_logo_url, league_id, league_name, season, goals, assists, appearances, substitute_ins, starts, minutes_played, clean_sheets, chances_created, yellow_cards, red_cards")
           .eq("player_profile_id", id)
           .order("team_name", { ascending: true }),
         (supabase as any)
@@ -271,7 +271,7 @@ const PlayerProfile = () => {
           const [{ data: statRows }, { data: historyRows }] = await Promise.all([
             (supabase as any)
               .from("current_player_statistics")
-              .select("team_id, team_name, team_logo_url, season, goals, assists, appearances, substitute_ins, starts, minutes_played, clean_sheets, saves, tackles, interceptions, passes, chances_created, yellow_cards, red_cards, player_rating")
+              .select("team_id, team_name, team_logo_url, league_id, league_name, season, goals, assists, appearances, substitute_ins, starts, minutes_played, clean_sheets, chances_created, yellow_cards, red_cards")
               .eq("player_id", playerRecord.id)
               .order("team_name", { ascending: true }),
             (supabase as any)
@@ -567,7 +567,7 @@ const PlayerProfile = () => {
         {stats.length > 0 ? (
           <div className="mb-6 space-y-4">
             {stats.map((teamStats, index) => (
-              <CurrentStatsSection key={teamStats.team_id || `${teamStats.team_name || "team"}-${index}`} stats={teamStats} headingLevel="h2" action={<InlineProfileAdminControls targetUserId={player.user_id} targetName={player.name} section="stats" label="Edit player statistics" onChanged={() => setReloadToken((value) => value + 1)} />} />
+              <CurrentStatsSection key={teamStats.team_id || `${teamStats.team_name || "team"}-${index}`} stats={teamStats} headingLevel="h2" action={<InlineProfileAdminControls targetUserId={player.user_id} targetName={player.name} section="stats" label="Edit player statistics" statsContext={teamStats} onChanged={() => setReloadToken((value) => value + 1)} />} />
             ))}
           </div>
         ) : null}

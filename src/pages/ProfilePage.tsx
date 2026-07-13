@@ -2149,7 +2149,7 @@ const ProfilePage = () => {
 
     const { data: statRows } = await (supabase as any)
       .from("current_player_statistics")
-      .select("team_id, team_name, team_logo_url, season, goals, assists, appearances, substitute_ins, starts, minutes_played, clean_sheets, saves, tackles, interceptions, passes, chances_created, yellow_cards, red_cards, player_rating")
+      .select("team_id, team_name, team_logo_url, league_id, league_name, season, goals, assists, appearances, substitute_ins, starts, minutes_played, clean_sheets, chances_created, yellow_cards, red_cards")
       .eq("player_user_id", user.id)
       .order("team_name", { ascending: true });
 

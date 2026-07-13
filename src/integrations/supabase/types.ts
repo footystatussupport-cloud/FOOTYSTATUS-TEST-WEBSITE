@@ -437,38 +437,62 @@ export type Database = {
         Row: {
           appearances: number | null
           assists: number | null
+          chances_created: number
           clean_sheets: number | null
           created_at: string
           goals: number | null
           id: string
+          league_id: string | null
+          minutes_played: number
           mvp_matches: number | null
           player_id: string | null
           season: string
           starts: number | null
+          substitute_ins: number
+          team_id: string | null
+          updated_at: string
+          yellow_cards: number
+          red_cards: number
         }
         Insert: {
           appearances?: number | null
           assists?: number | null
+          chances_created?: number
           clean_sheets?: number | null
           created_at?: string
           goals?: number | null
           id?: string
+          league_id?: string | null
+          minutes_played?: number
           mvp_matches?: number | null
           player_id?: string | null
           season: string
           starts?: number | null
+          substitute_ins?: number
+          team_id?: string | null
+          updated_at?: string
+          yellow_cards?: number
+          red_cards?: number
         }
         Update: {
           appearances?: number | null
           assists?: number | null
+          chances_created?: number
           clean_sheets?: number | null
           created_at?: string
           goals?: number | null
           id?: string
+          league_id?: string | null
+          minutes_played?: number
           mvp_matches?: number | null
           player_id?: string | null
           season?: string
           starts?: number | null
+          substitute_ins?: number
+          team_id?: string | null
+          updated_at?: string
+          yellow_cards?: number
+          red_cards?: number
         }
         Relationships: [
           {

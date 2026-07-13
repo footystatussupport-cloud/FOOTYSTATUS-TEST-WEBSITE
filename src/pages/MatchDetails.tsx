@@ -54,6 +54,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { isFootyStatusSuperAdminEmail } from "@/lib/superAdmin";
 import MatchTimeline from "@/components/matches/MatchTimeline";
 import MatchEventAdmin from "@/components/matches/MatchEventAdmin";
+import MatchdayMinutes from "@/components/matches/MatchdayMinutes";
 
 const initialResultForm = {
   status: "completed",
@@ -1130,6 +1131,21 @@ const MatchDetails = () => {
             editingEvent={editingEvent}
             onClearEditing={() => setEditingEvent(null)}
             onSaved={loadMatch}
+          />
+        ) : null}
+
+        {canManageMatch ? (
+          <MatchdayMinutes
+            matchId={id || ""}
+            homeTeamId={match.home_team_id}
+            awayTeamId={match.away_team_id}
+            homeTeamName={match.home_team_name}
+            awayTeamName={match.away_team_name}
+            homeRoster={homeRoster}
+            awayRoster={awayRoster}
+            events={events}
+            durationMinutes={(match as any).duration_minutes}
+            onChanged={loadMatch}
           />
         ) : null}
 

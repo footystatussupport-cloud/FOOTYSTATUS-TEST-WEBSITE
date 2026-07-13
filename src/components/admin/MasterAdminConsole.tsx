@@ -104,7 +104,7 @@ const MasterAdminConsole = () => {
   const saveStats = async () => {
     if (!selected || !requireReason()) return;
     const { error } = await (supabase as any).rpc("admin_upsert_player_statistics", {
-      _target_user_id: selected.user_id, _season: season, _statistics: stats, _reason: reason,
+      _target_user_id: selected.user_id, _season: season, _statistics: stats, _team_id: null, _league_id: null, _reason: reason,
     });
     if (error) return toast({ title: "Stats update failed", description: error.message, variant: "destructive" });
     toast({ title: "Player statistics saved" });

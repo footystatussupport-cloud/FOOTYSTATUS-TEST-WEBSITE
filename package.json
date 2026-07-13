@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "test:subscriptions": "node tests/subscriptionRules.test.mjs",
     "test:protection": "node tests/protectedAccounts.test.mjs",
+    "test:minutes": "node tests/minutesPlayed.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

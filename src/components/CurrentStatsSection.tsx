@@ -5,6 +5,8 @@ export interface CurrentStats {
   team_id?: string | null;
   team_name?: string | null;
   team_logo_url?: string | null;
+  league_id?: string | null;
+  league_name?: string | null;
   season?: string | null;
   goals?: number | null;
   assists?: number | null;
@@ -13,14 +15,9 @@ export interface CurrentStats {
   starts?: number | null;
   minutes_played?: number | null;
   clean_sheets?: number | null;
-  saves?: number | null;
-  tackles?: number | null;
-  interceptions?: number | null;
-  passes?: number | null;
   chances_created?: number | null;
   yellow_cards?: number | null;
   red_cards?: number | null;
-  player_rating?: number | null;
 }
 
 interface CurrentStatsSectionProps {
@@ -49,6 +46,8 @@ const CardIcon = ({ color }: { color: "yellow" | "red" }) => (
 
 const CurrentStatsSection = ({ stats, headingLevel = "h3", action }: CurrentStatsSectionProps) => {
   const Heading = headingLevel;
+  const teamInitial = (stats?.team_name || "Team").trim().charAt(0).toUpperCase() || "T";
+  const teamMeta = stats?.league_name || stats?.season || null;
 
   return (
     <section>
@@ -56,11 +55,18 @@ const CurrentStatsSection = ({ stats, headingLevel = "h3", action }: CurrentStat
         <Heading className="text-lg font-semibold text-navy">Current Stats</Heading>
         <div className="flex items-center gap-2">
         {stats?.team_name || stats?.season ? (
-          <span className="inline-flex max-w-[12rem] items-center gap-2 rounded-full border border-red-200 bg-white px-3 py-1 text-xs font-semibold text-navy shadow-sm">
+          <span className="inline-flex max-w-[16rem] items-center gap-2 rounded-xl border border-red-200/80 bg-white px-2.5 py-1.5 text-xs font-semibold text-navy shadow-sm dark:border-red-500/30 dark:bg-[#170b13] dark:text-white dark:shadow-black/20">
             {stats?.team_logo_url ? (
-              <img src={stats.team_logo_url} alt={stats.team_name || "Team"} className="h-4 w-4 rounded-full object-cover" />
-            ) : null}
-            <span className="truncate">{stats.team_name || stats.season}</span>
+              <img src={stats.team_logo_url} alt={stats.team_name || "Team"} className="h-7 w-7 rounded-full border border-white/60 bg-white object-cover dark:border-red-300/30 dark:bg-muted" />
+            ) : (
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-red-600 to-navy text-[11px] font-bold text-white shadow-sm">
+                {teamInitial}
+              </span>
+            )}
+            <span className="min-w-0 leading-tight">
+              <span className="block truncate">{stats.team_name || "Team Stats"}</span>
+              {teamMeta ? <span className="block truncate text-[11px] font-medium text-muted-foreground dark:text-gray-300">{teamMeta}</span> : null}
+            </span>
           </span>
         ) : null}
         {action}
@@ -70,9 +76,9 @@ const CurrentStatsSection = ({ stats, headingLevel = "h3", action }: CurrentStat
       <div className="overflow-hidden rounded-xl border-2 border-navy/15 bg-card shadow-sm">
         <div className="h-1 bg-gradient-to-r from-red-600 via-white to-navy" />
         <div className="grid grid-cols-1 divide-y divide-border sm:grid-cols-2 sm:divide-x sm:divide-y-0">
-          <div className="bg-gradient-to-br from-white to-red-50/70 p-4">
+          <div className="bg-gradient-to-br from-white to-red-50/70 p-4 dark:from-[#5a0f1b] dark:via-[#6d1320] dark:to-[#8f1d2d]">
             <div className="mb-3 flex items-center gap-2">
-              <Target className="h-4 w-4 text-red-600" />
+              <Target className="h-4 w-4 text-red-600 dark:text-red-100" />
               <p className="text-sm font-semibold text-navy">Attacking</p>
             </div>
             <div className="space-y-2">
@@ -88,7 +94,8 @@ const CurrentStatsSection = ({ stats, headingLevel = "h3", action }: CurrentStat
               <p className="text-sm font-semibold text-navy">Playing Time</p>
             </div>
             <div className="space-y-2">
-              <StatLine label="Appearances / Substitute In" value={statValue(stats?.appearances)} />
+              <StatLine label="Appearances" value={statValue(stats?.appearances)} />
+              <StatLine label="Substitute Ins" value={statValue(stats?.substitute_ins)} />
               <StatLine label="Starts" value={statValue(stats?.starts)} />
               <StatLine label="Minutes Played" value={statValue(stats?.minutes_played)} />
             </div>
@@ -103,16 +110,12 @@ const CurrentStatsSection = ({ stats, headingLevel = "h3", action }: CurrentStat
             </div>
             <div className="space-y-2">
               <StatLine label="Clean Sheets" value={statValue(stats?.clean_sheets)} />
-              <StatLine label="Saves" value={statValue(stats?.saves)} />
-              <StatLine label="Tackles" value={statValue(stats?.tackles)} />
-              <StatLine label="Interceptions" value={statValue(stats?.interceptions)} />
-              <StatLine label="Passes" value={statValue(stats?.passes)} />
             </div>
           </div>
 
-          <div className="bg-gradient-to-br from-white to-red-50/70 p-4">
+          <div className="bg-gradient-to-br from-white to-red-50/70 p-4 dark:from-[#5a0f1b] dark:via-[#6d1320] dark:to-[#8f1d2d]">
             <div className="mb-3 flex items-center gap-2">
-              <Trophy className="h-4 w-4 text-red-600" />
+              <Trophy className="h-4 w-4 text-red-600 dark:text-red-100" />
               <p className="text-sm font-semibold text-navy">Discipline</p>
             </div>
             <div className="space-y-2">
@@ -130,7 +133,6 @@ const CurrentStatsSection = ({ stats, headingLevel = "h3", action }: CurrentStat
                 </span>
                 <span className="text-lg font-semibold text-foreground tabular-nums">{statValue(stats?.red_cards)}</span>
               </div>
-              <StatLine label="Player Rating" value={statValue(stats?.player_rating)} />
             </div>
           </div>
         </div>

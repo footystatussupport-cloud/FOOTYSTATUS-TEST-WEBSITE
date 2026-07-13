@@ -20,6 +20,24 @@ type Props = {
   targetName?: string | null;
   section?: AdminEditSection;
   label?: string;
+  statsContext?: {
+    team_id?: string | null;
+    team_name?: string | null;
+    team_logo_url?: string | null;
+    league_id?: string | null;
+    league_name?: string | null;
+    season?: string | null;
+    appearances?: number | null;
+    starts?: number | null;
+    substitute_ins?: number | null;
+    minutes_played?: number | null;
+    goals?: number | null;
+    assists?: number | null;
+    clean_sheets?: number | null;
+    chances_created?: number | null;
+    yellow_cards?: number | null;
+    red_cards?: number | null;
+  } | null;
   onChanged?: () => void;
 };
 
@@ -30,35 +48,27 @@ const text = (value: unknown) => value == null ? "" : String(value);
 type PlayerStatsState = {
   appearances: number;
   starts: number;
+  substitute_ins: number;
   minutes_played: number;
   goals: number;
   assists: number;
   clean_sheets: number;
-  saves: number;
-  tackles: number;
-  interceptions: number;
-  passes: number;
   chances_created: number;
   yellow_cards: number;
   red_cards: number;
-  player_rating: number;
 };
 
 const DEFAULT_PLAYER_STATS: PlayerStatsState = {
   appearances: 0,
   starts: 0,
+  substitute_ins: 0,
   minutes_played: 0,
   goals: 0,
   assists: 0,
   clean_sheets: 0,
-  saves: 0,
-  tackles: 0,
-  interceptions: 0,
-  passes: 0,
   chances_created: 0,
   yellow_cards: 0,
   red_cards: 0,
-  player_rating: 0,
 };
 
 const toNumber = (value: unknown) => {
@@ -123,10 +133,11 @@ const Field = ({ label, value, onChange, type = "text", placeholder }: { label: 
   </div>
 );
 
-const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, onChanged }: Props) => {
+const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, statsContext, onChanged }: Props) => {
   const { user } = useAuth();
   const { toast } = useToast();
   const isOfficial = isFootyStatusSuperAdminEmail(user?.email);
+  const isProtectedSelfTarget = Boolean(isOfficial && user?.id && targetUserId === user.id);
   const [open, setOpen] = useState(false);
   const [bundle, setBundle] = useState<Record<string, any> | null>(null);
   const [form, setForm] = useState<FormState>({});
@@ -158,6 +169,7 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
   const accountRole = String(bundle?.profile?.account_role || bundle?.profile?.account_type || bundle?.profile?.role || "").toLowerCase();
   const isRefereeAccount = accountKind === "referee";
   const isScoutAccount = accountKind === "scout";
+  const statsContextTitle = [statsContext?.team_name, statsContext?.league_name || statsContext?.season].filter(Boolean).join(" · ");
 
   const hydrateForm = (data: Record<string, any>) => {
     const profile = data.profile || {};
@@ -217,24 +229,20 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
     });
     if (profile.account_role === "parent") setParentUserId(profile.user_id || targetUserId || "");
     if (data.player_profile) setPlayerUserId(profile.user_id || targetUserId || "");
-    const firstStats = data.statistics?.[0];
+    const firstStats = statsContext || data.statistics?.[0];
     if (firstStats) {
       setSeason(text(firstStats.season || new Date().getFullYear()));
       setStats({
         appearances: toNumber(firstStats.appearances),
         starts: toNumber(firstStats.starts),
+        substitute_ins: toNumber(firstStats.substitute_ins),
         minutes_played: toNumber(firstStats.minutes_played),
         goals: toNumber(firstStats.goals),
         assists: toNumber(firstStats.assists),
         clean_sheets: toNumber(firstStats.clean_sheets),
-        saves: toNumber(firstStats.saves),
-        tackles: toNumber(firstStats.tackles),
-        interceptions: toNumber(firstStats.interceptions),
-        passes: toNumber(firstStats.passes),
         chances_created: toNumber(firstStats.chances_created),
         yellow_cards: toNumber(firstStats.yellow_cards),
         red_cards: toNumber(firstStats.red_cards),
-        player_rating: toNumber(firstStats.player_rating),
       });
     } else {
       setStats(DEFAULT_PLAYER_STATS);
@@ -242,7 +250,7 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
   };
 
   const load = async () => {
-    if (!targetUserId || !isOfficial) return;
+    if (!targetUserId || !isOfficial || isProtectedSelfTarget) return;
     setLoading(true);
     const permission = await ensureFootyStatusAdminSession();
     if (!permission.isAdmin) {
@@ -257,12 +265,22 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
       return;
     }
     const next = data || {};
+    if (!next.profile?.user_id) {
+      toast({
+        title: "This account could not be edited",
+        description: "The target account no longer exists or is protected. Refresh Explore and open the current profile again.",
+        variant: "destructive",
+      });
+      setBundle(null);
+      setOpen(false);
+      return;
+    }
     setBundle(next);
     hydrateForm(next);
   };
 
   useEffect(() => { setBundle(null); setOpen(false); }, [targetUserId]);
-  if (!isOfficial || !targetUserId) return null;
+  if (!isOfficial || !targetUserId || isProtectedSelfTarget) return null;
 
   const requireReason = () => {
     if (reason.trim().length >= 3) return true;
@@ -395,10 +413,18 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
     );
     const saved = await rpc(
       "admin_upsert_player_statistics",
-      { _target_user_id: targetUserId, _season: season, _statistics: payload, _reason: optionalReason() },
+      {
+        _target_user_id: targetUserId,
+        _season: season,
+        _statistics: payload,
+        _team_id: statsContext?.team_id || null,
+        _league_id: statsContext?.league_id || null,
+        _reason: optionalReason(),
+      },
       "Statistics saved"
     );
     if (saved === false) return;
+    setOpen(false);
   };
 
   const saveProStatus = async (plan: "free" | "pro_annual" | "pro_lifetime" = proPlan) => {
@@ -581,22 +607,26 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
 
               {effectiveSection === "stats" ? accountKind === "player" ? (
                 <div className="grid gap-4 sm:grid-cols-2">
+                  {statsContextTitle ? (
+                    <div className="sm:col-span-2 rounded-xl border border-border bg-muted/50 p-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Editing Current Stats For</p>
+                      <p className="mt-1 text-sm font-semibold text-foreground">{statsContextTitle}</p>
+                    </div>
+                  ) : null}
                   <Field label="Season" value={season} onChange={setSeason} />
                   {([
                     ["goals", "Goals"],
                     ["assists", "Assists"],
                     ["appearances", "Appearances"],
                     ["starts", "Starts"],
-                    ["minutes_played", "Minutes Played"],
+                    ["substitute_ins", "Substitute Ins"],
+                    // Minutes Played is auto-calculated from the match timeline
+                    // (lineup, subs, red cards, injuries, duration) and is never
+                    // a manual input. See the auto-minutes migration.
                     ["clean_sheets", "Clean Sheets"],
-                    ["saves", "Saves"],
-                    ["tackles", "Tackles"],
-                    ["interceptions", "Interceptions"],
-                    ["passes", "Passes"],
                     ["chances_created", "Chances Created"],
                     ["yellow_cards", "Yellow Cards"],
                     ["red_cards", "Red Cards"],
-                    ["player_rating", "Player Rating"],
                   ] as Array<[keyof PlayerStatsState, string]>).map(([key, statLabel]) => (
                     <Field
                       key={key}
