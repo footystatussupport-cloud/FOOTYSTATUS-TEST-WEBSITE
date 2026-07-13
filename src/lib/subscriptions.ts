@@ -11,6 +11,8 @@ import {
   createUpgradePatch,
   getDaysRemaining,
   getIsPro,
+  isPlayerAccount,
+  isProEligible,
   shouldShowAds,
 } from "@/lib/subscriptionRules";
 
@@ -37,6 +39,8 @@ export {
   canViewAnalytics,
   getDaysRemaining,
   getIsPro,
+  isPlayerAccount,
+  isProEligible,
   shouldShowAds,
 };
 

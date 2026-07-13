@@ -2149,7 +2149,7 @@ const ProfilePage = () => {
 
     const { data: statRows } = await (supabase as any)
       .from("current_player_statistics")
-      .select("team_id, team_name, team_logo_url, season, goals, assists, appearances, substitute_ins, starts, clean_sheets, yellow_cards, red_cards")
+      .select("team_id, team_name, team_logo_url, season, goals, assists, appearances, substitute_ins, starts, minutes_played, clean_sheets, saves, tackles, interceptions, passes, chances_created, yellow_cards, red_cards, player_rating")
       .eq("player_user_id", user.id)
       .order("team_name", { ascending: true });
 
@@ -7197,7 +7197,7 @@ const ProfilePage = () => {
             <Button variant="outline" size="sm" className="gap-2" onClick={() => navigate("/analytics")}>
               <Eye className="h-4 w-4" /> Analytics
             </Button>
-            {!isActivePro ? (
+            {!isActivePro && isPlayerAccount ? (
               <Button size="sm" className="gap-2" onClick={() => navigate("/pro")}>
                 <Crown className="h-4 w-4" /> Upgrade
               </Button>
@@ -7211,9 +7211,11 @@ const ProfilePage = () => {
                 <Lock className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
                 <p className="font-medium">Clip limit reached</p>
                 <p className="text-sm text-muted-foreground mt-1">{FREE_CLIP_COUNT_ERROR}</p>
-                <Button className="mt-3 gap-2" size="sm" onClick={() => navigate("/pro")}>
-                  <Crown className="h-4 w-4" /> Upgrade to Pro
-                </Button>
+                {isPlayerAccount ? (
+                  <Button className="mt-3 gap-2" size="sm" onClick={() => navigate("/pro")}>
+                    <Crown className="h-4 w-4" /> Upgrade to Pro
+                  </Button>
+                ) : null}
               </div>
             ) : (
               <div className="space-y-3">
@@ -8636,3 +8638,4 @@ const ProfilePage = () => {
 };
 
 export default ProfilePage;
+

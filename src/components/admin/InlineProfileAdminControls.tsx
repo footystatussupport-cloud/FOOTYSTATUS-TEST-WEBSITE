@@ -26,6 +26,96 @@ type Props = {
 type FormState = Record<string, string>;
 
 const text = (value: unknown) => value == null ? "" : String(value);
+
+type PlayerStatsState = {
+  appearances: number;
+  starts: number;
+  minutes_played: number;
+  goals: number;
+  assists: number;
+  clean_sheets: number;
+  saves: number;
+  tackles: number;
+  interceptions: number;
+  passes: number;
+  chances_created: number;
+  yellow_cards: number;
+  red_cards: number;
+  player_rating: number;
+};
+
+const DEFAULT_PLAYER_STATS: PlayerStatsState = {
+  appearances: 0,
+  starts: 0,
+  minutes_played: 0,
+  goals: 0,
+  assists: 0,
+  clean_sheets: 0,
+  saves: 0,
+  tackles: 0,
+  interceptions: 0,
+  passes: 0,
+  chances_created: 0,
+  yellow_cards: 0,
+  red_cards: 0,
+  player_rating: 0,
+};
+
+const toNumber = (value: unknown) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const normalizeAdminPlan = (value: unknown): "free" | "pro_annual" | "pro_lifetime" => {
+  const plan = String(value || "").toLowerCase().trim().replace(/-/g, "_");
+  if (["pro_annual", "annual", "year", "yearly"].includes(plan)) return "pro_annual";
+  if (["pro_lifetime", "lifetime", "one_time", "onetime", "one_time_pro"].includes(plan)) return "pro_lifetime";
+  return "free";
+};
+
+// The single source of truth for which edit form an account gets. Driven by the
+// account's ROLE (not by which profile-record rows happen to exist), so a Parent
+// Team / School Team — whose account_category is "team_staff" like coaches — is
+// never mistaken for a Coach/Staff account. Each account type maps to exactly
+// one form; unknown/future roles fall back to record presence, then "generic".
+type AccountKind = "player" | "referee" | "scout" | "parent" | "team" | "staff" | "generic";
+
+const resolveAccountKind = (data: Record<string, any> | null | undefined): AccountKind => {
+  const profile = data?.profile || {};
+  const role = String(profile.account_role || profile.account_type || profile.role || "").toLowerCase();
+  const category = String(profile.account_category || "").toLowerCase();
+
+  if (role === "player" || category === "player") return "player";
+  if (role === "referee" || category === "referee") return "referee";
+  if (role === "scout") return "scout";
+  if (role === "parent" || category === "parent") return "parent";
+  // Team / club / school BEFORE the team_staff category check — a Parent Team's
+  // category is "team_staff" but its role is team_club / school_team.
+  if (role === "team_club" || role === "school_team" || role === "team") return "team";
+  if (["head_coach_assistant", "coach", "trainer", "academy_director", "team_staff"].includes(role)) return "staff";
+  // Role missing/unknown: infer from records, preferring team over staff.
+  if (data?.team_profile) return "team";
+  if (data?.staff_profile) return "staff";
+  if (data?.player_profile) return "player";
+  if (data?.parent_profile) return "parent";
+  return "generic";
+};
+
+const recordForKind = (data: Record<string, any> | null | undefined, kind: AccountKind): Record<string, any> => {
+  if (kind === "player") return data?.player_profile || {};
+  if (kind === "team") return data?.team_profile || {};
+  if (kind === "staff") return data?.staff_profile || {};
+  if (kind === "parent") return data?.parent_profile || {};
+  return {};
+};
+
+const tableForKind = (kind: AccountKind): string | null => {
+  if (kind === "player") return "player_profiles";
+  if (kind === "team") return "team_profiles";
+  if (kind === "staff") return "staff_profiles";
+  if (kind === "parent") return "parent_profiles";
+  return null;
+};
 const Field = ({ label, value, onChange, type = "text", placeholder }: { label: string; value: string; onChange: (value: string) => void; type?: string; placeholder?: string }) => (
   <div className="space-y-1.5">
     <Label>{label}</Label>
@@ -45,11 +135,14 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
   const [saving, setSaving] = useState(false);
   const [season, setSeason] = useState(new Date().getFullYear().toString());
   const [proExpiry, setProExpiry] = useState("");
-  const [stats, setStats] = useState({ appearances: 0, starts: 0, goals: 0, assists: 0, clean_sheets: 0, yellow_cards: 0, red_cards: 0 });
+  const [stats, setStats] = useState<PlayerStatsState>(DEFAULT_PLAYER_STATS);
+  const [proPlan, setProPlan] = useState<"free" | "pro_annual" | "pro_lifetime">("free");
   const [teamSearch, setTeamSearch] = useState("");
   const [teamResults, setTeamResults] = useState<any[]>([]);
   const [parentUserId, setParentUserId] = useState("");
   const [playerUserId, setPlayerUserId] = useState("");
+  const [confirmingClearAvatar, setConfirmingClearAvatar] = useState(false);
+  const [clearingAvatar, setClearingAvatar] = useState(false);
   const effectiveSection = section || "profile";
   const editorLabel = (label || (!section ? "Edit profile header" : "")).toLowerCase();
   const editorKind = editorLabel.includes("contact") || editorLabel.includes("social")
@@ -59,17 +152,19 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
       : "details";
 
   const contactMap = useMemo(() => Object.fromEntries((bundle?.contacts || []).map((item: any) => [item.contact_type, item])), [bundle]);
-  const activeRecord = bundle?.player_profile || bundle?.staff_profile || bundle?.parent_profile || bundle?.team_profile || {};
-  const activeTable = bundle?.player_profile ? "player_profiles" : bundle?.staff_profile ? "staff_profiles" : bundle?.parent_profile ? "parent_profiles" : bundle?.team_profile ? "team_profiles" : null;
+  const accountKind = resolveAccountKind(bundle);
+  const activeRecord = recordForKind(bundle, accountKind);
+  const activeTable = tableForKind(accountKind);
   const accountRole = String(bundle?.profile?.account_role || bundle?.profile?.account_type || bundle?.profile?.role || "").toLowerCase();
-  const isRefereeAccount = accountRole === "referee" || bundle?.profile?.account_category === "referee";
-  const isScoutAccount = accountRole === "scout";
+  const isRefereeAccount = accountKind === "referee";
+  const isScoutAccount = accountKind === "scout";
 
   const hydrateForm = (data: Record<string, any>) => {
     const profile = data.profile || {};
-    const record = data.player_profile || data.staff_profile || data.parent_profile || data.team_profile || {};
+    const record = recordForKind(data, resolveAccountKind(data));
     const contacts = Object.fromEntries((data.contacts || []).map((item: any) => [item.contact_type, item.value]));
     setProExpiry(data.profile?.pro_expires_at ? String(data.profile.pro_expires_at).slice(0, 10) : "");
+    setProPlan(normalizeAdminPlan(data.profile?.account_tier));
     setForm({
       full_name: text(profile.full_name || record.full_name || profile.club_name || record.club_name),
       username: text(profile.username),
@@ -126,14 +221,23 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
     if (firstStats) {
       setSeason(text(firstStats.season || new Date().getFullYear()));
       setStats({
-        appearances: firstStats.appearances || 0,
-        starts: firstStats.starts || 0,
-        goals: firstStats.goals || 0,
-        assists: firstStats.assists || 0,
-        clean_sheets: firstStats.clean_sheets || 0,
-        yellow_cards: firstStats.yellow_cards || 0,
-        red_cards: firstStats.red_cards || 0,
+        appearances: toNumber(firstStats.appearances),
+        starts: toNumber(firstStats.starts),
+        minutes_played: toNumber(firstStats.minutes_played),
+        goals: toNumber(firstStats.goals),
+        assists: toNumber(firstStats.assists),
+        clean_sheets: toNumber(firstStats.clean_sheets),
+        saves: toNumber(firstStats.saves),
+        tackles: toNumber(firstStats.tackles),
+        interceptions: toNumber(firstStats.interceptions),
+        passes: toNumber(firstStats.passes),
+        chances_created: toNumber(firstStats.chances_created),
+        yellow_cards: toNumber(firstStats.yellow_cards),
+        red_cards: toNumber(firstStats.red_cards),
+        player_rating: toNumber(firstStats.player_rating),
       });
+    } else {
+      setStats(DEFAULT_PLAYER_STATS);
     }
   };
 
@@ -174,34 +278,52 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
   const rpc = async (name: string, args: Record<string, unknown>, success: string, options: { requireNote?: boolean } = {}) => {
     if (options.requireNote && !requireReason()) return false;
     setSaving(true);
-    const { error } = await (supabase as any).rpc(name, args);
+    const { data, error } = await (supabase as any).rpc(name, args);
     setSaving(false);
     if (error) {
       toast({ title: "Could not save changes", description: error.message, variant: "destructive" });
       return false;
     }
     await finish(success);
-    return true;
+    return data ?? true;
   };
   const patch = async (table: string, changes: Record<string, unknown>) => rpc("admin_patch_account_record", { _target_user_id: targetUserId, _table_name: table, _changes: changes, _reason: optionalReason() }, "Changes saved");
   const update = (key: string, value: string) => setForm((current) => ({ ...current, [key]: value }));
 
+  const handleClearAvatar = async () => {
+    if (!targetUserId) return;
+    setClearingAvatar(true);
+    const { error } = await (supabase as any).rpc("admin_clear_profile_picture", { _target_user_id: targetUserId });
+    setClearingAvatar(false);
+    if (error) {
+      toast({ title: "Could not clear profile picture", description: error.message, variant: "destructive" });
+      return;
+    }
+    setConfirmingClearAvatar(false);
+    setForm((current) => ({ ...current, avatar_url: "" }));
+    toast({ title: "Profile picture cleared successfully.", description: "The default profile image has been restored." });
+    await load();
+    onChanged?.();
+  };
+
   const saveProfile = async () => {
+    let ok: boolean | void = true;
     if (editorKind === "header") {
       // Never send a null/blank username: leaving the field empty preserves
       // the account's existing username instead of tripping validation.
       const nextUsername = normalizeUsername(form.username);
-      await patch("profiles", {
+      ok = await patch("profiles", {
         full_name: form.full_name,
         ...(nextUsername ? { username: nextUsername } : {}),
         bio: form.bio || null,
         avatar_url: form.avatar_url || null,
         account_role: form.account_role,
       });
+      if (ok !== false) setOpen(false);
       return;
     }
     if (editorKind === "contacts") {
-      const contactType = bundle?.player_profile ? "player" : "coach";
+      const contactType = accountKind === "player" ? "player" : "coach";
       const items = [
         [`${contactType}_email`, form.contact_email],
         [`${contactType}_phone`, form.contact_phone],
@@ -215,11 +337,13 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
       }
       setSaving(false);
       await finish("Contact information saved");
+      setOpen(false);
       return;
     }
-    const role = String(bundle?.profile?.account_role || bundle?.profile?.account_type || bundle?.profile?.role || "").toLowerCase();
-    if (bundle?.player_profile) {
-      await patch("player_profiles", {
+    // Details editor — route strictly by the resolved account type so the edits
+    // always land in the correct table (never a mismatched one).
+    if (accountKind === "player") {
+      ok = await patch("player_profiles", {
         position: form.position || null,
         height: form.height || null,
         weight: form.weight || null,
@@ -229,8 +353,8 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
         player_gender: form.player_gender || null,
         team: form.team || null,
       });
-    } else if (role === "referee" || bundle?.profile?.account_category === "referee") {
-      await patch("profiles", {
+    } else if (accountKind === "referee") {
+      ok = await patch("profiles", {
         referee_certification_level: form.referee_certification_level || null,
         referee_license_number: form.referee_license_number || null,
         referee_certifying_organization: form.referee_certifying_organization || null,
@@ -242,8 +366,8 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
         referee_accolades: form.referee_accolades || null,
         referee_profile_public: form.referee_profile_public === "false" ? false : true,
       });
-    } else if (role === "scout") {
-      await patch("profiles", {
+    } else if (accountKind === "scout") {
+      ok = await patch("profiles", {
         scout_role_title: form.scout_role_title || null,
         scout_organization: form.scout_organization || null,
         scouting_experience: form.scouting_experience || null,
@@ -251,15 +375,47 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
         scouting_licenses: form.scouting_licenses ? form.scouting_licenses.split(",").map((item) => item.trim()).filter(Boolean) : [],
         scouting_accolades: form.scouting_accolades || null,
       });
-    } else if (bundle?.staff_profile) {
-      await patch("profiles", { coaching_role_type: form.coaching_role_type || null, coaching_licenses: form.coaching_licenses ? form.coaching_licenses.split(",").map((item) => item.trim()).filter(Boolean) : [], past_coaching_experience: form.past_coaching_experience || null, teams_currently_coaching: form.teams_currently_coaching || null, coaching_accolades: form.coaching_accolades || null, coaching_location: form.location || null });
-    } else if (bundle?.team_profile) {
-      await patch("team_profiles", { club_name: form.club_name, logo_url: form.avatar_url || null, founded_year: form.founded_year ? Number(form.founded_year) : null, city: form.city || null, country: form.country || null, home_stadium: form.home_stadium || null, training_ground: form.training_ground || null, contact_email: form.contact_email || null, contact_phone: form.contact_phone || null });
-    } else if (bundle?.parent_profile) {
-      await patch("parent_profiles", { full_name: form.full_name, contact_email: form.contact_email || null, contact_phone: form.contact_phone || null });
+    } else if (accountKind === "team") {
+      ok = await patch("team_profiles", { club_name: form.club_name, logo_url: form.avatar_url || null, founded_year: form.founded_year ? Number(form.founded_year) : null, city: form.city || null, country: form.country || null, home_stadium: form.home_stadium || null, training_ground: form.training_ground || null, contact_email: form.contact_email || null, contact_phone: form.contact_phone || null });
+    } else if (accountKind === "staff") {
+      ok = await patch("profiles", { coaching_role_type: form.coaching_role_type || null, coaching_licenses: form.coaching_licenses ? form.coaching_licenses.split(",").map((item) => item.trim()).filter(Boolean) : [], past_coaching_experience: form.past_coaching_experience || null, teams_currently_coaching: form.teams_currently_coaching || null, coaching_accolades: form.coaching_accolades || null, coaching_location: form.location || null });
+    } else if (accountKind === "parent") {
+      ok = await patch("parent_profiles", { full_name: form.full_name, contact_email: form.contact_email || null, contact_phone: form.contact_phone || null });
     } else {
-      await patch("profiles", { full_name: form.full_name, bio: form.bio || null });
+      ok = await patch("profiles", { full_name: form.full_name, bio: form.bio || null });
     }
+    // Only leave the edit form once the DB update actually succeeded; on failure
+    // keep it open so the admin can retry (no false "saved" + no reload loop).
+    if (ok !== false) setOpen(false);
+  };
+
+  const saveStats = async () => {
+    const payload = Object.fromEntries(
+      Object.entries(stats).map(([key, value]) => [key, toNumber(value)])
+    );
+    const saved = await rpc(
+      "admin_upsert_player_statistics",
+      { _target_user_id: targetUserId, _season: season, _statistics: payload, _reason: optionalReason() },
+      "Statistics saved"
+    );
+    if (saved === false) return;
+  };
+
+  const saveProStatus = async (plan: "free" | "pro_annual" | "pro_lifetime" = proPlan) => {
+    const normalizedPlan = normalizeAdminPlan(plan);
+    const expiresAt = normalizedPlan === "pro_annual" && proExpiry
+      ? new Date(proExpiry).toISOString()
+      : null;
+    const saved = await rpc(
+      "admin_set_pro_status",
+      { _target_user_id: targetUserId, _plan: normalizedPlan, _expires_at: expiresAt, _reason: optionalReason() },
+      normalizedPlan === "free"
+        ? "Footy Status plan saved as Free"
+        : normalizedPlan === "pro_annual"
+          ? "Footy Status plan saved as Yearly"
+          : "Footy Status plan saved as One-Time"
+    );
+    if (saved !== false) setProPlan(normalizedPlan);
   };
 
   const searchTeams = async () => {
@@ -281,7 +437,7 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
       <Button type="button" size="icon" variant="ghost" className="h-8 w-8 shrink-0 rounded-full border border-blue-500 bg-blue-50 text-blue-600 hover:bg-blue-100 hover:text-blue-700 dark:border-blue-400 dark:bg-blue-950 dark:text-blue-300" aria-label={title} title={title} onClick={() => { setOpen(true); if (!bundle) load(); }}>
         <Pencil className="h-4 w-4" />
       </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) setConfirmingClearAvatar(false); }}>
         <DialogContent className="max-h-[92vh] max-w-2xl overflow-y-auto">
           <DialogHeader><DialogTitle>{title}</DialogTitle></DialogHeader>
           {loading || !bundle ? <p className="py-8 text-center text-sm text-muted-foreground">Loading…</p> : (
@@ -289,6 +445,36 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
               {effectiveSection === "profile" && editorKind === "header" ? (
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="sm:col-span-2"><Field label="Profile Picture or Logo URL" value={form.avatar_url || ""} onChange={(value) => update("avatar_url", value)} /></div>
+                  <div className="sm:col-span-2 rounded-lg border border-border p-3">
+                    {confirmingClearAvatar ? (
+                      <div className="space-y-3">
+                        <p className="text-sm font-semibold text-foreground">Clear profile picture?</p>
+                        <p className="text-sm text-muted-foreground">
+                          Are you sure you want to remove this account’s current profile picture? The default profile image will be
+                          restored. The account owner will still be able to upload a new profile picture later.
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          <Button variant="outline" size="sm" onClick={() => setConfirmingClearAvatar(false)} disabled={clearingAvatar}>
+                            Cancel
+                          </Button>
+                          <Button variant="destructive" size="sm" onClick={handleClearAvatar} disabled={clearingAvatar}>
+                            {clearingAvatar ? "Clearing…" : "Yes, Clear Profile Picture"}
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-medium text-foreground">Clear Profile Picture</p>
+                          <p className="text-xs text-muted-foreground">Reset this account’s picture back to the default avatar.</p>
+                        </div>
+                        <Button variant="outline" size="sm" className="text-destructive" onClick={() => setConfirmingClearAvatar(true)}>
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          Clear Profile Picture
+                        </Button>
+                      </div>
+                    )}
+                  </div>
                   <Field label="Name" value={form.full_name || ""} onChange={(value) => update("full_name", value)} />
                   <Field label="Username" value={form.username || ""} onChange={(value) => update("username", value)} />
                   <div className="sm:col-span-2 space-y-1.5"><Label>Bio</Label><Textarea value={form.bio || ""} onChange={(event) => update("bio", event.target.value)} /></div>
@@ -307,7 +493,7 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
                 </div>
               ) : null}
 
-              {effectiveSection === "profile" && editorKind === "details" && bundle.player_profile ? (
+              {effectiveSection === "profile" && editorKind === "details" && accountKind === "player" ? (
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field label="Position" value={form.position || ""} onChange={(value) => update("position", value)} />
                   <Field label="Height" value={form.height || ""} onChange={(value) => update("height", value)} />
@@ -364,7 +550,7 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
                 </div>
               ) : null}
 
-              {effectiveSection === "profile" && editorKind === "details" && bundle.staff_profile && !isScoutAccount && !isRefereeAccount ? (
+              {effectiveSection === "profile" && editorKind === "details" && accountKind === "staff" ? (
                 <div className="grid gap-4">
                   <Field label="Coach or Staff Role" value={form.coaching_role_type || ""} onChange={(value) => update("coaching_role_type", value)} />
                   <Field label="Licenses" value={form.coaching_licenses || ""} placeholder="Separate licenses with commas" onChange={(value) => update("coaching_licenses", value)} />
@@ -375,7 +561,7 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
                 </div>
               ) : null}
 
-              {effectiveSection === "profile" && editorKind === "details" && bundle.team_profile ? (
+              {effectiveSection === "profile" && editorKind === "details" && accountKind === "team" ? (
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field label="Team or School Name" value={form.club_name || ""} onChange={(value) => update("club_name", value)} />
                   <Field label="Logo URL" value={form.avatar_url || ""} onChange={(value) => update("avatar_url", value)} />
@@ -389,26 +575,49 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
                 </div>
               ) : null}
 
-              {effectiveSection === "profile" && editorKind === "details" && bundle.parent_profile ? (
+              {effectiveSection === "profile" && editorKind === "details" && accountKind === "parent" ? (
                 <div className="grid gap-4"><Field label="Parent Name" value={form.full_name || ""} onChange={(value) => update("full_name", value)} /><Field label="Email" value={form.contact_email || ""} onChange={(value) => update("contact_email", value)} /><Field label="Phone Number" value={form.contact_phone || ""} onChange={(value) => update("contact_phone", value)} /></div>
               ) : null}
 
-              {effectiveSection === "stats" ? bundle.player_profile ? (
+              {effectiveSection === "stats" ? accountKind === "player" ? (
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field label="Season" value={season} onChange={setSeason} />
-                  {(["goals", "assists", "clean_sheets", "appearances", "starts", "yellow_cards", "red_cards"] as const).map((key) => <Field key={key} label={{ goals: "Goals", assists: "Assists", clean_sheets: "Clean Sheets", appearances: "Appearances", starts: "Starts", yellow_cards: "Yellow Cards", red_cards: "Red Cards" }[key]} type="number" value={String(stats[key])} onChange={(value) => setStats((current) => ({ ...current, [key]: Number(value) }))} />)}
+                  {([
+                    ["goals", "Goals"],
+                    ["assists", "Assists"],
+                    ["appearances", "Appearances"],
+                    ["starts", "Starts"],
+                    ["minutes_played", "Minutes Played"],
+                    ["clean_sheets", "Clean Sheets"],
+                    ["saves", "Saves"],
+                    ["tackles", "Tackles"],
+                    ["interceptions", "Interceptions"],
+                    ["passes", "Passes"],
+                    ["chances_created", "Chances Created"],
+                    ["yellow_cards", "Yellow Cards"],
+                    ["red_cards", "Red Cards"],
+                    ["player_rating", "Player Rating"],
+                  ] as Array<[keyof PlayerStatsState, string]>).map(([key, statLabel]) => (
+                    <Field
+                      key={key}
+                      label={statLabel}
+                      type="number"
+                      value={String(stats[key])}
+                      onChange={(value) => setStats((current) => ({ ...current, [key]: toNumber(value) }))}
+                    />
+                  ))}
                 </div>
               ) : <p className="text-sm text-muted-foreground">Statistics are only available for player accounts.</p> : null}
 
               {effectiveSection === "clips" ? (
                 <div className="space-y-4">
-                  <div className="rounded-xl border border-border p-3"><p className="font-medium">Footy Status Pro</p><p className="text-sm text-muted-foreground">Current status: {bundle.profile?.account_tier === "free" ? "Off" : "On"}</p><div className="mt-2 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => rpc("admin_set_pro_status", { _target_user_id: targetUserId, _plan: "free", _expires_at: null, _reason: optionalReason() }, "Pro turned off")}>Free / Off</Button><Button size="sm" variant="outline" onClick={() => rpc("admin_set_pro_status", { _target_user_id: targetUserId, _plan: "pro_annual", _expires_at: proExpiry ? new Date(proExpiry).toISOString() : null, _reason: optionalReason() }, "Yearly Pro activated")}>Yearly</Button><Button size="sm" onClick={() => rpc("admin_set_pro_status", { _target_user_id: targetUserId, _plan: "pro_lifetime", _expires_at: null, _reason: optionalReason() }, "One-Time Pro activated")}>One-Time</Button></div></div>
+                  <div className="rounded-xl border border-border p-3"><p className="font-medium">Footy Status Pro</p><p className="text-sm text-muted-foreground">Current plan: {normalizeAdminPlan(bundle.profile?.account_tier) === "free" ? "Free" : normalizeAdminPlan(bundle.profile?.account_tier) === "pro_annual" ? "Yearly" : "One-Time"}</p><div className="mt-2 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => saveProStatus("free")}>Free</Button><Button size="sm" variant="outline" onClick={() => saveProStatus("pro_annual")}>Yearly</Button><Button size="sm" onClick={() => saveProStatus("pro_lifetime")}>One-Time</Button></div></div>
                   <div className="rounded-xl border border-border p-3"><div className="flex items-center justify-between gap-2"><div><p className="font-medium">Strike History</p><p className="text-sm text-muted-foreground">{(bundle.strikes || []).filter((strike: any) => !strike.removed_at).length} active strikes</p></div><Button size="sm" variant="destructive" onClick={() => rpc("admin_add_strike", { _target_user_id: targetUserId, _reason: reason }, "Strike added", { requireNote: true })}>Add Strike</Button></div>{(bundle.strikes || []).map((strike: any) => <div key={strike.id} className="mt-2 flex items-center justify-between gap-2 rounded-lg bg-muted p-2 text-sm"><span>{strike.reason} <Badge variant={strike.removed_at ? "outline" : "destructive"}>{strike.removed_at ? "Removed" : "Active"}</Badge></span>{!strike.removed_at ? <Button size="sm" variant="ghost" onClick={() => rpc("remove_account_strike", { _strike_id: strike.id, _reason: reason }, "Strike removed", { requireNote: true })}>Remove Strike</Button> : null}</div>)}</div>
                   <div className="grid gap-3 sm:grid-cols-2">{(bundle.clips || []).length ? bundle.clips.map((clip: any) => <div key={clip.id} className="overflow-hidden rounded-xl border border-border"><video src={clip.video_url} controls className="aspect-video w-full bg-black object-contain" /><div className="space-y-2 p-3"><p className="truncate text-sm font-medium">{clip.caption || clip.title || "Untitled Video"}</p><Button className="w-full" size="sm" variant="outline" onClick={() => { if (window.confirm("Delete this video permanently?")) rpc("admin_delete_clip", { _clip_id: clip.id, _reason: reason }, "Video deleted", { requireNote: true }); }}><Trash2 className="mr-2 h-4 w-4" />Delete Video</Button><Button className="w-full" size="sm" variant="destructive" onClick={() => { if (window.confirm("Delete this video and add one strike to the player?")) rpc("admin_delete_clip_and_add_strike", { _clip_id: clip.id, _reason: reason }, "Video deleted and strike added", { requireNote: true }); }}><Trash2 className="mr-2 h-4 w-4" />Delete + Strike</Button></div></div>) : <p className="text-sm text-muted-foreground">No Next Up videos.</p>}</div>
                 </div>
               ) : null}
 
-              {effectiveSection === "pro" ? <div className="space-y-3"><Field label="Expiration Date for Yearly Pro" type="date" value={proExpiry} onChange={setProExpiry} /><Label>Pro Type</Label><Select value={bundle.profile?.account_tier || "free"} onValueChange={(value) => rpc("admin_set_pro_status", { _target_user_id: targetUserId, _plan: value, _expires_at: null, _reason: optionalReason() }, "Pro status updated")}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="free">Free / Off</SelectItem><SelectItem value="pro_annual">Yearly</SelectItem><SelectItem value="pro_lifetime">One-Time</SelectItem></SelectContent></Select></div> : null}
+              {effectiveSection === "pro" ? <div className="space-y-3"><Field label="Expiration Date for Yearly Pro" type="date" value={proExpiry} onChange={setProExpiry} /><div className="space-y-1.5"><Label>Footy Status Plan</Label><Select value={proPlan} onValueChange={(value) => setProPlan(normalizeAdminPlan(value))}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="free">Free</SelectItem><SelectItem value="pro_annual">Yearly</SelectItem><SelectItem value="pro_lifetime">One-Time</SelectItem></SelectContent></Select></div><p className="text-xs text-muted-foreground">Choose the plan, then press Save Plan. Missing or unknown values now default to Free, not One-Time.</p></div> : null}
 
               {effectiveSection === "teams" ? (
                 <div className="space-y-4">
@@ -426,7 +635,8 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
           <DialogFooter className="mt-4 gap-2">
             <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
             {effectiveSection === "profile" ? <Button disabled={saving || loading} onClick={saveProfile}>{saving ? "Saving…" : "Save"}</Button> : null}
-            {effectiveSection === "stats" ? <Button disabled={saving || loading} onClick={() => rpc("admin_upsert_player_statistics", { _target_user_id: targetUserId, _season: season, _statistics: stats, _reason: optionalReason() }, "Statistics saved")}>{saving ? "Saving…" : "Save Statistics"}</Button> : null}
+            {effectiveSection === "stats" ? <Button disabled={saving || loading} onClick={saveStats}>{saving ? "Saving…" : "Save Statistics"}</Button> : null}
+            {effectiveSection === "pro" ? <Button disabled={saving || loading} onClick={() => saveProStatus()}>{saving ? "Saving…" : "Save Plan"}</Button> : null}
           </DialogFooter>
         </DialogContent>
       </Dialog>

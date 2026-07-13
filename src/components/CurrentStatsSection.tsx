@@ -11,9 +11,16 @@ export interface CurrentStats {
   appearances?: number | null;
   substitute_ins?: number | null;
   starts?: number | null;
+  minutes_played?: number | null;
   clean_sheets?: number | null;
+  saves?: number | null;
+  tackles?: number | null;
+  interceptions?: number | null;
+  passes?: number | null;
+  chances_created?: number | null;
   yellow_cards?: number | null;
   red_cards?: number | null;
+  player_rating?: number | null;
 }
 
 interface CurrentStatsSectionProps {
@@ -71,6 +78,7 @@ const CurrentStatsSection = ({ stats, headingLevel = "h3", action }: CurrentStat
             <div className="space-y-2">
               <StatLine label="Goals" value={statValue(stats?.goals)} />
               <StatLine label="Assists" value={statValue(stats?.assists)} />
+              <StatLine label="Chances Created" value={statValue(stats?.chances_created)} />
             </div>
           </div>
 
@@ -82,6 +90,7 @@ const CurrentStatsSection = ({ stats, headingLevel = "h3", action }: CurrentStat
             <div className="space-y-2">
               <StatLine label="Appearances / Substitute In" value={statValue(stats?.appearances)} />
               <StatLine label="Starts" value={statValue(stats?.starts)} />
+              <StatLine label="Minutes Played" value={statValue(stats?.minutes_played)} />
             </div>
           </div>
         </div>
@@ -92,7 +101,13 @@ const CurrentStatsSection = ({ stats, headingLevel = "h3", action }: CurrentStat
               <Shield className="h-4 w-4 text-navy" />
               <p className="text-sm font-semibold text-navy">Defensive</p>
             </div>
-            <StatLine label="Clean Sheets" value={statValue(stats?.clean_sheets)} />
+            <div className="space-y-2">
+              <StatLine label="Clean Sheets" value={statValue(stats?.clean_sheets)} />
+              <StatLine label="Saves" value={statValue(stats?.saves)} />
+              <StatLine label="Tackles" value={statValue(stats?.tackles)} />
+              <StatLine label="Interceptions" value={statValue(stats?.interceptions)} />
+              <StatLine label="Passes" value={statValue(stats?.passes)} />
+            </div>
           </div>
 
           <div className="bg-gradient-to-br from-white to-red-50/70 p-4">
@@ -115,6 +130,7 @@ const CurrentStatsSection = ({ stats, headingLevel = "h3", action }: CurrentStat
                 </span>
                 <span className="text-lg font-semibold text-foreground tabular-nums">{statValue(stats?.red_cards)}</span>
               </div>
+              <StatLine label="Player Rating" value={statValue(stats?.player_rating)} />
             </div>
           </div>
         </div>

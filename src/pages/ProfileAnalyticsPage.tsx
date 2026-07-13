@@ -4,12 +4,13 @@ import { useNavigate } from "react-router-dom";
 import Header from "@/components/Header";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
-import { fetchProfileAnalytics, canViewAnalytics } from "@/lib/subscriptions";
+import { fetchProfileAnalytics, canViewAnalytics, isProEligible } from "@/lib/subscriptions";
 import { supabase } from "@/integrations/supabase/client";
 
 const ProfileAnalyticsPage = () => {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
+  const proEligible = isProEligible(profile);
   const [allowed, setAllowed] = useState(false);
   const [analytics, setAnalytics] = useState({ total: 0, coaches: 0, scouts: 0, teams: 0, players: 0 });
   const [loading, setLoading] = useState(true);
@@ -23,7 +24,7 @@ const ProfileAnalyticsPage = () => {
 
       const { data: profile } = await (supabase as any)
         .from("profiles")
-        .select("account_tier, pro_expires_at, clip_deletions_used")
+        .select("account_tier, pro_expires_at, clip_deletions_used, account_role, account_category, role")
         .eq("user_id", user.id)
         .maybeSingle();
 
@@ -70,9 +71,18 @@ const ProfileAnalyticsPage = () => {
           {!loading && !allowed ? (
             <div className="rounded-lg border border-border bg-card p-6 text-center">
               <Lock className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
-              <p className="font-semibold text-foreground">Analytics are a Pro feature</p>
-              <p className="mt-1 text-sm text-muted-foreground">Upgrade to see profile views from coaches, scouts, teams, and players.</p>
-              <Button className="mt-4" onClick={() => navigate("/pro")}>Upgrade to Pro</Button>
+              {proEligible ? (
+                <>
+                  <p className="font-semibold text-foreground">Analytics are a Pro feature</p>
+                  <p className="mt-1 text-sm text-muted-foreground">Upgrade to see profile views from coaches, scouts, teams, and players.</p>
+                  <Button className="mt-4" onClick={() => navigate("/pro")}>Upgrade to Pro</Button>
+                </>
+              ) : (
+                <>
+                  <p className="font-semibold text-foreground">Profile analytics aren’t available</p>
+                  <p className="mt-1 text-sm text-muted-foreground">This feature is part of Footy Status Pro, which is available for player accounts only.</p>
+                </>
+              )}
             </div>
           ) : (
             <div className="grid gap-3">

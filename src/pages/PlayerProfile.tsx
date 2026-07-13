@@ -164,7 +164,7 @@ const PlayerProfile = () => {
         supabase.from("players").select("*").eq("id", id).maybeSingle(),
         (supabase as any)
           .from("current_player_statistics")
-          .select("team_id, team_name, team_logo_url, season, goals, assists, appearances, substitute_ins, starts, clean_sheets, yellow_cards, red_cards")
+          .select("team_id, team_name, team_logo_url, season, goals, assists, appearances, substitute_ins, starts, minutes_played, clean_sheets, saves, tackles, interceptions, passes, chances_created, yellow_cards, red_cards, player_rating")
           .eq("player_profile_id", id)
           .order("team_name", { ascending: true }),
         (supabase as any)
@@ -271,7 +271,7 @@ const PlayerProfile = () => {
           const [{ data: statRows }, { data: historyRows }] = await Promise.all([
             (supabase as any)
               .from("current_player_statistics")
-              .select("team_id, team_name, team_logo_url, season, goals, assists, appearances, substitute_ins, starts, clean_sheets, yellow_cards, red_cards")
+              .select("team_id, team_name, team_logo_url, season, goals, assists, appearances, substitute_ins, starts, minutes_played, clean_sheets, saves, tackles, interceptions, passes, chances_created, yellow_cards, red_cards, player_rating")
               .eq("player_id", playerRecord.id)
               .order("team_name", { ascending: true }),
             (supabase as any)
@@ -719,3 +719,4 @@ const PlayerProfile = () => {
 };
 
 export default PlayerProfile;
+

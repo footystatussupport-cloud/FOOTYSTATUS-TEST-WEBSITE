@@ -5,7 +5,7 @@ import ProBadge from "@/components/ProBadge";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
-import { placeholderPaymentSuccess, ProPlanType } from "@/lib/subscriptions";
+import { placeholderPaymentSuccess, ProPlanType, isProEligible } from "@/lib/subscriptions";
 
 const plans: Array<{ type: ProPlanType; name: string; price: string; cadence: string; description: string }> = [
   {
@@ -47,12 +47,24 @@ const proBenefits = [
 
 const ProUpgradePage = () => {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const { toast } = useToast();
+
+  // Footy Status Pro is exclusively for player accounts (boys and girls).
+  const eligible = isProEligible(profile);
 
   const handleUpgrade = async (planType: ProPlanType) => {
     if (!user?.id) {
       navigate("/auth");
+      return;
+    }
+
+    if (!eligible) {
+      toast({
+        title: "Footy Status Pro is for players only",
+        description: "Only player accounts can purchase Footy Status Pro.",
+        variant: "destructive",
+      });
       return;
     }
 
@@ -76,6 +88,21 @@ const ProUpgradePage = () => {
           </button>
         </header>
 
+        {!eligible ? (
+          <main className="px-4 py-16">
+            <div className="mx-auto max-w-sm text-center">
+              <Crown className="mx-auto mb-3 h-10 w-10 text-muted-foreground" />
+              <h1 className="text-xl font-bold text-foreground">Footy Status Pro is for players</h1>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Footy Status Pro is a premium subscription designed exclusively for individual player accounts. It isn’t
+                available for this account type.
+              </p>
+              <Button className="mt-6 w-full" variant="outline" onClick={() => navigate("/profile")}>
+                Back to profile
+              </Button>
+            </div>
+          </main>
+        ) : (
         <main className="px-4 py-6">
           <div className="mb-6 text-center">
             <Crown className="mx-auto mb-3 h-10 w-10 text-amber-600" />
@@ -140,6 +167,7 @@ const ProUpgradePage = () => {
             </div>
           </section>
         </main>
+        )}
       </div>
     </div>
   );

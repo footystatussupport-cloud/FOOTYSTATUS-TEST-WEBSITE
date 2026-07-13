@@ -21,12 +21,40 @@ export const isActiveProTier = (profile, now = new Date()) => {
   return new Date(profile.pro_expires_at).getTime() > now.getTime();
 };
 
+// Footy Status Pro is a player-only product. Any account classified as a
+// player (boy or girl) is eligible; every other (current or future) account
+// type is automatically ineligible.
+export const isPlayerAccount = (profile) => {
+  if (!profile) return false;
+  const role = String(profile.account_role ?? profile.account_type ?? profile.role ?? "").toLowerCase();
+  const category = String(profile.account_category ?? "").toLowerCase();
+  return role === "player" || category === "player";
+};
+
+// True only when the account's classification is actually present on the object.
+// Lets tier-only fixtures / partial selects fall back to the pure tier check.
+const hasAccountClassification = (profile) =>
+  profile != null &&
+  (profile.account_role != null ||
+    profile.account_type != null ||
+    profile.account_category != null ||
+    profile.role != null);
+
+// Eligibility to view/purchase Footy Status Pro.
+export const isProEligible = (profile) => isPlayerAccount(profile);
+
 export const getAccountTier = (profile, now = new Date()) => {
-  if (isActiveProTier(profile, now)) return profile.account_tier;
+  if (getIsPro(profile, now)) return profile.account_tier;
   return ACCOUNT_TIERS.FREE;
 };
 
-export const getIsPro = (profile, now = new Date()) => isActiveProTier(profile, now);
+export const getIsPro = (profile, now = new Date()) => {
+  // A known non-player account is never Pro, regardless of any tier still
+  // stored on the row (legacy/testing). This makes every Pro feature, badge,
+  // and boost that keys off getIsPro player-only automatically.
+  if (hasAccountClassification(profile) && !isPlayerAccount(profile)) return false;
+  return isActiveProTier(profile, now);
+};
 
 export const getDaysRemaining = (profile, now = new Date()) => {
   if (!profile?.pro_expires_at || profile.account_tier === ACCOUNT_TIERS.PRO_LIFETIME) return null;
