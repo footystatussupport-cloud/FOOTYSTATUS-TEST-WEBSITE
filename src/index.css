@@ -212,6 +212,50 @@
 
 /* Settings-driven styles */
 
+/* Footy Status Official/Admin computer display.
+   This class is added only for the protected Footy Status Admin account.
+   Normal players, parents, coaches, teams, scouts, and referees keep the
+   existing mobile-app width. */
+@media (min-width: 1024px) {
+  body.footy-status-admin-desktop [class~="max-w-md"][class~="mx-auto"][class~="border-x"][class~="min-h-screen"],
+  body.footy-status-admin-desktop [class~="max-w-md"][class~="mx-auto"][class~="border-x"][class*="h-[100dvh]"] {
+    width: min(1180px, calc(100vw - 48px));
+    max-width: min(1180px, calc(100vw - 48px));
+  }
+
+  body.footy-status-admin-desktop [class~="max-w-md"][class~="mx-auto"][class~="border-x"][class~="min-h-screen"][class~="p-4"] {
+    padding-left: 2rem;
+    padding-right: 2rem;
+  }
+
+  body.footy-status-admin-desktop header {
+    padding-left: 2rem;
+    padding-right: 2rem;
+  }
+
+  body.footy-status-admin-desktop nav {
+    padding-left: 2rem;
+    padding-right: 2rem;
+  }
+
+  body.footy-status-admin-desktop nav > div {
+    justify-content: center;
+    gap: 1rem;
+  }
+
+  body.footy-status-admin-desktop nav button {
+    min-width: 8.5rem;
+  }
+}
+
+@media (min-width: 1440px) {
+  body.footy-status-admin-desktop [class~="max-w-md"][class~="mx-auto"][class~="border-x"][class~="min-h-screen"],
+  body.footy-status-admin-desktop [class~="max-w-md"][class~="mx-auto"][class~="border-x"][class*="h-[100dvh]"] {
+    width: min(1320px, calc(100vw - 64px));
+    max-width: min(1320px, calc(100vw - 64px));
+  }
+}
+
 /* Compact view: reduce padding/gaps */
 .compact-view .p-4 { padding: 0.5rem; }
 .compact-view .py-4 { padding-top: 0.5rem; padding-bottom: 0.5rem; }

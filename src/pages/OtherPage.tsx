@@ -4,7 +4,9 @@ import { Link, useNavigate } from "react-router-dom";
 import Header from "@/components/Header";
 import { supabase } from "@/integrations/supabase/client";
 import { fetchMatchAdminContext } from "@/lib/matches";
+import { isProEligible } from "@/lib/subscriptions";
 import { FOOTY_STATUS_SUPER_ADMIN_EMAIL } from "@/lib/superAdmin";
+import { useAuth } from "@/hooks/useAuth";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,8 +20,8 @@ import {
 
 const menuItems = [
   { icon: User, label: "User Profile", path: "/profile", description: "View and edit your profile" },
-  { icon: Crown, label: "FootyStatus Pro", path: "/pro", description: "Upgrade clips, analytics, and visibility" },
-  { icon: BarChart3, label: "Profile Analytics", path: "/analytics", description: "See who is viewing your profile" },
+  { icon: Crown, label: "FootyStatus Pro", path: "/pro", description: "Upgrade clips, analytics, and visibility", playerOnly: true },
+  { icon: BarChart3, label: "Profile Analytics", path: "/analytics", description: "See who is viewing your profile tiles", playerOnly: true },
   { icon: Settings, label: "Settings", path: "/settings", description: "App preferences and notification controls" },
   { icon: Shield, label: "Privacy & Security", path: "/privacy", description: "Privacy settings" },
   { icon: HelpCircle, label: "Help & Support", path: "/support", description: "Get help" },
@@ -28,8 +30,11 @@ const menuItems = [
 
 const OtherPage = () => {
   const navigate = useNavigate();
+  const { profile, loading: authLoading } = useAuth();
   const [showLogoutDialog, setShowLogoutDialog] = useState(false);
   const [showLeagueOperations, setShowLeagueOperations] = useState(false);
+  const showPlayerProOptions = !authLoading && isProEligible(profile);
+  const visibleMenuItems = menuItems.filter((item) => !item.playerOnly || showPlayerProOptions);
 
   useEffect(() => {
     const loadAdminAccess = async () => {
@@ -92,7 +97,7 @@ const OtherPage = () => {
           ) : null}
           
           <div className="space-y-2">
-            {menuItems.map(({ icon: Icon, label, path, description }) => (
+            {visibleMenuItems.map(({ icon: Icon, label, path, description }) => (
               <Link
                 key={label}
                 to={path}

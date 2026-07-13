@@ -33,6 +33,7 @@ import PlayerGenderCompletionGate from "./components/PlayerGenderCompletionGate"
 import AccountModerationGate from "./components/AccountModerationGate";
 import RefereeOnboardingGate from "./components/RefereeOnboardingGate";
 import ClipSharePage from "./pages/ClipSharePage";
+import AdminDesktopDisplayMode from "@/components/AdminDesktopDisplayMode";
 
 const queryClient = new QueryClient();
 
@@ -44,6 +45,7 @@ const App = () => (
           <Toaster />
           <Sonner />
           <PlayerGenderCompletionGate />
+          <AdminDesktopDisplayMode />
           <BrowserRouter>
             <RefereeOnboardingGate>
             <AccountModerationGate>

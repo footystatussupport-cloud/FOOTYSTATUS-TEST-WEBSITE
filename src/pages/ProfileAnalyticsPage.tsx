@@ -28,6 +28,11 @@ const ProfileAnalyticsPage = () => {
         .eq("user_id", user.id)
         .maybeSingle();
 
+      if (!isProEligible(profile)) {
+        navigate("/other", { replace: true });
+        return;
+      }
+
       const nextAllowed = canViewAnalytics(profile);
       setAllowed(nextAllowed);
       if (nextAllowed) {

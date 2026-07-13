@@ -1043,11 +1043,13 @@ export type Database = {
           avatar_url: string | null
           bio: string | null
           created_at: string | null
+          date_of_birth: string | null
           full_name: string | null
           height: string | null
           id: string | null
           is_pro: boolean | null
           position: string | null
+          preferred_foot: string | null
           profile_image_url: string | null
           role: Database["public"]["Enums"]["account_type"] | null
           team: string | null

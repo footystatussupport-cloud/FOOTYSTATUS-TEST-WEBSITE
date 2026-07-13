@@ -4,6 +4,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { ensureFootyStatusAdminSession, isFootyStatusSuperAdminEmail } from "@/lib/superAdmin";
 import { supabase } from "@/integrations/supabase/client";
+import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -76,6 +77,12 @@ const toNumber = (value: unknown) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const normalizeDateInputValue = (value?: string | null) => {
+  if (!value) return "";
+  const match = String(value).match(/^\d{4}-\d{2}-\d{2}/);
+  return match ? match[0] : String(value);
+};
+
 const normalizeAdminPlan = (value: unknown): "free" | "pro_annual" | "pro_lifetime" => {
   const plan = String(value || "").toLowerCase().trim().replace(/-/g, "_");
   if (["pro_annual", "annual", "year", "yearly"].includes(plan)) return "pro_annual";
@@ -126,6 +133,15 @@ const tableForKind = (kind: AccountKind): string | null => {
   if (kind === "parent") return "parent_profiles";
   return null;
 };
+
+const contactPrefixForKind = (kind: AccountKind): "player" | "coach" => {
+  // Referee and parent contact rows were historically stored in the same
+  // personal-contact slots as players. Keep that source of truth so admin edits
+  // do not create duplicate coach_email/coach_phone rows for referee accounts.
+  if (kind === "staff" || kind === "scout") return "coach";
+  return "player";
+};
+
 const Field = ({ label, value, onChange, type = "text", placeholder }: { label: string; value: string; onChange: (value: string) => void; type?: string; placeholder?: string }) => (
   <div className="space-y-1.5">
     <Label>{label}</Label>
@@ -136,6 +152,7 @@ const Field = ({ label, value, onChange, type = "text", placeholder }: { label: 
 const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, statsContext, onChanged }: Props) => {
   const { user } = useAuth();
   const { toast } = useToast();
+  const navigate = useNavigate();
   const isOfficial = isFootyStatusSuperAdminEmail(user?.email);
   const isProtectedSelfTarget = Boolean(isOfficial && user?.id && targetUserId === user.id);
   const [open, setOpen] = useState(false);
@@ -173,8 +190,15 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
 
   const hydrateForm = (data: Record<string, any>) => {
     const profile = data.profile || {};
-    const record = recordForKind(data, resolveAccountKind(data));
+    const kind = resolveAccountKind(data);
+    const record = recordForKind(data, kind);
     const contacts = Object.fromEntries((data.contacts || []).map((item: any) => [item.contact_type, item.value]));
+    const preferredContactEmail = kind === "team"
+      ? record.contact_email
+      : contacts.player_email || contacts.coach_email || record.contact_email || profile.email;
+    const preferredContactPhone = kind === "team"
+      ? record.contact_phone
+      : contacts.player_phone || contacts.coach_phone || record.contact_phone;
     setProExpiry(data.profile?.pro_expires_at ? String(data.profile.pro_expires_at).slice(0, 10) : "");
     setProPlan(normalizeAdminPlan(data.profile?.account_tier));
     setForm({
@@ -186,6 +210,7 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
       position: text(record.position || profile.position),
       height: text(record.height),
       weight: text(record.weight),
+      date_of_birth: normalizeDateInputValue(record.date_of_birth),
       school_grade: text(record.school_grade),
       preferred_foot: text(record.preferred_foot),
       jersey_number: text(record.jersey_number),
@@ -220,8 +245,8 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
       founded_year: text(record.founded_year),
       home_stadium: text(record.home_stadium),
       training_ground: text(record.training_ground),
-      contact_email: text(record.contact_email || contacts.player_email || contacts.coach_email),
-      contact_phone: text(record.contact_phone || contacts.player_phone || contacts.coach_phone),
+      contact_email: text(preferredContactEmail),
+      contact_phone: text(preferredContactPhone),
       instagram: text(contacts.instagram),
       website: text(contacts.website),
       tiktok: text(contacts.tiktok),
@@ -324,6 +349,50 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
     onChanged?.();
   };
 
+  const handleAdminDeleteAccount = async () => {
+    if (!targetUserId) return;
+    if (!requireReason()) return;
+
+    const confirmed = window.confirm(
+      `Delete ${targetName || "this account"} permanently?\n\n` +
+      "This will remove the Auth user, profile, videos, team links, requests, notifications, search/explore presence, and connected app data. This cannot be undone."
+    );
+    if (!confirmed) return;
+
+    const typed = window.prompt("Type DELETE to permanently delete this account.");
+    if (typed !== "DELETE") {
+      toast({
+        title: "Account deletion cancelled",
+        description: "The account was not changed.",
+      });
+      return;
+    }
+
+    setSaving(true);
+    const { error } = await (supabase as any).rpc("admin_delete_account", {
+      _target_user_id: targetUserId,
+      _reason: reason.trim(),
+    });
+    setSaving(false);
+
+    if (error) {
+      toast({
+        title: "Could not delete account",
+        description: error.message,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    toast({
+      title: "Account deleted",
+      description: "The account and its connected Footy Status data were permanently removed.",
+    });
+    setOpen(false);
+    onChanged?.();
+    navigate("/?tab=explore", { replace: true });
+  };
+
   const saveProfile = async () => {
     let ok: boolean | void = true;
     if (editorKind === "header") {
@@ -341,17 +410,55 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
       return;
     }
     if (editorKind === "contacts") {
-      const contactType = accountKind === "player" ? "player" : "coach";
+      const primaryPrefix = contactPrefixForKind(accountKind);
+      const alternatePrefix = primaryPrefix === "player" ? "coach" : "player";
+      const primaryEmailType = `${primaryPrefix}_email`;
+      const primaryPhoneType = `${primaryPrefix}_phone`;
+      const alternateEmailType = `${alternatePrefix}_email`;
+      const alternatePhoneType = `${alternatePrefix}_phone`;
+      const emailVisibility = contactMap[primaryEmailType]?.visibility || contactMap[alternateEmailType]?.visibility || "public";
+      const phoneVisibility = contactMap[primaryPhoneType]?.visibility || contactMap[alternatePhoneType]?.visibility || "public";
       const items = [
-        [`${contactType}_email`, form.contact_email],
-        [`${contactType}_phone`, form.contact_phone],
-        ["instagram", form.instagram], ["website", form.website], ["tiktok", form.tiktok], ["youtube", form.youtube],
+        [primaryEmailType, form.contact_email, emailVisibility],
+        [primaryPhoneType, form.contact_phone, phoneVisibility],
+        ["instagram", form.instagram, contactMap.instagram?.visibility || "public"],
+        ["website", form.website, contactMap.website?.visibility || "public"],
+        ["tiktok", form.tiktok, contactMap.tiktok?.visibility || "public"],
+        ["youtube", form.youtube, contactMap.youtube?.visibility || "public"],
       ];
       setSaving(true);
-      for (const [type, value] of items) {
+      if (accountKind === "team") {
+        const teamContactUpdate = await (supabase as any).rpc("admin_patch_account_record", {
+          _target_user_id: targetUserId,
+          _table_name: "team_profiles",
+          _changes: {
+            contact_email: form.contact_email || null,
+            contact_phone: form.contact_phone || null,
+          },
+          _reason: optionalReason(),
+        });
+        if (teamContactUpdate.error) {
+          setSaving(false);
+          toast({ title: "Could not save contact information", description: teamContactUpdate.error.message, variant: "destructive" });
+          return;
+        }
+      }
+      for (const [type, value, visibility] of items) {
+        if (accountKind === "team" && (type === primaryEmailType || type === primaryPhoneType)) continue;
         if (!value && !contactMap[type]) continue;
-        const { error } = await (supabase as any).rpc("admin_set_contact", { _target_user_id: targetUserId, _contact_type: type, _value: value || "", _visibility: contactMap[type]?.visibility || "public", _reason: optionalReason() });
+        const { error } = await (supabase as any).rpc("admin_set_contact", { _target_user_id: targetUserId, _contact_type: type, _value: value || "", _visibility: visibility || "public", _reason: optionalReason() });
         if (error) { setSaving(false); toast({ title: "Could not save contact information", description: error.message, variant: "destructive" }); return; }
+      }
+      for (const duplicateType of [alternateEmailType, alternatePhoneType]) {
+        if (!contactMap[duplicateType]) continue;
+        const { error } = await (supabase as any).rpc("admin_set_contact", {
+          _target_user_id: targetUserId,
+          _contact_type: duplicateType,
+          _value: "",
+          _visibility: contactMap[duplicateType]?.visibility || "public",
+          _reason: optionalReason(),
+        });
+        if (error) { setSaving(false); toast({ title: "Could not clean duplicate contact information", description: error.message, variant: "destructive" }); return; }
       }
       setSaving(false);
       await finish("Contact information saved");
@@ -365,6 +472,7 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
         position: form.position || null,
         height: form.height || null,
         weight: form.weight || null,
+        date_of_birth: normalizeDateInputValue(form.date_of_birth) || null,
         school_grade: form.school_grade || null,
         preferred_foot: form.preferred_foot || null,
         jersey_number: form.jersey_number || null,
@@ -524,8 +632,19 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
                   <Field label="Position" value={form.position || ""} onChange={(value) => update("position", value)} />
                   <Field label="Height" value={form.height || ""} onChange={(value) => update("height", value)} />
                   <Field label="Weight" value={form.weight || ""} onChange={(value) => update("weight", value)} />
+                  <Field label="Date of Birth" type="date" value={normalizeDateInputValue(form.date_of_birth)} onChange={(value) => update("date_of_birth", value)} />
                   <Field label="Graduation / School Year" value={form.school_grade || ""} onChange={(value) => update("school_grade", value)} />
-                  <Field label="Preferred Foot" value={form.preferred_foot || ""} onChange={(value) => update("preferred_foot", value)} />
+                  <div className="space-y-1.5">
+                    <Label>Preferred Foot</Label>
+                    <Select value={form.preferred_foot || ""} onValueChange={(value) => update("preferred_foot", value)}>
+                      <SelectTrigger><SelectValue placeholder="Select foot" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="left">Left</SelectItem>
+                        <SelectItem value="right">Right</SelectItem>
+                        <SelectItem value="both">Both</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <Field label="Jersey Number" value={form.jersey_number || ""} onChange={(value) => update("jersey_number", value)} />
                   <div className="space-y-1.5">
                     <Label>Player Gender</Label>
@@ -658,6 +777,25 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
               ) : null}
 
               {effectiveSection === "parents" ? <div className="space-y-4"><div><h3 className="font-medium">Current Parent and Child Links</h3>{(bundle.parent_links || []).map((link: any) => <div key={link.id} className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-border p-3"><span>{link.parent_name || "Parent"} ↔ {link.player_name || "Player"}</span><Button size="sm" variant="outline" onClick={() => rpc("admin_manage_parent_link", { _parent_user_id: link.parent_user_id, _player_user_id: link.player_user_id, _mode: "remove", _relationship: link.relationship_to_player || "Parent / Guardian", _notes: "Removed by Footy Status Official", _reason: optionalReason() }, "Link removed")}>Remove Link</Button></div>)}</div><Field label="Parent Account ID" value={parentUserId} onChange={setParentUserId} /><Field label="Child Player Account ID" value={playerUserId} onChange={setPlayerUserId} /><div className="flex gap-2"><Button onClick={() => rpc("admin_manage_parent_link", { _parent_user_id: parentUserId, _player_user_id: playerUserId, _mode: "direct", _relationship: "Parent / Guardian", _notes: "Linked by Footy Status Official", _reason: optionalReason() }, "Parent and child linked")}>Link Parent / Child</Button></div></div> : null}
+
+              {(effectiveSection === "account" || (effectiveSection === "profile" && editorKind === "header")) ? (
+                <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4">
+                  <p className="text-sm font-semibold text-destructive">Danger Zone</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Permanently delete this account and clean up its profile, Explore/search presence, clips, links, requests, notifications, and connected app data.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    className="mt-3"
+                    disabled={saving || loading}
+                    onClick={handleAdminDeleteAccount}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Permanently Delete Account
+                  </Button>
+                </div>
+              ) : null}
 
               <div className="space-y-1.5"><Label>Admin Note <span className="text-xs font-normal text-muted-foreground">(optional for normal edits)</span></Label><Textarea value={reason} placeholder="Optional note for support edits. Required for strikes, video deletion, and other serious moderation actions." onChange={(event) => setReason(event.target.value)} /></div>
             </div>

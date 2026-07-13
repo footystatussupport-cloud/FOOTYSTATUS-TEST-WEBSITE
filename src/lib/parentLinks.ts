@@ -88,6 +88,15 @@ export const removeOwnParentPlayerLink = (linkId: string) =>
   });
 
 export const fetchParentProfileForUser = async (userId: string) => {
+  const rpcResult = await (supabase as any).rpc("get_parent_profile_details", {
+    _parent_user_id: userId,
+  });
+
+  if (!rpcResult.error) {
+    const firstRow = Array.isArray(rpcResult.data) ? rpcResult.data[0] : rpcResult.data;
+    return { data: (firstRow || null) as ParentProfileDetails | null, error: null };
+  }
+
   const { data, error } = await (supabase as any)
     .from("parent_profiles")
     .select("*")

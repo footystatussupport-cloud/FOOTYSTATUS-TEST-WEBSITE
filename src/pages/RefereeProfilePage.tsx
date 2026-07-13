@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { ArrowLeft, BadgeCheck, Building2, Calendar, Shield, Star, Trophy, User } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowLeft, BadgeCheck, Building2, Calendar, Mail, Phone, Shield, Star, Trophy } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Skeleton } from "@/components/ui/skeleton";
 import { supabase } from "@/integrations/supabase/client";
@@ -13,6 +13,7 @@ interface PublicRefereeProfile {
   full_name: string | null;
   username: string | null;
   avatar_url: string | null;
+  email: string | null;
   bio: string | null;
   referee_certification_level: string | null;
   referee_certifying_organization: string | null;
@@ -24,6 +25,13 @@ interface PublicRefereeProfile {
   referee_accolades: string | null;
   referee_profile_public: boolean | null;
   referee_verification_status?: string | null;
+}
+
+interface ContactItem {
+  id: string;
+  contact_type: string;
+  value: string;
+  visibility: string;
 }
 
 const DetailRow = ({ icon: Icon, label, value }: { icon: typeof Shield; label: string; value?: string | number | null }) => {
@@ -45,26 +53,50 @@ const RefereeProfilePage = () => {
   const { user } = useAuth();
   const isOfficial = isFootyStatusSuperAdminEmail(user?.email);
   const [profile, setProfile] = useState<PublicRefereeProfile | null>(null);
+  const [contacts, setContacts] = useState<ContactItem[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const loadProfile = async () => {
-      if (!userId) return;
-      setLoading(true);
-      const { data } = await (supabase as any)
-        .from("profiles")
-        .select(
-          "user_id, full_name, username, avatar_url, bio, referee_certification_level, referee_certifying_organization, referee_years_experience, referee_main_experience, referee_assistant_experience, referee_leagues_tournaments, referee_availability, referee_accolades, referee_profile_public, referee_verification_status"
-        )
-        .eq("user_id", userId)
-        .eq("account_category", "referee")
-        .maybeSingle();
-      setProfile(data || null);
-      setLoading(false);
-    };
+  const loadProfile = useCallback(async () => {
+    if (!userId) return;
+    setLoading(true);
+    const { data } = await (supabase as any)
+      .from("profiles")
+      .select(
+        "user_id, full_name, username, avatar_url, email, bio, referee_certification_level, referee_certifying_organization, referee_years_experience, referee_main_experience, referee_assistant_experience, referee_leagues_tournaments, referee_availability, referee_accolades, referee_profile_public, referee_verification_status"
+      )
+      .eq("user_id", userId)
+      .eq("account_category", "referee")
+      .maybeSingle();
 
+    let contactRows: ContactItem[] = [];
+    if (data?.user_id) {
+      if (isOfficial) {
+        const bundle = await (supabase as any).rpc("admin_get_account_bundle", { _target_user_id: data.user_id });
+        contactRows = (bundle.data?.contacts || []).filter((item: ContactItem) => item.value?.trim());
+      } else {
+        const contactRes = await (supabase as any).rpc("get_profile_contact_info", { _target_user_id: data.user_id });
+        contactRows = (contactRes.data || []).filter((item: ContactItem) => item.value?.trim());
+      }
+    }
+
+    setProfile(data || null);
+    setContacts(contactRows);
+    setLoading(false);
+  }, [userId, isOfficial]);
+
+  useEffect(() => {
     loadProfile();
-  }, [userId]);
+  }, [loadProfile]);
+
+  const primaryEmail = useMemo(() => {
+    const row = contacts.find((contact) => ["player_email", "coach_email"].includes(contact.contact_type));
+    return row?.value || profile?.email || null;
+  }, [contacts, profile?.email]);
+
+  const primaryPhone = useMemo(() => {
+    const row = contacts.find((contact) => ["player_phone", "coach_phone"].includes(contact.contact_type));
+    return row?.value || null;
+  }, [contacts]);
 
   if (loading) {
     return (
@@ -113,7 +145,7 @@ const RefereeProfilePage = () => {
           }
           bio={profile.bio}
           fallbackIcon={<Shield className="h-12 w-12 text-background" />}
-          topRight={<InlineProfileAdminControls targetUserId={profile.user_id} targetName={profile.full_name} />}
+          topRight={<InlineProfileAdminControls targetUserId={profile.user_id} targetName={profile.full_name} onChanged={loadProfile} />}
           below={
             profile.referee_verification_status === "verified" ? (
               <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-green-600 px-2 py-0.5 text-xs font-semibold text-white">
@@ -124,7 +156,7 @@ const RefereeProfilePage = () => {
         />
 
         <section className="relative overflow-hidden rounded-xl border border-border bg-card">
-          <div className="absolute right-3 top-3 z-10"><InlineProfileAdminControls targetUserId={profile.user_id} targetName={profile.full_name} section="profile" label="Edit referee information" /></div>
+          <div className="absolute right-3 top-3 z-10"><InlineProfileAdminControls targetUserId={profile.user_id} targetName={profile.full_name} section="profile" label="Edit referee information" onChanged={loadProfile} /></div>
           <DetailRow icon={Trophy} label="Certification Level" value={profile.referee_certification_level} />
           <DetailRow icon={Building2} label="Certifying Organization" value={profile.referee_certifying_organization} />
           <DetailRow icon={Calendar} label="Refereeing Experience" value={profile.referee_years_experience != null ? `${profile.referee_years_experience} years` : null} />
@@ -134,6 +166,30 @@ const RefereeProfilePage = () => {
           <DetailRow icon={Calendar} label="Availability" value={profile.referee_availability} />
           <DetailRow icon={Star} label="Accolades / Notable Matches" value={profile.referee_accolades} />
         </section>
+
+        {(isOfficial || primaryEmail || primaryPhone) ? (
+          <section className="relative overflow-hidden rounded-xl border border-border bg-card">
+            <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+              <h2 className="text-sm font-bold tracking-wide text-navy">CONTACT INFORMATION</h2>
+              <InlineProfileAdminControls
+                targetUserId={profile.user_id}
+                targetName={profile.full_name}
+                section="profile"
+                label="Edit referee contact information"
+                onChanged={loadProfile}
+              />
+            </div>
+            {primaryEmail ? (
+              <DetailRow icon={Mail} label="Email Address" value={primaryEmail} />
+            ) : null}
+            {primaryPhone ? (
+              <DetailRow icon={Phone} label="Phone Number" value={primaryPhone} />
+            ) : null}
+            {!primaryEmail && !primaryPhone ? (
+              <div className="p-4 text-sm text-muted-foreground">No contact information added yet.</div>
+            ) : null}
+          </section>
+        ) : null}
       </main>
     </div>
   );

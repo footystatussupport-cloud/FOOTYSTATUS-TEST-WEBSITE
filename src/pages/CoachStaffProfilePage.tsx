@@ -167,14 +167,20 @@ const CoachStaffProfilePage = () => {
                 <>
                   <div className="flex items-center gap-3 p-4">
                     <Users className="h-5 w-5 text-muted-foreground" />
-                    <div><p className="text-sm text-muted-foreground">Parent / Guardian</p><p className="font-medium">{parentRecord?.full_name || profile.full_name || "Parent / Guardian"}</p></div>
+                    <div><p className="text-sm text-muted-foreground">Parent Name</p><p className="font-medium">{parentRecord?.full_name || profile.full_name || "Parent / Guardian"}</p></div>
                   </div>
-                  {(parentRecord?.relationship_to_player || parentRecord?.child_full_name || parentRecord?.child_where_plays || parentRecord?.parent_notes) ? (
+                  {(parentRecord?.relationship_to_player || parentRecord?.emergency_contact || parentRecord?.child_full_name || parentRecord?.child_where_plays || parentRecord?.parent_notes) ? (
                     <>
                       {parentRecord?.relationship_to_player ? (
                         <div className="flex items-center gap-3 p-4">
                           <User className="h-5 w-5 text-muted-foreground" />
                           <div><p className="text-sm text-muted-foreground">Relationship</p><p className="font-medium capitalize">{parentRecord.relationship_to_player.replaceAll("_", " ")}</p></div>
+                        </div>
+                      ) : null}
+                      {parentRecord?.emergency_contact ? (
+                        <div className="flex items-center gap-3 p-4">
+                          <Phone className="h-5 w-5 text-muted-foreground" />
+                          <div><p className="text-sm text-muted-foreground">Emergency Contact</p><p className="font-medium">{parentRecord.emergency_contact}</p></div>
                         </div>
                       ) : null}
                       {parentRecord?.child_full_name ? (
@@ -283,10 +289,12 @@ const CoachStaffProfilePage = () => {
                   </div>
                 </div>
               ) : null}
-              <div className="flex items-center gap-3 p-4">
-                <Briefcase className="h-5 w-5 text-muted-foreground" />
-                <div><p className="text-sm text-muted-foreground">Role</p><p className="font-medium">{formatRoleDisplayLabel(isParent ? "parent" : isScout ? profile.scout_role_title : profile.coaching_role_type || profile.account_role, isParent ? "Parent" : isScout ? "Scout" : isAcademyStaff ? "Team Staff" : "Coaching Staff")}</p></div>
-              </div>
+              {!isParent ? (
+                <div className="flex items-center gap-3 p-4">
+                  <Briefcase className="h-5 w-5 text-muted-foreground" />
+                  <div><p className="text-sm text-muted-foreground">Role</p><p className="font-medium">{formatRoleDisplayLabel(isScout ? profile.scout_role_title : profile.coaching_role_type || profile.account_role, isScout ? "Scout" : isAcademyStaff ? "Team Staff" : "Coaching Staff")}</p></div>
+                </div>
+              ) : null}
             </div>
           </section>
 

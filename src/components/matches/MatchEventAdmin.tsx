@@ -187,6 +187,7 @@ const MatchEventAdmin = ({
     }
     const player = findPlayer(d.teamId, d.playerProfileId);
     return {
+      id: d.eventId || null,
       team_id: d.teamId || null,
       event_type: d.eventType,
       player_profile_id: d.playerProfileId || null,

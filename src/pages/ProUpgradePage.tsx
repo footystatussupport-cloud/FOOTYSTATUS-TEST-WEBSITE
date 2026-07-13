@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { ArrowLeft, Check, Crown } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import Header from "@/components/Header";
@@ -47,11 +48,17 @@ const proBenefits = [
 
 const ProUpgradePage = () => {
   const navigate = useNavigate();
-  const { user, profile } = useAuth();
+  const { user, profile, loading } = useAuth();
   const { toast } = useToast();
 
   // Footy Status Pro is exclusively for player accounts (boys and girls).
   const eligible = isProEligible(profile);
+
+  useEffect(() => {
+    if (!loading && user?.id && !eligible) {
+      navigate("/other", { replace: true });
+    }
+  }, [eligible, loading, navigate, user?.id]);
 
   const handleUpgrade = async (planType: ProPlanType) => {
     if (!user?.id) {
@@ -76,6 +83,8 @@ const ProUpgradePage = () => {
       toast({ title: "Upgrade failed", description: error.message || "Could not enable Pro.", variant: "destructive" });
     }
   };
+
+  if (!loading && user?.id && !eligible) return null;
 
   return (
     <div className="min-h-screen bg-background">

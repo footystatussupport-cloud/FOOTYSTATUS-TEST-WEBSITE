@@ -132,8 +132,8 @@ const ExploreTab = () => {
           .eq("account_category", "referee"),
         (supabase as any)
           .from("profiles")
-          .select("user_id, full_name, username, avatar_url, bio, parent_profiles(relationship_to_player)")
-          .or("account_category.eq.parent,account_role.eq.parent,role.eq.parent"),
+          .select("user_id, full_name, username, avatar_url, bio, account_category, account_type, account_role, role")
+          .or("account_category.eq.parent,account_type.eq.parent,account_role.eq.parent,role.eq.parent"),
       ]);
 
       const profileUserIds = [...new Set((playerProfilesRes.data || []).map((player) => player.user_id).filter(Boolean))];
@@ -304,13 +304,23 @@ const ExploreTab = () => {
       setScouts(scoutProfiles);
       setAllReferees(refereeProfilesRes.data || []);
       setReferees(refereeProfilesRes.data || []);
+      const parentUserIds = [...new Set(((parentProfilesRes.data || []) as any[]).map((parent) => parent.user_id).filter(Boolean))];
+      const { data: parentDetails } = parentUserIds.length
+        ? await (supabase as any)
+            .from("parent_profiles")
+            .select("user_id, full_name, relationship_to_player")
+            .in("user_id", parentUserIds)
+        : { data: [] };
+      const parentDetailsByUserId = new Map(
+        ((parentDetails || []) as any[]).map((detail) => [detail.user_id, detail])
+      );
       const parentProfiles = ((parentProfilesRes.data || []) as any[]).map((parent) => ({
         user_id: parent.user_id,
-        full_name: parent.full_name,
+        full_name: parent.full_name || parentDetailsByUserId.get(parent.user_id)?.full_name || "Parent",
         username: parent.username,
         avatar_url: parent.avatar_url,
         bio: parent.bio,
-        relationship_to_player: (Array.isArray(parent.parent_profiles) ? parent.parent_profiles[0] : parent.parent_profiles)?.relationship_to_player || null,
+        relationship_to_player: parentDetailsByUserId.get(parent.user_id)?.relationship_to_player || null,
       }));
       setAllParents(parentProfiles);
       setParents(parentProfiles);
@@ -375,6 +385,21 @@ const ExploreTab = () => {
       }
     };
     fetchData();
+
+    const channel = supabase
+      .channel(`explore-source-of-truth-${user?.id ?? "guest"}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, fetchData)
+      .on("postgres_changes", { event: "*", schema: "public", table: "player_profiles" }, fetchData)
+      .on("postgres_changes", { event: "*", schema: "public", table: "staff_profiles" }, fetchData)
+      .on("postgres_changes", { event: "*", schema: "public", table: "parent_profiles" }, fetchData)
+      .on("postgres_changes", { event: "*", schema: "public", table: "team_profiles" }, fetchData)
+      .on("postgres_changes", { event: "*", schema: "public", table: "teams" }, fetchData)
+      .on("postgres_changes", { event: "*", schema: "public", table: "user_contacts" }, fetchData)
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [user?.id, profile?.account_role, profile?.player_gender]);
 
   useEffect(() => {

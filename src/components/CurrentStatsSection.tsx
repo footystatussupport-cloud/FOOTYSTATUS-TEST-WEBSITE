@@ -47,7 +47,7 @@ const CardIcon = ({ color }: { color: "yellow" | "red" }) => (
 const CurrentStatsSection = ({ stats, headingLevel = "h3", action }: CurrentStatsSectionProps) => {
   const Heading = headingLevel;
   const teamInitial = (stats?.team_name || "Team").trim().charAt(0).toUpperCase() || "T";
-  const teamMeta = stats?.league_name || stats?.season || null;
+  const teamMeta = [stats?.league_name, stats?.season].filter(Boolean).join(" · ") || null;
 
   return (
     <section>

@@ -612,6 +612,7 @@ export const deleteMatchEvent = async (eventId: string) =>
   (supabase as any).rpc("delete_match_event", { _event_id: eventId });
 
 export interface BatchMatchEventInput {
+  id?: string | null;
   team_id: string | null;
   event_type: string;
   player_profile_id?: string | null;

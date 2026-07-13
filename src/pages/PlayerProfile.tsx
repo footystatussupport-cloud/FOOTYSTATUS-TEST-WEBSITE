@@ -24,7 +24,9 @@ interface Player {
   position: string | null;
   jersey_number: string | null;
   school_grade?: string | null;
+  date_of_birth?: string | null;
   age_birth_year?: string | null;
+  preferred_foot?: string | null;
   height: string | null;
   weight: string | null;
   contact_email: string | null;
@@ -110,6 +112,26 @@ const formatStandingSuffix = (position?: number | null) => {
     default:
       return position + "th";
   }
+};
+
+const normalizeDateInputValue = (value?: string | null) => {
+  if (!value) return "";
+  const match = String(value).match(/^\d{4}-\d{2}-\d{2}/);
+  return match ? match[0] : String(value);
+};
+
+const getBirthYearFromPlayer = (player?: Pick<Player, "date_of_birth" | "age_birth_year"> | null) => {
+  const dobYear = normalizeDateInputValue(player?.date_of_birth).match(/^\d{4}/)?.[0];
+  const legacyYear = String(player?.age_birth_year || "").match(/(19|20)\d{2}/)?.[0];
+  return Number(dobYear || legacyYear);
+};
+
+const formatPreferredFoot = (value?: string | null) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "left") return "Left";
+  if (normalized === "right") return "Right";
+  if (normalized === "both") return "Both";
+  return value || "";
 };
 
 const PlayerProfile = () => {
@@ -204,7 +226,9 @@ const PlayerProfile = () => {
           team_id: null,
           bio: publicProfileRes.data.bio,
           username: publicProfileRes.data.username,
+          date_of_birth: normalizeDateInputValue((publicProfileRes.data as any).date_of_birth),
           age_birth_year: publicProfileRes.data.age_birth_year || null,
+          preferred_foot: (publicProfileRes.data as any).preferred_foot || null,
         });
       } else if (playerRes.data) {
         viewedUserId = playerRes.data.user_id || null;
@@ -421,13 +445,13 @@ const PlayerProfile = () => {
   const activeTeamSubtitle = activeMembership?.team
     ? [activeMembership.league?.name, activeMembership.age_group || activeMembership.team.age_group].filter(Boolean).join(" - ")
     : null;
-  const detailValues = [player.club, player.position, player.school_grade, player.age_birth_year, player.height, player.weight]
+  const detailValues = [player.club, player.position, player.school_grade, player.date_of_birth, player.age_birth_year, player.preferred_foot, player.height, player.weight]
     .filter(Boolean)
     .map((value) => String(value).trim().toLowerCase());
   const displayBio = player.bio && !detailValues.includes(player.bio.trim().toLowerCase()) ? player.bio : null;
   // Parent contact info is surfaced at the top of the profile for players aged
   // 6-13 (a safety feature); players 14+ keep it in the contact area at the bottom.
-  const playerBirthYear = Number(String(player.age_birth_year || "").match(/(19|20)\d{2}/)?.[0]);
+  const playerBirthYear = getBirthYearFromPlayer(player);
   const playerAge = playerBirthYear ? new Date().getFullYear() - playerBirthYear : null;
   const isYoungPlayer = playerAge !== null && playerAge >= 6 && playerAge <= 13;
 
@@ -537,16 +561,27 @@ const PlayerProfile = () => {
                 <div><p className="text-sm text-muted-foreground">Jersey Number</p><p className="font-medium">{activeMembership?.jersey_number || player.jersey_number}</p></div>
               </div>
             )}
-            {player.age_birth_year && (
+            {player.date_of_birth ? (
+              <div className="flex items-center gap-3 px-4 py-3">
+                <Star className="h-5 w-5 text-muted-foreground" />
+                <div><p className="text-sm text-muted-foreground">Date of Birth</p><p className="font-medium">{normalizeDateInputValue(player.date_of_birth)}</p></div>
+              </div>
+            ) : player.age_birth_year ? (
               <div className="flex items-center gap-3 px-4 py-3">
                 <Star className="h-5 w-5 text-muted-foreground" />
                 <div><p className="text-sm text-muted-foreground">Birth Year</p><p className="font-medium">{player.age_birth_year}</p></div>
               </div>
-            )}
+            ) : null}
             {player.school_grade && (
               <div className="flex items-center gap-3 px-4 py-3">
                 <Star className="h-5 w-5 text-muted-foreground" />
                 <div><p className="text-sm text-muted-foreground">Grade</p><p className="font-medium">{player.school_grade}</p></div>
+              </div>
+            )}
+            {player.preferred_foot && (
+              <div className="flex items-center gap-3 px-4 py-3">
+                <User className="h-5 w-5 text-muted-foreground" />
+                <div><p className="text-sm text-muted-foreground">Preferred Foot</p><p className="font-medium">{formatPreferredFoot(player.preferred_foot)}</p></div>
               </div>
             )}
             {player.height && (

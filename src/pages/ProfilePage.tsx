@@ -82,11 +82,13 @@ interface ProfileData {
   username: string | null;
   bio: string | null;
   age_birth_year: string | null;
+  date_of_birth?: string | null;
   team_name: string | null;
   club_name: string | null;
   position: string | null;
   jersey_number: string | null;
   school_grade?: string | null;
+  preferred_foot?: string | null;
   height: string | null;
   weight: string | null;
   is_pro: boolean;
@@ -477,6 +479,26 @@ interface EditFormState extends Partial<ProfileData> {
   team_colors?: string;
   social_links_text?: string;
 }
+
+const normalizeDateInputValue = (value?: string | null) => {
+  if (!value) return "";
+  const match = String(value).match(/^\d{4}-\d{2}-\d{2}/);
+  return match ? match[0] : String(value);
+};
+
+const getBirthYearFromProfile = (profile?: Pick<ProfileData, "date_of_birth" | "age_birth_year"> | null) => {
+  const dobYear = normalizeDateInputValue(profile?.date_of_birth).match(/^\d{4}/)?.[0];
+  const legacyYear = String(profile?.age_birth_year || "").match(/(19|20)\d{2}/)?.[0];
+  return Number(dobYear || legacyYear);
+};
+
+const formatPreferredFoot = (value?: string | null) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "left") return "Left";
+  if (normalized === "right") return "Right";
+  if (normalized === "both") return "Both";
+  return value || "";
+};
 
 const MAX_FREE_CLIPS = FREE_VISIBLE_CLIP_LIMIT;
 const MAX_FREE_CLIP_DURATION_SECONDS = 25;
@@ -889,7 +911,7 @@ const ProfilePage = () => {
   const isTeamStaffAccount = resolvedAccountCategory === "team_staff" && !isTeamAccount;
   const isRefereeAccount = resolvedAccountCategory === "referee" || resolvedAccountRole === "referee";
   const isParentAccount = resolvedAccountCategory === "parent" || resolvedAccountRole === "parent";
-  const playerBirthYear = Number(String(profile?.age_birth_year || "").match(/(19|20)\d{2}/)?.[0]);
+  const playerBirthYear = getBirthYearFromProfile(profile);
   const playerAge = playerBirthYear ? new Date().getFullYear() - playerBirthYear : null;
   // Parent linking is available to player accounts of any age. The age check
   // only controls where linked parent info is displayed on player profiles.
@@ -912,7 +934,9 @@ const ProfilePage = () => {
     profile?.club_name,
     profile?.position,
     profile?.school_grade,
+    profile?.date_of_birth,
     profile?.age_birth_year,
+    profile?.preferred_foot,
     profile?.height,
     profile?.weight,
     teamAccountData?.club_name,
@@ -1083,11 +1107,13 @@ const ProfilePage = () => {
       full_name: profile?.full_name || "",
       username: profile?.username || "",
       bio: profile?.bio || "",
+      date_of_birth: normalizeDateInputValue(profile?.date_of_birth),
       age_birth_year: profile?.age_birth_year || "",
       team_name: profile?.team_name || "",
       position: profile?.position || "",
       jersey_number: profile?.jersey_number || "",
       school_grade: profile?.school_grade || "",
+      preferred_foot: profile?.preferred_foot || "",
       height: profile?.height || "",
       weight: profile?.weight || "",
     };
@@ -1152,8 +1178,45 @@ const ProfilePage = () => {
   }, [user, authLoading, isPlayerAccount, isTeamAccount]);
 
   useEffect(() => {
+    if (!user) return;
+
+    const currentUserId = user.id;
+    const refreshProfileSourceData = () => {
+      fetchProfile();
+      if (!isTeamAccount) {
+        fetchContacts();
+      }
+      fetchTeamConnectionData();
+      fetchCoachStaffConnectionData();
+    };
+
     const channel = supabase
-      .channel(`profile-clips-${user?.id ?? "guest"}`)
+      .channel(`profile-clips-${currentUserId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "profiles", filter: `user_id=eq.${currentUserId}` },
+        refreshProfileSourceData
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "player_profiles", filter: `user_id=eq.${currentUserId}` },
+        refreshProfileSourceData
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "staff_profiles", filter: `user_id=eq.${currentUserId}` },
+        refreshProfileSourceData
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "parent_profiles", filter: `user_id=eq.${currentUserId}` },
+        refreshProfileSourceData
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "team_profiles", filter: `user_id=eq.${currentUserId}` },
+        refreshProfileSourceData
+      )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "clips" },
@@ -1280,7 +1343,7 @@ const ProfilePage = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user, isPlayerAccount]);
+  }, [user, isPlayerAccount, isTeamAccount]);
 
   useEffect(() => {
     if (!isTeamAccount || !teamAccountData?.team_id) {
@@ -2079,7 +2142,7 @@ const ProfilePage = () => {
     if (accountRole === "player") {
       const { data: playerAccount } = await (supabase as any)
         .from("player_profiles")
-        .select("jersey_number, school_grade, team, position, height, weight")
+        .select("jersey_number, school_grade, date_of_birth, preferred_foot, team, position, height, weight")
         .eq("user_id", activeProfile.user_id)
         .maybeSingle();
 
@@ -2087,6 +2150,8 @@ const ProfilePage = () => {
         ...prev,
         jersey_number: playerAccount?.jersey_number || prev.jersey_number || null,
         school_grade: playerAccount?.school_grade || prev.school_grade || null,
+        date_of_birth: normalizeDateInputValue(playerAccount?.date_of_birth || prev.date_of_birth),
+        preferred_foot: playerAccount?.preferred_foot || prev.preferred_foot || null,
         team_name: prev.team_name || playerAccount?.team || null,
         position: prev.position || playerAccount?.position || null,
         height: prev.height || playerAccount?.height || null,
@@ -2096,6 +2161,8 @@ const ProfilePage = () => {
         ...prev,
         jersey_number: playerAccount?.jersey_number || prev.jersey_number || "",
         school_grade: playerAccount?.school_grade || prev.school_grade || "",
+        date_of_birth: normalizeDateInputValue(playerAccount?.date_of_birth || prev.date_of_birth),
+        preferred_foot: playerAccount?.preferred_foot || prev.preferred_foot || "",
         team_name: prev.team_name || playerAccount?.team || "",
         position: prev.position || playerAccount?.position || "",
         height: prev.height || playerAccount?.height || "",
@@ -2913,7 +2980,7 @@ const ProfilePage = () => {
     const currentPlayerDetails = isPlayerAccount
       ? await (supabase as any)
           .from("player_profiles")
-          .select("team, position, school_grade, height, weight, jersey_number")
+          .select("team, position, school_grade, date_of_birth, preferred_foot, height, weight, jersey_number")
           .eq("user_id", user.id)
           .maybeSingle()
       : { data: null };
@@ -2966,6 +3033,8 @@ const ProfilePage = () => {
             position: editForm.position || currentPlayerDetails.data?.position || null,
             jersey_number: editForm.jersey_number || currentPlayerDetails.data?.jersey_number || null,
             school_grade: editForm.school_grade || currentPlayerDetails.data?.school_grade || null,
+            date_of_birth: normalizeDateInputValue(editForm.date_of_birth) || currentPlayerDetails.data?.date_of_birth || null,
+            preferred_foot: editForm.preferred_foot || currentPlayerDetails.data?.preferred_foot || null,
             height: editForm.height || currentPlayerDetails.data?.height || null,
             weight: editForm.weight || currentPlayerDetails.data?.weight || null,
           }, { onConflict: "user_id" });
@@ -3409,7 +3478,8 @@ const ProfilePage = () => {
         editingSection,
       });
       setEditingSection(null);
-      fetchProfile();
+      await fetchProfile();
+      await fetchTeamConnectionData();
       if (!isTeamAccount) fetchContacts();
     }
     setSaving(false);
@@ -5095,12 +5165,29 @@ const ProfilePage = () => {
                   <Input value={editForm.jersey_number || ""} onChange={(e) => setEditForm({ ...editForm, jersey_number: e.target.value })} placeholder="e.g. 10" inputMode="numeric" />
                 </div>
                 <div>
-                  <label className="text-sm text-muted-foreground">Birth Year</label>
-                  <Input value={editForm.age_birth_year || ""} onChange={(e) => setEditForm({ ...editForm, age_birth_year: e.target.value })} placeholder="e.g. 2008" />
+                  <label className="text-sm text-muted-foreground">Date of Birth</label>
+                  <Input
+                    type="date"
+                    value={normalizeDateInputValue(editForm.date_of_birth)}
+                    onChange={(e) => setEditForm({ ...editForm, date_of_birth: e.target.value })}
+                  />
                 </div>
                 <div>
                   <label className="text-sm text-muted-foreground">School Grade</label>
                   <Input value={editForm.school_grade || ""} onChange={(e) => setEditForm({ ...editForm, school_grade: e.target.value })} placeholder="e.g. 10th" />
+                </div>
+                <div>
+                  <label className="text-sm text-muted-foreground">Preferred Foot</label>
+                  <Select value={editForm.preferred_foot || ""} onValueChange={(value) => setEditForm({ ...editForm, preferred_foot: value })}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select foot" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="left">Left</SelectItem>
+                      <SelectItem value="right">Right</SelectItem>
+                      <SelectItem value="both">Both</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <label className="text-sm text-muted-foreground">Height</label>
@@ -6165,16 +6252,27 @@ const ProfilePage = () => {
                     <div><p className="text-sm text-muted-foreground">Jersey Number</p><p className="font-medium">{activeMembership?.jersey_number || profile?.jersey_number}</p></div>
                   </div>
                 )}
-                {profile?.age_birth_year && (
+                {profile?.date_of_birth ? (
+                  <div className="flex items-center gap-3 p-4">
+                    <Calendar className="h-5 w-5 text-muted-foreground" />
+                    <div><p className="text-sm text-muted-foreground">Date of Birth</p><p className="font-medium">{normalizeDateInputValue(profile.date_of_birth)}</p></div>
+                  </div>
+                ) : profile?.age_birth_year ? (
                   <div className="flex items-center gap-3 p-4">
                     <Calendar className="h-5 w-5 text-muted-foreground" />
                     <div><p className="text-sm text-muted-foreground">Birth Year</p><p className="font-medium">{profile.age_birth_year}</p></div>
                   </div>
-                )}
+                ) : null}
                 {profile?.school_grade && (
                   <div className="flex items-center gap-3 p-4">
                     <Calendar className="h-5 w-5 text-muted-foreground" />
                     <div><p className="text-sm text-muted-foreground">School Grade</p><p className="font-medium">{profile.school_grade}</p></div>
+                  </div>
+                )}
+                {profile?.preferred_foot && (
+                  <div className="flex items-center gap-3 p-4">
+                    <User className="h-5 w-5 text-muted-foreground" />
+                    <div><p className="text-sm text-muted-foreground">Preferred Foot</p><p className="font-medium">{formatPreferredFoot(profile.preferred_foot)}</p></div>
                   </div>
                 )}
                 {profile?.height && (
@@ -6189,7 +6287,7 @@ const ProfilePage = () => {
                     <div><p className="text-sm text-muted-foreground">Weight</p><p className="font-medium">{profile.weight}</p></div>
                   </div>
                 )}
-                {!profile?.position && !profile?.jersey_number && !profile?.team_name && !profile?.school_grade && !profile?.height && !profile?.weight && !displayProfileBio && (
+                {!profile?.position && !profile?.jersey_number && !profile?.team_name && !profile?.date_of_birth && !profile?.age_birth_year && !profile?.school_grade && !profile?.preferred_foot && !profile?.height && !profile?.weight && !displayProfileBio && (
                   <div className="p-4 text-center text-muted-foreground">
                     <p>No details yet. Tap Edit to add your info.</p>
                   </div>
