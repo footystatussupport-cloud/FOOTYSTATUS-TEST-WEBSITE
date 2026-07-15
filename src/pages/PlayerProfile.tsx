@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useRegisterRefresh } from "@/hooks/usePullToRefresh";
 import { useParams, useNavigate, Navigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { ArrowLeft, User, Users, Mail, Phone, Trophy, Star, Shield, Link as LinkIcon, Video, Heart, Eye } from "lucide-react";
@@ -10,6 +11,7 @@ import ProBadge from "@/components/ProBadge";
 import CurrentStatsSection, { CurrentStats } from "@/components/CurrentStatsSection";
 import ClubHistorySection, { ClubHistoryEntry } from "@/components/ClubHistorySection";
 import { getIsPro, recordProfileView } from "@/lib/subscriptions";
+import { formatDateOfBirth } from "@/lib/dates";
 import { LinkedParentTile as LinkedParentTileData, fetchLinkedParentsForPlayer } from "@/lib/parentLinks";
 import InlineProfileAdminControls from "@/components/admin/InlineProfileAdminControls";
 import ProfileHeader from "@/components/ProfileHeader";
@@ -152,6 +154,11 @@ const PlayerProfile = () => {
   const [loading, setLoading] = useState(true);
   const [reloadToken, setReloadToken] = useState(0);
   const restoredScrollRef = useRef(false);
+  const fetchPlayerDataRef = useRef<() => Promise<void>>();
+
+  useRegisterRefresh(async () => {
+    await fetchPlayerDataRef.current?.();
+  });
 
   const scrollStorageKey = id ? `footystatus:player-profile-scroll:${id}` : null;
 
@@ -341,6 +348,7 @@ const PlayerProfile = () => {
       setLoading(false);
     };
 
+    fetchPlayerDataRef.current = fetchPlayerData;
     fetchPlayerData();
   }, [id, reloadToken, user?.id, profile?.account_role, profile?.player_gender]);
 
@@ -564,7 +572,7 @@ const PlayerProfile = () => {
             {player.date_of_birth ? (
               <div className="flex items-center gap-3 px-4 py-3">
                 <Star className="h-5 w-5 text-muted-foreground" />
-                <div><p className="text-sm text-muted-foreground">Date of Birth</p><p className="font-medium">{normalizeDateInputValue(player.date_of_birth)}</p></div>
+                <div><p className="text-sm text-muted-foreground">Date of Birth</p><p className="font-medium">{formatDateOfBirth(player.date_of_birth)}</p></div>
               </div>
             ) : player.age_birth_year ? (
               <div className="flex items-center gap-3 px-4 py-3">

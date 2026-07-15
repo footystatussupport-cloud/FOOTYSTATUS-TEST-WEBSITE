@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
+import { useRegisterRefresh } from "@/hooks/usePullToRefresh";
 import { supabase } from "@/integrations/supabase/client";
 import { ArrowLeft, Briefcase, Shield, Mail, Phone, Users, Trophy, Search, KeyRound, Check, X, MapPin } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -460,6 +461,8 @@ const TeamProfile = () => {
   useEffect(() => {
     fetchTeamData();
   }, [id, user?.id]);
+
+  useRegisterRefresh(fetchTeamData);
 
   useEffect(() => {
     if (!id) return;

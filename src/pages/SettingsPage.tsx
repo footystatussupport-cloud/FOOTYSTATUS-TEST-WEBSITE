@@ -31,7 +31,6 @@ const SettingsPage = () => {
   const { toast } = useToast();
   const { settings, updateSetting, loading } = useSettings();
   const { user, profile, refreshProfile } = useAuth();
-  const [clearingCache, setClearingCache] = useState(false);
   const [deletingAccount, setDeletingAccount] = useState(false);
   // Server-authoritative: hide the Delete Account control for the permanently
   // protected Footy Status Official Admin account. Real enforcement is in the
@@ -76,54 +75,6 @@ const SettingsPage = () => {
 
     await refreshProfile();
     toast({ title: "Next Up preference saved", description: "Your scouting feed will use this filter." });
-  };
-
-  const getAuthStorageEntries = (storage: Storage) =>
-    Object.keys(storage)
-      .filter((key) => {
-        const normalizedKey = key.toLowerCase();
-        return key.startsWith("sb-") || normalizedKey.includes("supabase");
-      })
-      .map((key) => [key, storage.getItem(key) ?? ""] as const);
-
-  const restoreStorageEntries = (storage: Storage, entries: readonly (readonly [string, string])[]) => {
-    entries.forEach(([key, value]) => storage.setItem(key, value));
-  };
-
-  const handleClearCache = async () => {
-    setClearingCache(true);
-
-    try {
-      const localAuthEntries = getAuthStorageEntries(localStorage);
-      const sessionAuthEntries = getAuthStorageEntries(sessionStorage);
-
-      Object.keys(localStorage).forEach((key) => localStorage.removeItem(key));
-      Object.keys(sessionStorage).forEach((key) => sessionStorage.removeItem(key));
-
-      restoreStorageEntries(localStorage, localAuthEntries);
-      restoreStorageEntries(sessionStorage, sessionAuthEntries);
-
-      if ("caches" in window) {
-        const cacheNames = await caches.keys();
-        await Promise.all(cacheNames.map((cacheName) => caches.delete(cacheName)));
-      }
-
-      await supabase.auth.getSession();
-
-      toast({
-        title: "Cache cleared",
-        description: "Temporary app data was cleared. You are still signed in.",
-      });
-    } catch (error) {
-      console.error("Clear cache failed", error);
-      toast({
-        title: "Could not clear cache",
-        description: "Please try again in a moment.",
-        variant: "destructive",
-      });
-    } finally {
-      setClearingCache(false);
-    }
   };
 
   const handleDeleteAccount = async () => {
@@ -426,48 +377,29 @@ const SettingsPage = () => {
         </section>
 
         {/* Danger Zone */}
-        <section className="mb-8">
-          <h2 className="text-lg font-semibold text-destructive mb-2">Danger Zone</h2>
-          <div className="bg-card border border-destructive/30 rounded-xl px-4">
-            <div className="flex items-center justify-between py-4">
-              <div className="flex items-center gap-3 flex-1">
-                <Trash2 className="h-5 w-5 text-destructive" />
-                <div className="flex-1">
-                  <p className="text-base font-medium text-destructive">Clear Cache</p>
-                  <p className="text-sm text-muted-foreground">Remove cached data to free up space</p>
-                </div>
-              </div>
-              <button
-                className="text-sm font-medium text-destructive hover:underline disabled:cursor-not-allowed disabled:opacity-60"
-                onClick={handleClearCache}
-                disabled={clearingCache || deletingAccount}
-              >
-                {clearingCache ? "Clearing..." : "Clear"}
-              </button>
-            </div>
-            {!deletionProtected && (
-              <>
-                <Separator />
-                <div className="flex items-center justify-between py-4">
-                  <div className="flex items-center gap-3 flex-1">
-                    <Trash2 className="h-5 w-5 text-destructive" />
-                    <div className="flex-1">
-                      <p className="text-base font-medium text-destructive">Delete Account</p>
-                      <p className="text-sm text-muted-foreground">Permanently delete your account and all data</p>
-                    </div>
+        {!deletionProtected && (
+          <section className="mb-8">
+            <h2 className="text-lg font-semibold text-destructive mb-2">Danger Zone</h2>
+            <div className="bg-card border border-destructive/30 rounded-xl px-4">
+              <div className="flex items-center justify-between py-4">
+                <div className="flex items-center gap-3 flex-1">
+                  <Trash2 className="h-5 w-5 text-destructive" />
+                  <div className="flex-1">
+                    <p className="text-base font-medium text-destructive">Delete Account</p>
+                    <p className="text-sm text-muted-foreground">Permanently delete your account and all data</p>
                   </div>
-                  <button
-                    className="text-sm font-medium text-destructive hover:underline disabled:cursor-not-allowed disabled:opacity-60"
-                    onClick={handleDeleteAccount}
-                    disabled={deletingAccount || clearingCache}
-                  >
-                    {deletingAccount ? "Deleting..." : "Delete"}
-                  </button>
                 </div>
-              </>
-            )}
-          </div>
-        </section>
+                <button
+                  className="text-sm font-medium text-destructive hover:underline disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={handleDeleteAccount}
+                  disabled={deletingAccount}
+                >
+                  {deletingAccount ? "Deleting..." : "Delete"}
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
       </main>
       </div>
     </div>

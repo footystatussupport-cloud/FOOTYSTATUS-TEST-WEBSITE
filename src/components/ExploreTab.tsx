@@ -1,9 +1,10 @@
 import { Briefcase, GraduationCap, Search, Users, Trophy, Shield, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { useRegisterRefresh } from "@/hooks/usePullToRefresh";
 import PlayerCard from "./PlayerCard";
 import { formatTeamLeagueLine } from "@/lib/teamMemberships";
 import { useAuth } from "@/hooks/useAuth";
@@ -68,6 +69,7 @@ interface League {
   name: string;
   country: string | null;
   age_group: string | null;
+  logo_url?: string | null;
 }
 
 interface RefereeProfile {
@@ -117,6 +119,12 @@ const ExploreTab = () => {
   const navigate = useNavigate();
   const { user, profile } = useAuth();
   const viewerPlayerGender = profile?.account_role === "player" ? profile.player_gender : null;
+
+  const fetchDataRef = useRef<() => Promise<void>>();
+
+  useRegisterRefresh(async () => {
+    await fetchDataRef.current?.();
+  });
 
   useEffect(() => {
     const fetchData = async () => {
@@ -384,6 +392,7 @@ const ExploreTab = () => {
         setLeagues(leaguesRes.data);
       }
     };
+    fetchDataRef.current = fetchData;
     fetchData();
 
     const channel = supabase
@@ -651,8 +660,12 @@ const ExploreTab = () => {
               onClick={() => navigate(`/league/${league.id}`)}
               className="w-full bg-card border-2 border-border rounded-xl p-4 flex items-center gap-3 hover:border-navy hover:shadow-md transition-all text-left"
             >
-              <div className="w-12 h-12 rounded-full bg-gradient-to-br from-navy to-primary flex items-center justify-center shadow-md">
-                <Trophy className="h-6 w-6 text-white" />
+              <div className="w-12 h-12 shrink-0 overflow-hidden rounded-full bg-gradient-to-br from-navy to-primary flex items-center justify-center shadow-md">
+                {league.logo_url ? (
+                  <img src={league.logo_url} alt={league.name} className="h-full w-full object-cover" />
+                ) : (
+                  <Trophy className="h-6 w-6 text-white" />
+                )}
               </div>
               <div className="flex-1">
                 <div className="flex items-center gap-2">

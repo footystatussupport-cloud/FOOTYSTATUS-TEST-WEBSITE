@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+﻿import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -37,6 +37,7 @@ interface Clip {
   trim_end_seconds?: number | null;
   playback_volume?: number | null;
   fit_mode?: "cover" | "contain" | null;
+  review_status?: string | null;
   player_profile?: {
     id: string;
     user_id: string;
@@ -50,92 +51,17 @@ interface Clip {
     club: string;
     profile_image_url: string | null;
   } | null;
-  is_mock?: boolean;
 }
 
-const MOCK_NEXT_UP_CLIPS: Clip[] = [
-  {
-    id: "mock-next-up-1",
-    player_id: null,
-    user_id: null,
-    title: "Top-corner finish at training",
-    caption: "Quick touch, look up, and finish. This is a mock post for designing the Next Up interface.",
-    video_url: "",
-    thumbnail_url: null,
-    description: null,
-    views_count: 1248,
-    likes_count: 186,
-    hide_likes: false,
-    comments_enabled: true,
-    created_at: new Date().toISOString(),
-    visibility: "public",
-    fit_mode: "cover",
-    is_mock: true,
-    player_profile: {
-      id: "mock-player-1",
-      user_id: "mock-user-1",
-      full_name: "Jordan Williams",
-      team: "Brooklyn United U17",
-      profile_image_url: null,
-      subscription: { account_tier: "pro_lifetime" },
-    },
-    player: null,
-  },
-  {
-    id: "mock-next-up-2",
-    player_id: null,
-    user_id: null,
-    title: "Matchday assist",
-    caption: "A low cross through the back line and a first-time finish. Swipe to test the complete caption layout.",
-    video_url: "",
-    thumbnail_url: null,
-    description: null,
-    views_count: 672,
-    likes_count: 74,
-    hide_likes: false,
-    comments_enabled: true,
-    created_at: new Date(Date.now() - 3600000).toISOString(),
-    visibility: "public",
-    fit_mode: "cover",
-    is_mock: true,
-    player_profile: {
-      id: "mock-player-2",
-      user_id: "mock-user-2",
-      full_name: "Maya Thompson",
-      team: "Queens Academy",
-      profile_image_url: null,
-      subscription: { account_tier: "free" },
-    },
-    player: null,
-  },
-  {
-    id: "mock-next-up-3",
-    player_id: null,
-    user_id: null,
-    title: "One-on-one defending",
-    caption: "Stayed patient, forced the attacker wide, then won the ball cleanly. Mock content only.",
-    video_url: "",
-    thumbnail_url: null,
-    description: null,
-    views_count: 309,
-    likes_count: 41,
-    hide_likes: false,
-    comments_enabled: true,
-    created_at: new Date(Date.now() - 7200000).toISOString(),
-    visibility: "public",
-    fit_mode: "cover",
-    is_mock: true,
-    player_profile: {
-      id: "mock-player-3",
-      user_id: "mock-user-3",
-      full_name: "Alex Morgan",
-      team: "Footy Status FC",
-      profile_image_url: null,
-      subscription: { account_tier: "pro_lifetime" },
-    },
-    player: null,
-  },
-];
+const isRealNextUpClip = (clip: Clip) =>
+  Boolean(
+    clip.id &&
+    clip.video_url &&
+    clip.visibility !== "inactive" &&
+    (!clip.review_status || clip.review_status === "approved") &&
+    clip.player_profile?.id
+  );
+
 
 const reportReasons = [
   { value: "inappropriate", label: "Inappropriate Content", description: "Nudity, profanity, hate symbols, offensive gestures" },
@@ -283,7 +209,7 @@ const NextUpTab = () => {
           rawClips = [requestedClip, ...rawClips.filter((clip: any) => clip.id !== requestedClip.id)];
         }
       }
-      let enriched = await enrichClips(rawClips);
+      let enriched = (await enrichClips(rawClips)).filter(isRealNextUpClip);
       if (enriched.length === 0 && reset && user?.id) {
         const { data: ownClips } = await supabase
           .from("clips")
@@ -292,20 +218,28 @@ const NextUpTab = () => {
           .eq("review_status", "approved")
           .neq("visibility", "inactive")
           .order("created_at", { ascending: false });
-        enriched = await enrichClips(ownClips || []);
+        enriched = (await enrichClips(ownClips || [])).filter(isRealNextUpClip);
       }
-      const previewClips = enriched.length === 0 && reset ? MOCK_NEXT_UP_CLIPS : enriched;
+      if (enriched.length === 0) {
+        if (reset) {
+          setClips([]);
+          setCurrentIndex(0);
+        } else {
+          setIsCaughtUp(true);
+        }
+        return;
+      }
       setIsCaughtUp(false);
       setClips((previous) => {
         const base = reset ? [] : previous;
         const known = new Set(base.map((clip) => clip.id));
-        return [...base, ...previewClips.filter((clip) => !known.has(clip.id))];
+        return [...base, ...enriched.filter((clip) => !known.has(clip.id))];
       });
       if (reset) setCurrentIndex(0);
     } catch (error) {
       console.error("Failed to load the Next Up feed", error);
       if (reset) {
-        setClips(MOCK_NEXT_UP_CLIPS);
+        setClips([]);
         setIsCaughtUp(false);
       }
     } finally {
@@ -400,7 +334,6 @@ const NextUpTab = () => {
 
   useEffect(() => {
     if (!currentClip) return;
-    if (currentClip.is_mock) return;
     const url = new URL(window.location.href);
     url.searchParams.set("tab", "next-up");
     url.searchParams.set("clip", currentClip.id);
@@ -424,7 +357,7 @@ const NextUpTab = () => {
   }, [currentIndex]);
 
   useEffect(() => {
-    if (clips.length > 0 && !clips.some((clip) => clip.is_mock) && currentIndex >= clips.length - 4) {
+    if (clips.length > 0 && currentIndex >= clips.length - 4) {
       loadMoreClips();
     }
   }, [currentIndex, clips.length, loadMoreClips]);
@@ -446,7 +379,6 @@ const NextUpTab = () => {
   };
 
   const getPlayerProfilePath = (clip: Clip) => {
-    if (clip.is_mock) return null;
     if (clip.player_profile?.id) {
       if (user && clip.user_id === user.id) return "/profile";
       return `/player/${clip.player_profile.id}`;
@@ -462,25 +394,6 @@ const NextUpTab = () => {
   const getClipVolume = (clip: Clip) => Math.max(0, Math.min(1, Number(clip.playback_volume ?? 1)));
 
   const handleLike = async (clipId: string) => {
-    const selectedClip = clips.find((clip) => clip.id === clipId);
-    if (selectedClip?.is_mock) {
-      setLikedClips((previous) => {
-        const next = new Set(previous);
-        const isLiked = next.has(clipId);
-        if (isLiked) next.delete(clipId);
-        else next.add(clipId);
-        setClips((current) =>
-          current.map((clip) =>
-            clip.id === clipId
-              ? { ...clip, likes_count: Math.max(0, Number(clip.likes_count || 0) + (isLiked ? -1 : 1)) }
-              : clip
-          )
-        );
-        return next;
-      });
-      return;
-    }
-
     if (!user) {
       toast({ title: "Sign in required", description: "Please sign in to like clips.", variant: "destructive" });
       return;
@@ -505,7 +418,6 @@ const NextUpTab = () => {
     const video = event.currentTarget as HTMLVideoElement;
     if (!user) return;
     const clip = clips.find((item) => item.id === clipId);
-    if (clip?.is_mock) return;
     if (clip?.user_id && clip.user_id === user.id) return;
     if (countedPlaybackRef.current[clipId]) return;
     if (video.currentTime > 0.35) return;
@@ -542,7 +454,7 @@ const NextUpTab = () => {
   };
 
   const recordShare = async (target: string) => {
-    if (!currentClip || currentClip.is_mock || !user) return;
+    if (!currentClip || !user) return;
     const { error } = await (supabase as any).rpc("record_clip_share", {
       _clip_id: currentClip.id,
       _share_target: target,
@@ -608,7 +520,7 @@ const NextUpTab = () => {
     setClips((previous) => previous.filter((clip) => clip.id !== currentClip.id));
     setCurrentIndex(Math.max(0, Math.min(removedIndex, clips.length - 2)));
     setShowShareDialog(false);
-    toast({ title: "Clip hidden", description: "You won’t be shown this clip again." });
+    toast({ title: "Clip hidden", description: "You wonâ€™t be shown this clip again." });
     loadMoreClips();
   };
 
@@ -688,8 +600,8 @@ const NextUpTab = () => {
       toast({ title: "Sign in required", description: "Please sign in to report a clip.", variant: "destructive" });
       return;
     }
-    if (!currentClip || currentClip.is_mock) {
-      toast({ title: "Preview clip", description: "Mock preview clips cannot be reported.", variant: "destructive" });
+    if (!currentClip) {
+      toast({ title: "No clip selected", description: "There is no clip available to report.", variant: "destructive" });
       return;
     }
     if (reportDetails.length > 200) {
@@ -741,34 +653,46 @@ const NextUpTab = () => {
     );
   }
 
-  if (clips.length === 0 && !isLoadingMore) {
+  if (clips.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-[70vh] px-4">
-        <Play className="h-16 w-16 text-muted-foreground mb-4" />
-        <h3 className="text-lg font-semibold mb-2">{isCaughtUp ? "You’re all caught up for now" : "No Clips Yet"}</h3>
-        <p className="text-muted-foreground text-center text-sm">
-          {isCaughtUp
-            ? "New clips will appear here as players post them."
-            : "Verified players can upload their best moments here to get scouted by colleges and teams."}
+      <div className="flex h-[70vh] flex-col items-center justify-center px-6 text-center">
+        <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-accent/10 text-accent">
+          <Play className="h-8 w-8 fill-current" />
+        </div>
+        <h3 className="mb-2 text-xl font-bold text-foreground">No New Next Up Clips</h3>
+        <p className="max-w-xs text-sm text-muted-foreground">
+          You&apos;re all caught up. Check back later for new player highlights.
         </p>
+        <p className="mt-2 max-w-xs text-xs text-muted-foreground">
+          New clips will appear here after they are uploaded and approved.
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          className="mt-5 rounded-full"
+          disabled={isLoadingMore}
+          onClick={() => loadMoreClips(true)}
+        >
+          {isLoadingMore ? "Checking..." : "Check for new clips"}
+        </Button>
       </div>
     );
   }
 
   return (
-    <div className="relative h-full min-h-0 overflow-hidden bg-background">
+    <div data-no-pull-refresh className="relative h-full min-h-0 overflow-hidden bg-background">
       {safeReturnTo ? (
         <button
           type="button"
           onClick={() => navigate(-1)}
-          className="absolute left-3 top-3 z-40 inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-black/45 text-white shadow-lg backdrop-blur-sm transition-colors hover:bg-black/65"
+          className="absolute left-3 top-[max(0.75rem,env(safe-area-inset-top))] z-40 inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-black/45 text-white shadow-lg backdrop-blur-sm transition-colors hover:bg-black/65"
           aria-label="Back to player profile"
         >
           <ArrowLeft className="h-5 w-5" />
         </button>
       ) : null}
       {canFilterByGender ? (
-        <div className="absolute left-3 right-3 top-3 z-30 flex justify-center">
+        <div className="absolute left-3 right-3 top-[max(0.75rem,env(safe-area-inset-top))] z-30 flex justify-center">
           <div className="rounded-full border border-white/15 bg-black/55 px-3 py-2 text-white shadow-lg backdrop-blur-md">
             <div className="flex items-center gap-2 text-xs">
               <span className="whitespace-nowrap text-white/80">Viewing:</span>
@@ -871,11 +795,6 @@ const NextUpTab = () => {
                     >
                       <div className="text-center text-white/80">
                         <Play className="mx-auto h-20 w-20 text-white/60" />
-                        {clip.is_mock ? (
-                          <span className="mt-4 inline-flex rounded-full border border-white/30 bg-black/20 px-3 py-1 text-xs font-semibold tracking-wide backdrop-blur-sm">
-                            MOCK CLIP PREVIEW
-                          </span>
-                        ) : null}
                       </div>
                     </div>
                   )}
@@ -988,9 +907,16 @@ const NextUpTab = () => {
         {isCaughtUp ? (
           <section className="flex h-full min-h-full snap-start snap-always items-center justify-center bg-background px-6 text-center">
             <div>
-              <Play className="mx-auto mb-4 h-12 w-12 text-muted-foreground" />
-              <h3 className="text-lg font-semibold">You’re all caught up for now</h3>
-              <p className="mt-2 text-sm text-muted-foreground">Come back soon for new Next Up clips.</p>
+              <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-accent/10 text-accent">
+                <Play className="h-8 w-8 fill-current" />
+              </div>
+              <h3 className="mb-2 text-xl font-bold text-foreground">No New Next Up Clips</h3>
+              <p className="max-w-xs text-sm text-muted-foreground">
+                You&apos;re all caught up. Check back later for new player highlights.
+              </p>
+              <p className="mt-2 max-w-xs text-xs text-muted-foreground">
+                New clips will appear here after they are uploaded and approved.
+              </p>
             </div>
           </section>
         ) : null}

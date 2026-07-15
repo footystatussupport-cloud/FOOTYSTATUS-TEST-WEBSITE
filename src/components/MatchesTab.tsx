@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useRegisterRefresh } from "@/hooks/usePullToRefresh";
 import { CalendarDays, Plus, Shield, Trophy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -13,6 +14,8 @@ import {
   fetchMatchAdminContext,
   fetchMatchesHomeData,
   formatLeagueSubtitle,
+  updateLeague,
+  uploadLeagueLogo,
   LeagueRecord,
   MatchFeedItem,
 } from "@/lib/matches";
@@ -41,6 +44,16 @@ const MatchesTab = () => {
   const [creatingLeague, setCreatingLeague] = useState(false);
   const [showCreateLeague, setShowCreateLeague] = useState(false);
   const [leagueForm, setLeagueForm] = useState(initialLeagueForm);
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoPreview, setLogoPreview] = useState<string | null>(null);
+
+  const onPickLogo = (file: File | null) => {
+    setLogoFile(file);
+    setLogoPreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return file ? URL.createObjectURL(file) : null;
+    });
+  };
 
   const featuredLeagues = useMemo(() => leagues.slice(0, 6), [leagues]);
 
@@ -63,6 +76,8 @@ const MatchesTab = () => {
     loadMatchesHome();
   }, [user?.id]);
 
+  useRegisterRefresh(loadMatchesHome);
+
   const handleCreateLeague = async () => {
     if (!leagueForm.name.trim()) {
       toast({ title: "League name required", variant: "destructive" });
@@ -70,7 +85,7 @@ const MatchesTab = () => {
     }
 
     setCreatingLeague(true);
-    const { error } = await createLeague({
+    const { data: created, error } = await createLeague({
       name: leagueForm.name.trim(),
       governing_body: leagueForm.governing_body.trim() || null,
       age_group: leagueForm.age_group.trim() || null,
@@ -81,15 +96,27 @@ const MatchesTab = () => {
       gender_category: leagueForm.gender_category.trim() || null,
     });
 
-    if (error) {
-      toast({ title: "Could not create league", description: error.message, variant: "destructive" });
-    } else {
-      toast({ title: "League created" });
-      setLeagueForm(initialLeagueForm);
-      setShowCreateLeague(false);
-      await loadMatchesHome();
+    if (error || !created) {
+      toast({ title: "Could not create league", description: error?.message, variant: "destructive" });
+      setCreatingLeague(false);
+      return;
     }
 
+    // Upload the logo (if chosen) to the new league's folder, then save the URL.
+    if (logoFile) {
+      try {
+        const logoUrl = await uploadLeagueLogo(created.id, logoFile);
+        await updateLeague(created.id, { name: created.name, logo_url: logoUrl });
+      } catch (uploadError: any) {
+        toast({ title: "League created, but the logo failed to upload", description: uploadError?.message, variant: "destructive" });
+      }
+    }
+
+    toast({ title: "League created" });
+    setLeagueForm(initialLeagueForm);
+    onPickLogo(null);
+    setShowCreateLeague(false);
+    await loadMatchesHome();
     setCreatingLeague(false);
   };
 
@@ -147,6 +174,24 @@ const MatchesTab = () => {
                     <Label>Governing Label</Label>
                     <Input value={leagueForm.governing_body} onChange={(e) => setLeagueForm((prev) => ({ ...prev, governing_body: e.target.value }))} placeholder="USYS" />
                   </div>
+                  <div>
+                    <Label>League Profile Picture</Label>
+                    <div className="mt-1 flex items-center gap-3">
+                      <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-navy to-primary">
+                        {logoPreview ? (
+                          <img src={logoPreview} alt="League logo preview" className="h-full w-full object-cover" />
+                        ) : (
+                          <Trophy className="h-6 w-6 text-white" />
+                        )}
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <Input type="file" accept="image/*" onChange={(e) => onPickLogo(e.target.files?.[0] || null)} />
+                        {logoPreview ? (
+                          <button type="button" className="self-start text-xs text-destructive hover:underline" onClick={() => onPickLogo(null)}>Remove</button>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
                   <Button className="w-full" onClick={handleCreateLeague} disabled={creatingLeague}>
                     {creatingLeague ? "Creating..." : "Create League"}
                   </Button>
@@ -164,12 +209,18 @@ const MatchesTab = () => {
                 onClick={() => navigate(`/league/${league.id}`)}
                 className="w-full rounded-xl border border-border bg-card px-4 py-3 text-left transition-colors hover:bg-muted"
               >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-navy to-primary">
+                    {league.logo_url ? (
+                      <img src={league.logo_url} alt={league.name} className="h-full w-full object-cover" />
+                    ) : (
+                      <Trophy className="h-5 w-5 text-white" />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
                     <p className="font-semibold text-foreground">{league.name}</p>
                     <p className="text-sm text-muted-foreground mt-1">{formatLeagueSubtitle(league) || league.season || "League details coming in"}</p>
                   </div>
-                  <Trophy className="h-4 w-4 shrink-0 text-navy" />
                 </div>
               </button>
             ))}

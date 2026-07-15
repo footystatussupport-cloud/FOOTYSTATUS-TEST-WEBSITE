@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRegisterRefresh } from "@/hooks/usePullToRefresh";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Check, KeyRound, Search, Shield, Trophy, UserPlus, Users, X } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -58,6 +59,11 @@ const ClubTeamProfile = () => {
   const [playerJoinState, setPlayerJoinState] = useState<"none" | "pending" | "member">("none");
   const [requestingToJoin, setRequestingToJoin] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
+  const loadPageRef = useRef<() => Promise<void>>();
+
+  useRegisterRefresh(async () => {
+    await loadPageRef.current?.();
+  });
 
   useEffect(() => {
     const loadPage = async () => {
@@ -74,6 +80,7 @@ const ClubTeamProfile = () => {
       setLoading(false);
     };
 
+    loadPageRef.current = loadPage;
     loadPage();
   }, [id, reloadToken, profile?.account_role, profile?.player_gender]);
 

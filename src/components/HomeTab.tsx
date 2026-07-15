@@ -11,6 +11,7 @@ import { PendingTeamInviteSummary, fetchPendingTeamInvitesForUser, formatTeamLea
 import ClubNewsCardFeed from "@/components/club-news/ClubNewsCardFeed";
 import { ClubNewsPostSummary, fetchManagedClubContext, fetchNearbyClubNews, getCachedViewerCoordinates } from "@/lib/clubNews";
 import { reviewCoachStaffJoinRequest } from "@/lib/coachStaffTeams";
+import { useRegisterRefresh } from "@/hooks/usePullToRefresh";
 
 const HomeTab = () => {
   const { user, profile } = useAuth();
@@ -190,6 +191,10 @@ const HomeTab = () => {
 
     loadManagedClubContext();
   }, [profile?.account_role, user?.id]);
+
+  useRegisterRefresh(async () => {
+    await Promise.all([fetchNotifications(), loadPendingInvites(), loadNearbyPosts()]);
+  });
 
   return (
     <div className="px-4 py-6">

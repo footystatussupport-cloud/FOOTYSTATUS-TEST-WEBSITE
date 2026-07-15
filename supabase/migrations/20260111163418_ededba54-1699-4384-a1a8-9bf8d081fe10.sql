@@ -69,23 +69,3 @@ CREATE POLICY "Users can insert comments"
 ON public.clip_comments 
 FOR INSERT 
 WITH CHECK (true);
-
--- Insert mock clips data
-INSERT INTO public.clips (player_id, title, video_url, thumbnail_url, description, views_count, likes_count)
-SELECT 
-  p.id,
-  CASE 
-    WHEN p.name = 'James Rodriguez' THEN 'Amazing Goal vs FC Dallas'
-    WHEN p.name = 'Carlos Mendez' THEN 'Hat-trick Highlights'
-    WHEN p.name = 'Miguel Santos' THEN 'Best Assists Compilation'
-    WHEN p.name = 'David Chen' THEN 'Defensive Skills Reel'
-    WHEN p.name = 'Marcus Williams' THEN 'Speed & Dribbling'
-    ELSE 'Training Session Highlights'
-  END,
-  'https://example.com/clip.mp4',
-  'https://images.unsplash.com/photo-1560272564-c83b66b1ad12?w=400',
-  'Check out my latest highlights!',
-  FLOOR(RANDOM() * 10000)::INTEGER,
-  FLOOR(RANDOM() * 500)::INTEGER
-FROM public.players p
-WHERE p.name IN ('James Rodriguez', 'Carlos Mendez', 'Miguel Santos', 'David Chen', 'Marcus Williams');

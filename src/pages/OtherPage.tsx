@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { User, Settings, Info, HelpCircle, Shield, LogOut, ChevronRight, Trophy, Crown, BarChart3 } from "lucide-react";
+import { User, Settings, Info, HelpCircle, Shield, LogOut, ChevronRight, Trophy, Crown, BarChart3, Heart, RefreshCw } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import Header from "@/components/Header";
 import { supabase } from "@/integrations/supabase/client";
@@ -7,6 +7,7 @@ import { fetchMatchAdminContext } from "@/lib/matches";
 import { isProEligible } from "@/lib/subscriptions";
 import { FOOTY_STATUS_SUPER_ADMIN_EMAIL } from "@/lib/superAdmin";
 import { useAuth } from "@/hooks/useAuth";
+import { useToast } from "@/hooks/use-toast";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,6 +21,7 @@ import {
 
 const menuItems = [
   { icon: User, label: "User Profile", path: "/profile", description: "View and edit your profile" },
+  { icon: Heart, label: "Liked Videos", path: "/liked-videos", description: "Your favorite Next Up clips, all in one place" },
   { icon: Crown, label: "FootyStatus Pro", path: "/pro", description: "Upgrade clips, analytics, and visibility", playerOnly: true },
   { icon: BarChart3, label: "Profile Analytics", path: "/analytics", description: "See who is viewing your profile tiles", playerOnly: true },
   { icon: Settings, label: "Settings", path: "/settings", description: "App preferences and notification controls" },
@@ -30,8 +32,10 @@ const menuItems = [
 
 const OtherPage = () => {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const { profile, loading: authLoading } = useAuth();
   const [showLogoutDialog, setShowLogoutDialog] = useState(false);
+  const [clearingCache, setClearingCache] = useState(false);
   const [showLeagueOperations, setShowLeagueOperations] = useState(false);
   const showPlayerProOptions = !authLoading && isProEligible(profile);
   const visibleMenuItems = menuItems.filter((item) => !item.playerOnly || showPlayerProOptions);
@@ -61,6 +65,51 @@ const OtherPage = () => {
       .forEach((key) => localStorage.removeItem(key));
     sessionStorage.removeItem("footystatus_signup_flow");
     navigate("/");
+  };
+
+  // Clear cached app data while keeping the user signed in (preserves the
+  // Supabase auth tokens in local/session storage).
+  const getAuthStorageEntries = (storage: Storage) =>
+    Object.keys(storage)
+      .filter((key) => {
+        const normalizedKey = key.toLowerCase();
+        return key.startsWith("sb-") || normalizedKey.includes("supabase");
+      })
+      .map((key) => [key, storage.getItem(key) ?? ""] as const);
+
+  const handleClearCache = async () => {
+    setClearingCache(true);
+    try {
+      const localAuthEntries = getAuthStorageEntries(localStorage);
+      const sessionAuthEntries = getAuthStorageEntries(sessionStorage);
+
+      Object.keys(localStorage).forEach((key) => localStorage.removeItem(key));
+      Object.keys(sessionStorage).forEach((key) => sessionStorage.removeItem(key));
+
+      localAuthEntries.forEach(([key, value]) => localStorage.setItem(key, value));
+      sessionAuthEntries.forEach(([key, value]) => sessionStorage.setItem(key, value));
+
+      if ("caches" in window) {
+        const cacheNames = await caches.keys();
+        await Promise.all(cacheNames.map((cacheName) => caches.delete(cacheName)));
+      }
+
+      await supabase.auth.getSession();
+
+      toast({
+        title: "Cache cleared",
+        description: "Temporary app data was refreshed. You are still signed in.",
+      });
+    } catch (error) {
+      console.error("Clear cache failed", error);
+      toast({
+        title: "Could not clear cache",
+        description: "Please try again in a moment.",
+        variant: "destructive",
+      });
+    } finally {
+      setClearingCache(false);
+    }
   };
 
   return (
@@ -117,9 +166,23 @@ const OtherPage = () => {
             ))}
           </div>
 
-          <button 
+          <button
+            onClick={handleClearCache}
+            disabled={clearingCache}
+            className="flex items-center gap-4 p-4 w-full mt-6 bg-card border border-border rounded-xl hover:bg-muted transition-colors text-left disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            <div className="w-10 h-10 bg-secondary rounded-full flex items-center justify-center">
+              <RefreshCw className={`h-5 w-5 text-navy ${clearingCache ? "animate-spin" : ""}`} />
+            </div>
+            <div>
+              <p className="font-medium">{clearingCache ? "Clearing..." : "Clear Cache"}</p>
+              <p className="text-xs text-muted-foreground">Refresh app data and free up space — you stay signed in</p>
+            </div>
+          </button>
+
+          <button
             onClick={() => setShowLogoutDialog(true)}
-            className="flex items-center gap-4 p-4 w-full mt-6 text-accent hover:bg-accent/10 rounded-xl transition-colors"
+            className="flex items-center gap-4 p-4 w-full mt-2 text-accent hover:bg-accent/10 rounded-xl transition-colors"
           >
             <div className="w-10 h-10 bg-accent/10 rounded-full flex items-center justify-center">
               <LogOut className="h-5 w-5" />

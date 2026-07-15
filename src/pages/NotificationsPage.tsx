@@ -18,6 +18,7 @@ import { PendingTeamInviteSummary, fetchPendingTeamInvitesForUser, formatTeamLea
 import { useAuth } from "@/hooks/useAuth";
 import { reviewCoachStaffJoinRequest } from "@/lib/coachStaffTeams";
 import { fetchLinkedParentsForPlayer, reviewParentPlayerLink } from "@/lib/parentLinks";
+import { useRegisterRefresh } from "@/hooks/usePullToRefresh";
 
 const PAGE_SIZE = 25;
 
@@ -71,6 +72,10 @@ const NotificationsPage = () => {
       inviteChannel.unsubscribe();
     };
   }, [user?.id]);
+
+  useRegisterRefresh(async () => {
+    await Promise.all([loadNotifications(), loadPendingInvites()]);
+  });
 
   const unreadCount = useMemo(
     () => notifications.filter((notification) => !notification.is_read).length,

@@ -15,7 +15,7 @@ const tabs = [{
 }, {
   name: "Next-Up Clips",
   icon: Play,
-  label: "Next Up\nClips"
+  label: "Next Up"
 }, {
   name: "Explore",
   icon: Search,
@@ -30,19 +30,34 @@ const TabNavigation = ({
   activeTab,
   onTabChange
 }: TabNavigationProps) => {
-  return <nav className="px-4 bg-card border-b border-border w-full flex flex-row py-0">
-      <div className="flex items-center justify-between w-full py-[3px]">
+  return (
+    <nav
+      className="fixed bottom-0 left-1/2 z-50 w-full max-w-md -translate-x-1/2 border-t border-border bg-card/95 px-1 backdrop-blur-md"
+      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+    >
+      <div className="flex h-[var(--footy-bottom-nav)] w-full items-stretch">
         {tabs.map(({
-        name,
-        icon: Icon,
-        label
-      }) => {
-        return <button key={name} onClick={() => onTabChange(name)} className={cn("flex flex-col items-center justify-center gap-1.5 text-xs font-medium px-4 py-2.5 rounded-lg transition-all duration-200", activeTab === name ? "bg-navy text-white" : "text-muted-foreground hover:text-foreground")}>
-                <Icon className={cn("h-6 w-6", activeTab === name ? "text-white" : "text-accent")} />
-                <span className="whitespace-pre-line text-center leading-tight text-xs">{label}</span>
-              </button>;
-      })}
+          name,
+          icon: Icon,
+          label
+        }) => {
+          const isActive = activeTab === name;
+          return (
+            <button
+              key={name}
+              onClick={() => onTabChange(name)}
+              className={cn(
+                "flex flex-1 min-w-0 flex-col items-center justify-center gap-0.5 rounded-lg px-0.5 text-[10px] font-medium leading-none transition-colors duration-200",
+                isActive ? "text-navy" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              <Icon className={cn("h-5 w-5 shrink-0", isActive ? "text-navy" : "text-accent")} />
+              <span className="w-full truncate text-center">{label}</span>
+            </button>
+          );
+        })}
       </div>
-    </nav>;
+    </nav>
+  );
 };
 export default TabNavigation;

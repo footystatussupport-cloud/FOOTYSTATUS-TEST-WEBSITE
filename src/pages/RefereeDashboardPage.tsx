@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRegisterRefresh } from "@/hooks/usePullToRefresh";
 import { ArrowLeft, BadgeCheck, CalendarDays, CheckCircle2, Clock3, ShieldAlert, ShieldCheck, Upload, XCircle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -66,6 +67,12 @@ const RefereeDashboardPage = () => {
     [claims]
   );
 
+  const loadDashboardRef = useRef<() => Promise<void>>();
+
+  useRegisterRefresh(async () => {
+    await loadDashboardRef.current?.();
+  });
+
   useEffect(() => {
     const loadDashboard = async () => {
       if (!user?.id) return;
@@ -88,6 +95,7 @@ const RefereeDashboardPage = () => {
       setLoading(false);
     };
 
+    loadDashboardRef.current = loadDashboard;
     loadDashboard();
   }, [user?.id]);
 

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { useRegisterRefresh } from "@/hooks/usePullToRefresh";
 import { ArrowLeft, CalendarDays, Pencil, Plus, Search, Shield, Trophy, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -23,6 +24,8 @@ import {
   removeClubTeamFromLeague,
   removeTeamFromLeague,
   updateLeague,
+  uploadLeagueLogo,
+  deleteLeagueLogoByUrl,
 } from "@/lib/matches";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -68,6 +71,26 @@ const LeaguePage = () => {
   const [assignTeamQuery, setAssignTeamQuery] = useState("");
   const [fixtureForm, setFixtureForm] = useState(initialFixtureForm);
   const [leagueEditForm, setLeagueEditForm] = useState(initialLeagueEditForm);
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoPreview, setLogoPreview] = useState<string | null>(null);
+  const [removeLogo, setRemoveLogo] = useState(false);
+
+  const onPickLeagueLogo = (file: File | null) => {
+    setLogoFile(file);
+    setRemoveLogo(false);
+    setLogoPreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return file ? URL.createObjectURL(file) : null;
+    });
+  };
+  const onRemoveLeagueLogo = () => {
+    setLogoFile(null);
+    setRemoveLogo(true);
+    setLogoPreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
+  };
   const [submitting, setSubmitting] = useState(false);
   // Smart venue autofill: the selected home team's saved locations, plus a
   // manual "Enter New Venue" mode (does not create a permanent team address).
@@ -207,6 +230,8 @@ const LeaguePage = () => {
     loadLeague();
   }, [id, user?.id]);
 
+  useRegisterRefresh(loadLeague);
+
   useEffect(() => {
     if (!id) return;
 
@@ -325,6 +350,22 @@ const LeaguePage = () => {
     }
 
     setSubmitting(true);
+
+    // Resolve the logo change: new upload, explicit removal, or keep existing.
+    let nextLogoUrl: string | null | undefined;
+    const previousLogoUrl = league?.logo_url || null;
+    try {
+      if (logoFile) {
+        nextLogoUrl = await uploadLeagueLogo(id, logoFile);
+      } else if (removeLogo) {
+        nextLogoUrl = null;
+      }
+    } catch (uploadError: any) {
+      toast({ title: "Logo upload failed", description: uploadError?.message, variant: "destructive" });
+      setSubmitting(false);
+      return;
+    }
+
     const { error } = await updateLeague(id, {
       name: leagueEditForm.name.trim(),
       governing_body: leagueEditForm.governing_body.trim() || null,
@@ -335,12 +376,19 @@ const LeaguePage = () => {
       tier: leagueEditForm.tier.trim() || null,
       gender_category: leagueEditForm.gender_category.trim() || null,
       status: leagueEditForm.status,
+      ...(nextLogoUrl !== undefined ? { logo_url: nextLogoUrl } : {}),
     });
 
     if (error) {
       toast({ title: "Could not update league", description: error.message, variant: "destructive" });
     } else {
+      // Clean up the old file once the record no longer points at it.
+      if (nextLogoUrl !== undefined && previousLogoUrl && previousLogoUrl !== nextLogoUrl) {
+        await deleteLeagueLogoByUrl(previousLogoUrl);
+      }
       toast({ title: "League updated" });
+      onPickLeagueLogo(null);
+      setRemoveLogo(false);
       setShowEditLeagueDialog(false);
       await loadLeague();
     }
@@ -379,8 +427,12 @@ const LeaguePage = () => {
 
       <div className="space-y-6 p-4">
         <section className="rounded-xl border border-border bg-card p-5 text-center">
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-navy/10">
-            <Trophy className="h-8 w-8 text-navy" />
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-navy/10">
+            {league.logo_url ? (
+              <img src={league.logo_url} alt={league.name} className="h-full w-full object-cover" />
+            ) : (
+              <Trophy className="h-8 w-8 text-navy" />
+            )}
           </div>
           <h1 className="text-2xl font-bold text-foreground">{league.name}</h1>
           <p className="mt-2 text-sm text-muted-foreground">{formatLeagueSubtitle(league) || "League details"}</p>
@@ -445,6 +497,26 @@ const LeaguePage = () => {
                       <option value="completed">Completed</option>
                       <option value="archived">Archived</option>
                     </select>
+                  </div>
+                  <div>
+                    <Label>League Profile Picture</Label>
+                    <div className="mt-1 flex items-center gap-3">
+                      <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full bg-navy/10">
+                        {logoPreview ? (
+                          <img src={logoPreview} alt="League logo preview" className="h-full w-full object-cover" />
+                        ) : !removeLogo && league?.logo_url ? (
+                          <img src={league.logo_url} alt={league.name} className="h-full w-full object-cover" />
+                        ) : (
+                          <Trophy className="h-6 w-6 text-navy" />
+                        )}
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <Input type="file" accept="image/*" onChange={(e) => onPickLeagueLogo(e.target.files?.[0] || null)} />
+                        {(logoPreview || (!removeLogo && league?.logo_url)) ? (
+                          <button type="button" className="self-start text-xs text-destructive hover:underline" onClick={onRemoveLeagueLogo}>Remove picture</button>
+                        ) : null}
+                      </div>
+                    </div>
                   </div>
                   <Button className="w-full" onClick={handleUpdateLeague} disabled={submitting}>
                     {submitting ? "Saving..." : "Save League Changes"}

@@ -1,5 +1,6 @@
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { useRegisterRefresh } from "@/hooks/usePullToRefresh";
 import { ArrowLeft, Check, Clock3, Link2, MapPin, MessageSquare, Trash2, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -235,6 +236,8 @@ const MatchDetails = () => {
   useEffect(() => {
     loadMatch();
   }, [id, user?.id, profile?.account_category, profile?.account_role]);
+
+  useRegisterRefresh(loadMatch);
 
   useEffect(() => {
     if (!ownRefereeClaim) return;

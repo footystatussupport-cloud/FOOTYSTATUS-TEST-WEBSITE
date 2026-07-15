@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRegisterRefresh } from "@/hooks/usePullToRefresh";
 import { useNavigate, useParams } from "react-router-dom";
 import { ArrowLeft, Briefcase, Link as LinkIcon, Mail, MapPin, Phone, Shield, Star, Trophy, User, Users } from "lucide-react";
 import Header from "@/components/Header";
@@ -48,6 +49,11 @@ const CoachStaffProfilePage = () => {
   const [parentRecord, setParentRecord] = useState<ParentProfileDetails | null>(null);
   const [parentChildLinks, setParentChildLinks] = useState<ParentPlayerLink[]>([]);
   const [loading, setLoading] = useState(true);
+  const loadProfileRef = useRef<() => Promise<void>>();
+
+  useRegisterRefresh(async () => {
+    await loadProfileRef.current?.();
+  });
 
   useEffect(() => {
     const loadProfile = async () => {
@@ -81,6 +87,7 @@ const CoachStaffProfilePage = () => {
       setLoading(false);
     };
 
+    loadProfileRef.current = loadProfile;
     loadProfile();
   }, [userId]);
 

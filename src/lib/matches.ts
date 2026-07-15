@@ -68,6 +68,7 @@ export interface LeagueRecord {
   tier: string | null;
   gender_category: string | null;
   status: string;
+  logo_url: string | null;
 }
 
 export interface LeagueStandingRow {
@@ -231,7 +232,7 @@ export const fetchMatchesHomeData = async () => {
   const [leagueRes, matchRes] = await Promise.all([
     (supabase as any)
       .from("leagues")
-      .select("id, name, governing_body, region, country, season, age_group, division, tier, gender_category, status")
+      .select("id, name, governing_body, region, country, season, age_group, division, tier, gender_category, status, logo_url")
       .neq("status", "archived")
       .order("name"),
     (supabase as any)
@@ -257,7 +258,7 @@ export const fetchLeaguePageData = async (leagueId: string) => {
   const [leagueRes, standingsRes, matchesRes, teamsRes, teamProfilesRes] = await Promise.all([
     (supabase as any)
       .from("leagues")
-      .select("id, name, governing_body, region, country, season, age_group, division, tier, gender_category, status")
+      .select("id, name, governing_body, region, country, season, age_group, division, tier, gender_category, status, logo_url")
       .eq("id", leagueId)
       .maybeSingle(),
     (supabase as any)
@@ -407,6 +408,31 @@ export const fetchApprovedTeamsForLeagueAssignment = async (_league: Pick<League
   return approvedTeams;
 };
 
+// League logos live in the admin-write / public-read `league-logos` bucket,
+// foldered by league id. Upload returns the public URL; the leagues table RLS
+// (match-admin only) protects the logo_url field itself.
+export const uploadLeagueLogo = async (leagueId: string, file: File) => {
+  const ext = (file.name.split(".").pop() || "png").toLowerCase();
+  const path = `${leagueId}/${Date.now()}.${ext}`;
+  const { error } = await supabase.storage
+    .from("league-logos")
+    .upload(path, file, { cacheControl: "3600", upsert: true });
+  if (error) throw error;
+  const { data } = supabase.storage.from("league-logos").getPublicUrl(path);
+  // Cache-bust so a replaced image is never served stale.
+  return `${data.publicUrl}?v=${Date.now()}`;
+};
+
+// Best-effort removal of a previously stored league logo file from storage.
+export const deleteLeagueLogoByUrl = async (url?: string | null) => {
+  if (!url) return;
+  const marker = "/storage/v1/object/public/league-logos/";
+  const idx = url.indexOf(marker);
+  if (idx === -1) return;
+  const path = url.slice(idx + marker.length).split("?")[0];
+  if (path) await supabase.storage.from("league-logos").remove([path]).catch(() => undefined);
+};
+
 export const createLeague = async (payload: {
   name: string;
   governing_body?: string | null;
@@ -416,6 +442,7 @@ export const createLeague = async (payload: {
   division?: string | null;
   tier?: string | null;
   gender_category?: string | null;
+  logo_url?: string | null;
 }) =>
   (supabase as any)
     .from("leagues")
@@ -439,6 +466,7 @@ export const updateLeague = async (
     tier?: string | null;
     gender_category?: string | null;
     status?: string;
+    logo_url?: string | null;
   }
 ) =>
   (supabase as any)
@@ -779,7 +807,7 @@ export const fetchClubTeamPageData = async (clubTeamId: string): Promise<ClubTea
     clubTeam.league_id
       ? (supabase as any)
           .from("leagues")
-          .select("id, name, governing_body, region, country, season, age_group, division, tier, gender_category, status")
+          .select("id, name, governing_body, region, country, season, age_group, division, tier, gender_category, status, logo_url")
           .eq("id", clubTeam.league_id)
           .maybeSingle()
       : Promise.resolve({ data: null }),

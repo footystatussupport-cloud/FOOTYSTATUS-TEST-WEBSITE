@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRegisterRefresh } from "@/hooks/usePullToRefresh";
 import { ArrowLeft, BadgeCheck, Building2, Calendar, Mail, Phone, Shield, Star, Trophy } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -87,6 +88,8 @@ const RefereeProfilePage = () => {
   useEffect(() => {
     loadProfile();
   }, [loadProfile]);
+
+  useRegisterRefresh(loadProfile);
 
   const primaryEmail = useMemo(() => {
     const row = contacts.find((contact) => ["player_email", "coach_email"].includes(contact.contact_type));

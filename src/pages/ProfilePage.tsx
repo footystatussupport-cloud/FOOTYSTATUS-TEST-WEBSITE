@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, ChangeEvent, PointerEvent, useMemo } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useRegisterRefresh } from "@/hooks/usePullToRefresh";
 import { ArrowLeft, Camera, User, Calendar, Trophy, Edit, Save, X, Upload, Video, Crown, Lock, Link as LinkIcon, Phone, Mail, Shield, Star, Building2, Briefcase, MapPin, Users, Heart, Eye, Check, BadgeCheck, Info } from "lucide-react";
 import Header from "@/components/Header";
 import ProfileHeader from "@/components/ProfileHeader";
@@ -28,6 +29,7 @@ import RefereeVerificationQueue from "@/components/admin/RefereeVerificationQueu
 
 import CurrentStatsSection, { CurrentStats } from "@/components/CurrentStatsSection";
 import ClubHistorySection, { ClubHistoryEntry } from "@/components/ClubHistorySection";
+import { formatDateOfBirth } from "@/lib/dates";
 import { refereeRoleLabel, reviewRefereeMatchClaim } from "@/lib/referees";
 import {
   CLUB_COACH_REQUEST_ROLE_OPTIONS,
@@ -1176,6 +1178,22 @@ const ProfilePage = () => {
     fetchTeamConnectionData();
     fetchCoachStaffConnectionData();
   }, [user, authLoading, isPlayerAccount, isTeamAccount]);
+
+  useRegisterRefresh(async () => {
+    if (!user) return;
+    const tasks: Array<Promise<unknown>> = [
+      Promise.resolve(fetchProfile()),
+      Promise.resolve(fetchClips()),
+      Promise.resolve(fetchTeamConnectionData()),
+      Promise.resolve(fetchCoachStaffConnectionData()),
+    ];
+    if (!isTeamAccount) tasks.push(Promise.resolve(fetchContacts()));
+    if (isPlayerAccount) {
+      tasks.push(Promise.resolve(fetchClubHistory()));
+      tasks.push(Promise.resolve(fetchPlayerStrikeCount()));
+    }
+    await Promise.all(tasks);
+  });
 
   useEffect(() => {
     if (!user) return;
@@ -5386,6 +5404,23 @@ const ProfilePage = () => {
                     <div><p className="text-sm text-muted-foreground">Training Ground Address</p><p className="font-medium">{teamAccountData.training_ground}</p></div>
                   </div>
                 )}
+                {(teamAccountData?.home_jersey_color || teamAccountData?.away_jersey_color || teamAccountData?.third_kit_color) ? (
+                  <div className="p-4">
+                    <p className="text-sm text-muted-foreground mb-3">Kit Colors</p>
+                    <div className="grid grid-cols-1 gap-2">
+                      {[
+                        ["Home", teamAccountData?.home_jersey_color],
+                        ["Away", teamAccountData?.away_jersey_color],
+                        ["3rd Kit", teamAccountData?.third_kit_color],
+                      ].map(([label, color]) => (
+                        <div key={label} className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
+                          <span className="text-sm font-medium text-foreground">{label}</span>
+                          <span className="text-sm text-muted-foreground">{color || (label === "3rd Kit" ? "Optional" : "Not added")}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 {teamAccountData?.team_mascot && (
                   <div className="flex items-center gap-3 p-4">
                     <Shield className="h-5 w-5 text-muted-foreground" />
@@ -6122,7 +6157,13 @@ const ProfilePage = () => {
                     <div><p className="text-sm text-muted-foreground">{profile?.account_role === "scout" ? "Years Scouting" : "Coaching Experience"}</p><p className="font-medium">{staffAccountData?.years_experience} years</p></div>
                   </div>
                 )}
-                {staffAccountData?.coaching_licenses?.length ? (
+                {profile?.account_role !== "scout" && staffAccountData?.age_groups_coached?.length ? (
+                  <div className="flex items-center gap-3 p-4">
+                    <Users className="h-5 w-5 text-muted-foreground" />
+                    <div><p className="text-sm text-muted-foreground">Age Groups Coached</p><p className="font-medium">{staffAccountData.age_groups_coached.join(", ")}</p></div>
+                  </div>
+                ) : null}
+                {profile?.account_role !== "scout" && staffAccountData?.coaching_licenses?.length ? (
                   <div className="flex items-center gap-3 p-4">
                     <Star className="h-5 w-5 text-muted-foreground" />
                     <div><p className="text-sm text-muted-foreground">Licenses / Certifications</p><p className="font-medium">{staffAccountData.coaching_licenses.join(", ")}</p></div>
@@ -6140,7 +6181,7 @@ const ProfilePage = () => {
                     <div><p className="text-sm text-muted-foreground">Teams Coached / Past Experience</p><p className="font-medium">{staffAccountData.past_coaching_experience || staffAccountData.previous_teams?.join(", ")}</p></div>
                   </div>
                 ) : null}
-                {(staffAccountData?.coaching_accolades || staffAccountData?.notable_achievements) ? (
+                {profile?.account_role !== "scout" && (staffAccountData?.coaching_accolades || staffAccountData?.notable_achievements) ? (
                   <div className="flex items-center gap-3 p-4">
                     <Star className="h-5 w-5 text-muted-foreground" />
                     <div><p className="text-sm text-muted-foreground">Accolades</p><p className="font-medium">{staffAccountData.coaching_accolades || staffAccountData.notable_achievements}</p></div>
@@ -6255,7 +6296,7 @@ const ProfilePage = () => {
                 {profile?.date_of_birth ? (
                   <div className="flex items-center gap-3 p-4">
                     <Calendar className="h-5 w-5 text-muted-foreground" />
-                    <div><p className="text-sm text-muted-foreground">Date of Birth</p><p className="font-medium">{normalizeDateInputValue(profile.date_of_birth)}</p></div>
+                    <div><p className="text-sm text-muted-foreground">Date of Birth</p><p className="font-medium">{formatDateOfBirth(profile.date_of_birth)}</p></div>
                   </div>
                 ) : profile?.age_birth_year ? (
                   <div className="flex items-center gap-3 p-4">

@@ -26,6 +26,7 @@ import ClubNewsArchivePage from "./pages/ClubNewsArchivePage";
 import ClubNewsDetailPage from "./pages/ClubNewsDetailPage";
 import ProUpgradePage from "./pages/ProUpgradePage";
 import ProfileAnalyticsPage from "./pages/ProfileAnalyticsPage";
+import LikedVideosPage from "./pages/LikedVideosPage";
 import CoachStaffProfilePage from "./pages/CoachStaffProfilePage";
 import RefereeDashboardPage from "./pages/RefereeDashboardPage";
 import RefereeProfilePage from "./pages/RefereeProfilePage";
@@ -34,6 +35,8 @@ import AccountModerationGate from "./components/AccountModerationGate";
 import RefereeOnboardingGate from "./components/RefereeOnboardingGate";
 import ClipSharePage from "./pages/ClipSharePage";
 import AdminDesktopDisplayMode from "@/components/AdminDesktopDisplayMode";
+import { PullToRefreshProvider } from "@/hooks/usePullToRefresh";
+import RefreshBoundary from "@/components/RefreshBoundary";
 
 const queryClient = new QueryClient();
 
@@ -47,6 +50,8 @@ const App = () => (
           <PlayerGenderCompletionGate />
           <AdminDesktopDisplayMode />
           <BrowserRouter>
+            <PullToRefreshProvider>
+            <RefreshBoundary>
             <RefereeOnboardingGate>
             <AccountModerationGate>
             <Routes>
@@ -74,6 +79,7 @@ const App = () => (
               <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
               <Route path="/pro" element={<ProUpgradePage />} />
               <Route path="/analytics" element={<ProtectedRoute><ProfileAnalyticsPage /></ProtectedRoute>} />
+              <Route path="/liked-videos" element={<ProtectedRoute><LikedVideosPage /></ProtectedRoute>} />
               <Route path="/referee" element={<ProtectedRoute><RefereeDashboardPage /></ProtectedRoute>} />
               <Route path="/referee-profile/:userId" element={<ProtectedRoute><RefereeProfilePage /></ProtectedRoute>} />
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
@@ -81,6 +87,8 @@ const App = () => (
             </Routes>
             </AccountModerationGate>
             </RefereeOnboardingGate>
+            </RefreshBoundary>
+            </PullToRefreshProvider>
           </BrowserRouter>
         </TooltipProvider>
       </SettingsProvider>

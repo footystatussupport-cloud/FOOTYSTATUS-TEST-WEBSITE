@@ -8,6 +8,11 @@
 
 @layer base {
   :root {
+    /* Height of the thin bottom navigation bar (excludes the safe-area inset,
+       which is added separately). Used to size the Next Up feed and to pad
+       page content so it clears the fixed bottom nav. */
+    --footy-bottom-nav: 3.25rem;
+
     --background: 0 0% 100%;
     --foreground: 222 47% 11%;
 
@@ -156,9 +161,37 @@
     @apply border-border;
   }
 
+  /* Global mobile-safety: never exceed the viewport width, no horizontal drag. */
+  html,
+  body,
+  #root {
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    padding: 0;
+    /* `clip` prevents horizontal scroll/drag without creating a scroll box, so
+       position: sticky headers keep working; `hidden` is the older fallback. */
+    overflow-x: hidden;
+    overflow-x: clip;
+  }
+
   body {
     @apply bg-background text-foreground font-sans antialiased;
     font-family: 'Inter', sans-serif;
+    position: relative;
+  }
+
+  /* Hide the document scrollbar on all platforms; vertical scrolling still works. */
+  html,
+  body {
+    scrollbar-width: none;      /* Firefox */
+    -ms-overflow-style: none;   /* IE / old Edge */
+  }
+  html::-webkit-scrollbar,
+  body::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
   }
 }
 

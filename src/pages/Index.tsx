@@ -52,23 +52,30 @@ const Index = () => {
     }
   };
 
+  // Reserve room at the bottom of every screen for the fixed bottom nav bar
+  // (its own height plus the device's home-indicator safe area).
+  const bottomNavSpacing = "calc(var(--footy-bottom-nav) + env(safe-area-inset-bottom))";
+
   return (
     <div
       className={
         isNextUpActive
           ? "mx-auto flex h-[100dvh] max-w-md flex-col overflow-hidden border-x border-border bg-background"
-          : "mx-auto min-h-screen max-w-md border-x border-border bg-background"
+          : "mx-auto min-h-[100dvh] max-w-md border-x border-border bg-background"
       }
+      style={isNextUpActive ? { paddingBottom: bottomNavSpacing } : undefined}
     >
-      <div className={isNextUpActive ? "shrink-0" : undefined}>
-        <Header />
-      </div>
-      <div className={isNextUpActive ? "shrink-0" : undefined}>
-        <TabNavigation activeTab={activeTab} onTabChange={handleTabChange} />
-      </div>
-      <main className={isNextUpActive ? "min-h-0 flex-1 overflow-hidden" : undefined}>
+      {/* Top HUD is hidden only while viewing the Next Up feed. */}
+      {!isNextUpActive && <Header />}
+
+      <main
+        className={isNextUpActive ? "min-h-0 flex-1 overflow-hidden" : undefined}
+        style={isNextUpActive ? undefined : { paddingBottom: bottomNavSpacing }}
+      >
         {renderContent()}
       </main>
+
+      <TabNavigation activeTab={activeTab} onTabChange={handleTabChange} />
     </div>
   );
 };
