@@ -457,7 +457,7 @@ export const createLeague = async (payload: {
 export const updateLeague = async (
   leagueId: string,
   payload: {
-    name: string;
+    name?: string;
     governing_body?: string | null;
     age_group?: string | null;
     region?: string | null;

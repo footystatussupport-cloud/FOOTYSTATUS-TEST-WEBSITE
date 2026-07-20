@@ -186,12 +186,19 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
   const accountRole = String(bundle?.profile?.account_role || bundle?.profile?.account_type || bundle?.profile?.role || "").toLowerCase();
   const isRefereeAccount = accountKind === "referee";
   const isScoutAccount = accountKind === "scout";
+  const isSchoolTeamAccount =
+    accountKind === "team" &&
+    (String(activeRecord?.team_type || "").toLowerCase() === "school" || accountRole === "school_team");
   const statsContextTitle = [statsContext?.team_name, statsContext?.league_name || statsContext?.season].filter(Boolean).join(" · ");
 
   const hydrateForm = (data: Record<string, any>) => {
     const profile = data.profile || {};
     const kind = resolveAccountKind(data);
     const record = recordForKind(data, kind);
+    // Scouts keep their location (city/country) on their staff_profiles row —
+    // the same record scout self-editing saves to — but recordForKind maps the
+    // scout kind to no record, so read the staff row directly for those fields.
+    const scoutStaffRecord = kind === "scout" ? data?.staff_profile || {} : {};
     const contacts = Object.fromEntries((data.contacts || []).map((item: any) => [item.contact_type, item.value]));
     const preferredContactEmail = kind === "team"
       ? record.contact_email
@@ -202,10 +209,18 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
     setProExpiry(data.profile?.pro_expires_at ? String(data.profile.pro_expires_at).slice(0, 10) : "");
     setProPlan(normalizeAdminPlan(data.profile?.account_tier));
     setForm({
-      full_name: text(profile.full_name || record.full_name || profile.club_name || record.club_name),
+      // Club/school team accounts: team_profiles.club_name is the canonical
+      // name (it wins every server-side sync), so prefill from it — never from
+      // a possibly stale profiles.full_name.
+      full_name: kind === "team"
+        ? text(record.club_name || profile.club_name || profile.full_name)
+        : text(profile.full_name || record.full_name || profile.club_name || record.club_name),
       username: text(profile.username),
       bio: text(profile.bio),
-      avatar_url: text(profile.avatar_url || record.profile_image_url || record.logo_url),
+      // Teams display team_profiles.logo_url (canonical), so prefill from it.
+      avatar_url: kind === "team"
+        ? text(record.logo_url || profile.avatar_url)
+        : text(profile.avatar_url || record.profile_image_url || record.logo_url),
       account_role: text(profile.account_role),
       position: text(record.position || profile.position),
       height: text(record.height),
@@ -216,11 +231,12 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
       jersey_number: text(record.jersey_number),
       player_gender: text(record.player_gender || profile.player_gender),
       team: text(record.team || profile.team_name),
-      city: text(record.city || profile.city),
-      country: text(record.country),
+      city: text(record.city || scoutStaffRecord.city || profile.city),
+      country: text(record.country || scoutStaffRecord.country),
       location: text(profile.coaching_location || profile.location),
       nationality: text(profile.nationality),
       coaching_role_type: text(profile.coaching_role_type || record.role),
+      years_experience: text(record.years_experience ?? scoutStaffRecord.years_experience ?? ""),
       coaching_licenses: Array.isArray(profile.coaching_licenses || record.coaching_licenses) ? (profile.coaching_licenses || record.coaching_licenses).join(", ") : text(profile.coaching_licenses || record.coaching_licenses),
       past_coaching_experience: text(profile.past_coaching_experience || record.years_experience),
       teams_currently_coaching: text(profile.teams_currently_coaching || record.team_organization_name),
@@ -230,6 +246,8 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
       scouting_experience: text(profile.scouting_experience),
       scouting_regions: text(profile.scouting_regions),
       scouting_licenses: Array.isArray(profile.scouting_licenses) ? profile.scouting_licenses.join(", ") : text(profile.scouting_licenses),
+      scouting_age_groups: Array.isArray(profile.scouting_age_groups) ? profile.scouting_age_groups.join(", ") : text(profile.scouting_age_groups),
+      scouting_positions: Array.isArray(profile.scouting_positions) ? profile.scouting_positions.join(", ") : text(profile.scouting_positions),
       scouting_accolades: text(profile.scouting_accolades),
       referee_certification_level: text(profile.referee_certification_level),
       referee_license_number: text(profile.referee_license_number),
@@ -245,10 +263,27 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
       founded_year: text(record.founded_year),
       home_stadium: text(record.home_stadium),
       training_ground: text(record.training_ground),
+      leagues_offered: Array.isArray(record.leagues_offered) ? record.leagues_offered.join(", ") : text(record.leagues_offered),
+      age_groups_offered: Array.isArray(record.age_groups_offered) ? record.age_groups_offered.join(", ") : text(record.age_groups_offered),
+      home_jersey_color: text(record.home_jersey_color),
+      away_jersey_color: text(record.away_jersey_color),
+      third_kit_color: text(record.third_kit_color),
+      team_mascot: text(record.team_mascot),
+      sport: text(record.sport),
+      league_conference: text(record.league_conference),
+      school_website: text(record.school_website),
+      social_links: text(record.social_links),
+      team_colors: text(record.team_colors),
+      head_coach_name: text(record.head_coach_name),
+      head_coach_email: text(record.head_coach_email),
+      head_coach_phone: text(record.head_coach_phone),
       contact_email: text(preferredContactEmail),
       contact_phone: text(preferredContactPhone),
       instagram: text(contacts.instagram),
-      website: text(contacts.website),
+      // School teams keep their canonical website on team_profiles.school_website
+      // (that's what their profile displays); fall back to it when no generic
+      // website contact row exists.
+      website: text(contacts.website || record.school_website),
       tiktok: text(contacts.tiktok),
       youtube: text(contacts.youtube),
     });
@@ -399,6 +434,29 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
       // Never send a null/blank username: leaving the field empty preserves
       // the account's existing username instead of tripping validation.
       const nextUsername = normalizeUsername(form.username);
+      if (accountKind === "team") {
+        // A club/school team's canonical name and logo live on team_profiles
+        // (club_name / logo_url) — DB triggers and the admin sync cascade them
+        // to profiles and teams, and they win every sync. Patching only
+        // profiles.full_name would be silently reverted by that sync, so save
+        // the canonical row first (silently, so "Changes saved" only appears
+        // once everything actually succeeded).
+        setSaving(true);
+        const teamHeaderUpdate = await (supabase as any).rpc("admin_patch_account_record", {
+          _target_user_id: targetUserId,
+          _table_name: "team_profiles",
+          _changes: {
+            ...(form.full_name?.trim() ? { club_name: form.full_name.trim() } : {}),
+            logo_url: form.avatar_url || null,
+          },
+          _reason: optionalReason(),
+        });
+        setSaving(false);
+        if (teamHeaderUpdate.error) {
+          toast({ title: "Could not save changes", description: teamHeaderUpdate.error.message, variant: "destructive" });
+          return;
+        }
+      }
       ok = await patch("profiles", {
         full_name: form.full_name,
         ...(nextUsername ? { username: nextUsername } : {}),
@@ -434,6 +492,15 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
           _changes: {
             contact_email: form.contact_email || null,
             contact_phone: form.contact_phone || null,
+            // A school team's displayed website / social links live on its
+            // team_profiles row — keep them saved (and clearable) from the
+            // Contact Information editor.
+            ...(isSchoolTeamAccount
+              ? {
+                  school_website: form.website?.trim() || null,
+                  social_links: form.social_links?.trim() || null,
+                }
+              : {}),
           },
           _reason: optionalReason(),
         });
@@ -493,18 +560,96 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
         referee_profile_public: form.referee_profile_public === "false" ? false : true,
       });
     } else if (accountKind === "scout") {
-      ok = await patch("profiles", {
-        scout_role_title: form.scout_role_title || null,
-        scout_organization: form.scout_organization || null,
-        scouting_experience: form.scouting_experience || null,
-        scouting_regions: form.scouting_regions || null,
-        scouting_licenses: form.scouting_licenses ? form.scouting_licenses.split(",").map((item) => item.trim()).filter(Boolean) : [],
-        scouting_accolades: form.scouting_accolades || null,
+      // Location lives on the scout's staff_profiles row (the record scout
+      // self-editing saves to). Save it first without the success toast so
+      // "Changes saved" only fires once both updates actually succeed.
+      setSaving(true);
+      const scoutLocationUpdate = await (supabase as any).rpc("admin_patch_account_record", {
+        _target_user_id: targetUserId,
+        _table_name: "staff_profiles",
+        _changes: { city: form.city || null, country: form.country || null },
+        _reason: optionalReason(),
       });
+      setSaving(false);
+      if (scoutLocationUpdate.error) {
+        toast({ title: "Could not save changes", description: scoutLocationUpdate.error.message, variant: "destructive" });
+        ok = false;
+      } else {
+        ok = await patch("profiles", {
+          scout_role_title: form.scout_role_title || null,
+          scout_organization: form.scout_organization || null,
+          scouting_experience: form.scouting_experience || null,
+          scouting_regions: form.scouting_regions || null,
+          // Keep coaching_location aligned with the city — the server-side
+          // account sync computes staff_profiles.city as
+          // coalesce(profiles.coaching_location, staff.city), so a stale
+          // coaching_location would silently revert the city saved above.
+          coaching_location: form.city || null,
+          scouting_licenses: form.scouting_licenses ? form.scouting_licenses.split(",").map((item) => item.trim()).filter(Boolean) : [],
+          scouting_age_groups: form.scouting_age_groups ? form.scouting_age_groups.split(",").map((item) => item.trim()).filter(Boolean) : [],
+          scouting_positions: form.scouting_positions ? form.scouting_positions.split(",").map((item) => item.trim()).filter(Boolean) : [],
+          scouting_accolades: form.scouting_accolades || null,
+        });
+      }
     } else if (accountKind === "team") {
-      ok = await patch("team_profiles", { club_name: form.club_name, logo_url: form.avatar_url || null, founded_year: form.founded_year ? Number(form.founded_year) : null, city: form.city || null, country: form.country || null, home_stadium: form.home_stadium || null, training_ground: form.training_ground || null, contact_email: form.contact_email || null, contact_phone: form.contact_phone || null });
+      // Name and logo are saved from the top profile (header) editor; website
+      // and social links from the Contact Information editor. The Details
+      // editor saves only the fields it actually shows.
+      ok = await patch("team_profiles", {
+        founded_year: form.founded_year ? Number(form.founded_year) : null,
+        city: form.city || null,
+        country: form.country || null,
+        home_stadium: form.home_stadium || null,
+        training_ground: form.training_ground || null,
+        contact_email: form.contact_email || null,
+        contact_phone: form.contact_phone || null,
+        // Arrays stay arrays — same comma-separated editing format and split
+        // as the club's own Details editor.
+        leagues_offered: form.leagues_offered ? form.leagues_offered.split(",").map((item) => item.trim()).filter(Boolean) : [],
+        age_groups_offered: form.age_groups_offered ? form.age_groups_offered.split(",").map((item) => item.trim()).filter(Boolean) : [],
+        home_jersey_color: form.home_jersey_color || null,
+        away_jersey_color: form.away_jersey_color || null,
+        third_kit_color: form.third_kit_color || null,
+        // School-only fields are saved only when the form actually shows them,
+        // so hidden fields are never overwritten for club teams.
+        ...(isSchoolTeamAccount
+          ? {
+              team_mascot: form.team_mascot || null,
+              sport: form.sport || null,
+              league_conference: form.league_conference || null,
+              team_colors: form.team_colors || null,
+              head_coach_name: form.head_coach_name || null,
+              head_coach_email: form.head_coach_email?.trim().toLowerCase() || null,
+              head_coach_phone: form.head_coach_phone || null,
+            }
+          : {}),
+      });
     } else if (accountKind === "staff") {
-      ok = await patch("profiles", { coaching_role_type: form.coaching_role_type || null, coaching_licenses: form.coaching_licenses ? form.coaching_licenses.split(",").map((item) => item.trim()).filter(Boolean) : [], past_coaching_experience: form.past_coaching_experience || null, teams_currently_coaching: form.teams_currently_coaching || null, coaching_accolades: form.coaching_accolades || null, coaching_location: form.location || null });
+      // Coaching experience lives on staff_profiles.years_experience (the same
+      // column staff signup and self-editing write). Validate it, save it
+      // silently first, then patch profiles so "Changes saved" only fires once
+      // both updates actually succeeded.
+      const yearsInput = String(form.years_experience ?? "").trim();
+      const yearsValue = yearsInput ? Number(yearsInput) : null;
+      if (yearsValue !== null && (!Number.isFinite(yearsValue) || yearsValue < 0)) {
+        toast({ title: "Could not save changes", description: "Coaching Experience in Years must be a non-negative number.", variant: "destructive" });
+        ok = false;
+      } else {
+        setSaving(true);
+        const staffYearsUpdate = await (supabase as any).rpc("admin_patch_account_record", {
+          _target_user_id: targetUserId,
+          _table_name: "staff_profiles",
+          _changes: { years_experience: yearsValue },
+          _reason: optionalReason(),
+        });
+        setSaving(false);
+        if (staffYearsUpdate.error) {
+          toast({ title: "Could not save changes", description: staffYearsUpdate.error.message, variant: "destructive" });
+          ok = false;
+        } else {
+          ok = await patch("profiles", { coaching_role_type: form.coaching_role_type || null, coaching_licenses: form.coaching_licenses ? form.coaching_licenses.split(",").map((item) => item.trim()).filter(Boolean) : [], past_coaching_experience: form.past_coaching_experience || null, teams_currently_coaching: form.teams_currently_coaching || null, coaching_accolades: form.coaching_accolades || null, coaching_location: form.location || null });
+        }
+      }
     } else if (accountKind === "parent") {
       ok = await patch("parent_profiles", { full_name: form.full_name, contact_email: form.contact_email || null, contact_phone: form.contact_phone || null });
     } else {
@@ -624,6 +769,11 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
                   <Field label="Website" value={form.website || ""} onChange={(value) => update("website", value)} />
                   <Field label="TikTok" value={form.tiktok || ""} onChange={(value) => update("tiktok", value)} />
                   <Field label="YouTube" value={form.youtube || ""} onChange={(value) => update("youtube", value)} />
+                  {isSchoolTeamAccount ? (
+                    <div className="sm:col-span-2">
+                      <Field label="Social Media Links" value={form.social_links || ""} placeholder="@schoolsoccer on Instagram, X, TikTok" onChange={(value) => update("social_links", value)} />
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 
@@ -690,6 +840,10 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
                   <Field label="Organization / Team" value={form.scout_organization || ""} onChange={(value) => update("scout_organization", value)} />
                   <Field label="Regions Covered" value={form.scouting_regions || ""} onChange={(value) => update("scouting_regions", value)} />
                   <Field label="Licenses / Certifications" value={form.scouting_licenses || ""} placeholder="Separate with commas" onChange={(value) => update("scouting_licenses", value)} />
+                  <Field label="Age Groups Covered" value={form.scouting_age_groups || ""} placeholder="U13, U15, U17" onChange={(value) => update("scouting_age_groups", value)} />
+                  <Field label="Positions Scouted" value={form.scouting_positions || ""} placeholder="Wingers, center backs" onChange={(value) => update("scouting_positions", value)} />
+                  <Field label="City" value={form.city || ""} placeholder="Los Angeles" onChange={(value) => update("city", value)} />
+                  <Field label="Country" value={form.country || ""} placeholder="USA" onChange={(value) => update("country", value)} />
                   <div className="space-y-1.5 sm:col-span-2"><Label>Scouting Experience</Label><Textarea value={form.scouting_experience || ""} onChange={(event) => update("scouting_experience", event.target.value)} /></div>
                   <div className="space-y-1.5 sm:col-span-2"><Label>Accolades</Label><Textarea value={form.scouting_accolades || ""} onChange={(event) => update("scouting_accolades", event.target.value)} /></div>
                 </div>
@@ -700,6 +854,7 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
                   <Field label="Coach or Staff Role" value={form.coaching_role_type || ""} onChange={(value) => update("coaching_role_type", value)} />
                   <Field label="Licenses" value={form.coaching_licenses || ""} placeholder="Separate licenses with commas" onChange={(value) => update("coaching_licenses", value)} />
                   <Field label="Teams Coached" value={form.teams_currently_coaching || ""} onChange={(value) => update("teams_currently_coaching", value)} />
+                  <Field label="Coaching Experience in Years" type="number" value={form.years_experience || ""} placeholder="5" onChange={(value) => update("years_experience", value)} />
                   <Field label="Location" value={form.location || ""} onChange={(value) => update("location", value)} />
                   <div className="space-y-1.5"><Label>Experience</Label><Textarea value={form.past_coaching_experience || ""} onChange={(event) => update("past_coaching_experience", event.target.value)} /></div>
                   <div className="space-y-1.5"><Label>Accolades</Label><Textarea value={form.coaching_accolades || ""} onChange={(event) => update("coaching_accolades", event.target.value)} /></div>
@@ -708,15 +863,35 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
 
               {effectiveSection === "profile" && editorKind === "details" && accountKind === "team" ? (
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <Field label="Team or School Name" value={form.club_name || ""} onChange={(value) => update("club_name", value)} />
-                  <Field label="Logo URL" value={form.avatar_url || ""} onChange={(value) => update("avatar_url", value)} />
+                  {/* Name, logo, website, and social links are managed by the
+                      top profile / Contact Information editors — never here,
+                      so no two editors fight over the same field. */}
                   <Field label="Founded Year" type="number" value={form.founded_year || ""} onChange={(value) => update("founded_year", value)} />
                   <Field label="City" value={form.city || ""} onChange={(value) => update("city", value)} />
                   <Field label="Country" value={form.country || ""} onChange={(value) => update("country", value)} />
-                  <Field label="Home Field" value={form.home_stadium || ""} onChange={(value) => update("home_stadium", value)} />
-                  <Field label="Training Ground" value={form.training_ground || ""} onChange={(value) => update("training_ground", value)} />
                   <Field label="Email" value={form.contact_email || ""} onChange={(value) => update("contact_email", value)} />
                   <Field label="Phone Number" value={form.contact_phone || ""} onChange={(value) => update("contact_phone", value)} />
+                  <Field label="Leagues Provided" value={form.leagues_offered || ""} placeholder="MLS Next, ECNL" onChange={(value) => update("leagues_offered", value)} />
+                  <Field label="Age Groups Provided" value={form.age_groups_offered || ""} placeholder="U13, U14, U15" onChange={(value) => update("age_groups_offered", value)} />
+                  <div className="sm:col-span-2"><Field label="Home Field" value={form.home_stadium || ""} placeholder="123 Main St, Dallas, TX" onChange={(value) => update("home_stadium", value)} /></div>
+                  <div className="sm:col-span-2"><Field label="Training Ground" value={form.training_ground || ""} onChange={(value) => update("training_ground", value)} /></div>
+                  <div className="sm:col-span-2 space-y-3 rounded-lg border border-border p-3">
+                    <p className="text-sm font-semibold text-foreground">Jersey Colors</p>
+                    <Field label="Home Kit Colors" value={form.home_jersey_color || ""} placeholder="Red" onChange={(value) => update("home_jersey_color", value)} />
+                    <Field label="Away Kit Colors" value={form.away_jersey_color || ""} placeholder="White" onChange={(value) => update("away_jersey_color", value)} />
+                    <Field label="Third Kit Colors (Optional)" value={form.third_kit_color || ""} placeholder="Blue" onChange={(value) => update("third_kit_color", value)} />
+                  </div>
+                  {isSchoolTeamAccount ? (
+                    <>
+                      <Field label="Mascot" value={form.team_mascot || ""} onChange={(value) => update("team_mascot", value)} />
+                      <Field label="Sport" value={form.sport || ""} onChange={(value) => update("sport", value)} />
+                      <Field label="League / Conference" value={form.league_conference || ""} onChange={(value) => update("league_conference", value)} />
+                      <Field label="Team Colors" value={form.team_colors || ""} placeholder="Navy & Gold" onChange={(value) => update("team_colors", value)} />
+                      <Field label="Head Coach Name" value={form.head_coach_name || ""} onChange={(value) => update("head_coach_name", value)} />
+                      <Field label="Head Coach Email" type="email" value={form.head_coach_email || ""} onChange={(value) => update("head_coach_email", value)} />
+                      <Field label="Head Coach Phone" value={form.head_coach_phone || ""} onChange={(value) => update("head_coach_phone", value)} />
+                    </>
+                  ) : null}
                 </div>
               ) : null}
 

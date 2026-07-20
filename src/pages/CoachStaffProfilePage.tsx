@@ -8,6 +8,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { CoachStaffProfile, CoachStaffTeamLink, fetchCoachStaffTeamLinksForUser, formatRoleDisplayLabel, groupCoachStaffTeamLinksByMotherTeam } from "@/lib/coachStaffTeams";
 import InlineProfileAdminControls from "@/components/admin/InlineProfileAdminControls";
 import ProfileHeader from "@/components/ProfileHeader";
+import { useAuth } from "@/hooks/useAuth";
+import { isFootyStatusSuperAdminEmail } from "@/lib/superAdmin";
 import {
   ParentPlayerLink,
   ParentProfileDetails,
@@ -42,6 +44,10 @@ interface StaffRecordDetails {
 const CoachStaffProfilePage = () => {
   const { userId } = useParams<{ userId: string }>();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  // The Footy Status admin gets the Contact Information pen even when the
+  // section has no publicly visible rows yet (so contacts can be added).
+  const isOfficialAdminViewer = isFootyStatusSuperAdminEmail(user?.email);
   const [profile, setProfile] = useState<CoachStaffProfile | null>(null);
   const [teams, setTeams] = useState<CoachStaffTeamLink[]>([]);
   const [contacts, setContacts] = useState<ContactItem[]>([]);
@@ -164,11 +170,11 @@ const CoachStaffProfilePage = () => {
             }
             username={profile.username}
             bio={profile.bio}
-            topRight={<InlineProfileAdminControls targetUserId={profile.user_id} targetName={profile.full_name} />}
+            topRight={<InlineProfileAdminControls targetUserId={profile.user_id} targetName={profile.full_name} onChanged={() => loadProfileRef.current?.()} />}
           />
 
           <section className="mb-6">
-            <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-lg font-semibold text-navy mb-3">{isParent ? "Parent / Guardian Details" : isScout ? "Scout Details" : isAcademyStaff ? "Club Director / Team Staff Details" : "Coach / Staff Details"}</h2><InlineProfileAdminControls targetUserId={profile.user_id} targetName={profile.full_name} section="profile" label="Edit profile information" /></div>
+            <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-lg font-semibold text-navy mb-3">{isParent ? "Parent / Guardian Details" : isScout ? "Scout Details" : isAcademyStaff ? "Club Director / Team Staff Details" : "Coach / Staff Details"}</h2><InlineProfileAdminControls targetUserId={profile.user_id} targetName={profile.full_name} section="profile" label="Edit profile information" onChanged={() => loadProfileRef.current?.()} /></div>
             <div className="bg-card border border-border rounded-xl">
               {isParent ? (
                 <>
@@ -396,10 +402,24 @@ const CoachStaffProfilePage = () => {
             </section>
           ) : null}
 
-          {dedupedContacts.length ? (
+          {dedupedContacts.length || (isOfficialAdminViewer && !isParent) ? (
             <section className="mb-6">
-              <h2 className="mb-3 text-lg font-semibold text-navy">Contact Information</h2>
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <h2 className="text-lg font-semibold text-navy">Contact Information</h2>
+                {!isParent ? (
+                  <InlineProfileAdminControls
+                    targetUserId={profile.user_id}
+                    targetName={profile.full_name}
+                    section="profile"
+                    label="Edit contact information"
+                    onChanged={() => loadProfileRef.current?.()}
+                  />
+                ) : null}
+              </div>
               <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+                {!dedupedContacts.length ? (
+                  <p className="text-sm text-muted-foreground">No contact information added yet.</p>
+                ) : null}
                 {dedupedContacts.map((contact) => (
                   <div key={contact.id} className="flex items-start gap-3 min-w-0">
                     {contact.contact_type.includes("phone") ? (

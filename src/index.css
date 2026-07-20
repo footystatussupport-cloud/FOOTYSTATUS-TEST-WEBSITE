@@ -250,8 +250,13 @@
    Normal players, parents, coaches, teams, scouts, and referees keep the
    existing mobile-app width. */
 @media (min-width: 1024px) {
+  /* Widen scrollable pages (Home, Matches, Explore) for the admin desktop view.
+     The Next Up feed is intentionally excluded: it must stay a phone-portrait
+     column so the creator's saved fit_mode frames the video identically on every
+     platform. Matching only `min-h-[100dvh]` (a full token) skips the Next Up
+     wrapper, which uses `h-[100dvh]`. */
   body.footy-status-admin-desktop [class~="max-w-md"][class~="mx-auto"][class~="border-x"][class~="min-h-screen"],
-  body.footy-status-admin-desktop [class~="max-w-md"][class~="mx-auto"][class~="border-x"][class*="h-[100dvh]"] {
+  body.footy-status-admin-desktop [class~="max-w-md"][class~="mx-auto"][class~="border-x"][class~="min-h-[100dvh]"] {
     width: min(1180px, calc(100vw - 48px));
     max-width: min(1180px, calc(100vw - 48px));
   }
@@ -282,8 +287,9 @@
 }
 
 @media (min-width: 1440px) {
+  /* Next Up (`h-[100dvh]`) stays phone-width; only scrollable pages widen. */
   body.footy-status-admin-desktop [class~="max-w-md"][class~="mx-auto"][class~="border-x"][class~="min-h-screen"],
-  body.footy-status-admin-desktop [class~="max-w-md"][class~="mx-auto"][class~="border-x"][class*="h-[100dvh]"] {
+  body.footy-status-admin-desktop [class~="max-w-md"][class~="mx-auto"][class~="border-x"][class~="min-h-[100dvh]"] {
     width: min(1320px, calc(100vw - 64px));
     max-width: min(1320px, calc(100vw - 64px));
   }

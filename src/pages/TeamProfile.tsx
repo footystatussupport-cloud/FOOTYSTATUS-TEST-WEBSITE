@@ -890,7 +890,7 @@ const TeamProfile = () => {
           username={teamUsername}
           bio={teamBio}
           fallbackIcon={<Shield className="h-12 w-12 text-background" />}
-          topRight={<InlineProfileAdminControls targetUserId={team.owner_user_id} targetName={team.name} />}
+          topRight={<InlineProfileAdminControls targetUserId={team.owner_user_id} targetName={team.name} onChanged={fetchTeamData} />}
           nameBadge={
             teamApproved ? (
               <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-green-600 text-white shadow-sm" aria-label="Official Footy authenticated profile">
@@ -910,7 +910,7 @@ const TeamProfile = () => {
         />
 
         <section className="mb-6">
-          <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-lg font-semibold text-navy">Details</h2><InlineProfileAdminControls targetUserId={team.owner_user_id} targetName={team.name} section="profile" label="Edit team details" /></div>
+          <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-lg font-semibold text-navy">Details</h2><InlineProfileAdminControls targetUserId={team.owner_user_id} targetName={team.name} section="profile" label="Edit team details" onChanged={fetchTeamData} /></div>
           <div className="bg-card border border-border rounded-xl">
             {teamProfileDetails?.leagues_offered?.length ? (
               <div className="flex items-center gap-3 p-4">
@@ -1057,7 +1057,7 @@ const TeamProfile = () => {
         ) : null}
 
         <section className="mb-6">
-          <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-lg font-semibold text-navy">Contact Information</h2><InlineProfileAdminControls targetUserId={team.owner_user_id} targetName={team.name} section="profile" label="Edit team contact information" /></div>
+          <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-lg font-semibold text-navy">Contact Information</h2><InlineProfileAdminControls targetUserId={team.owner_user_id} targetName={team.name} section="profile" label="Edit team contact information" onChanged={fetchTeamData} /></div>
           <div className="bg-card border border-border rounded-xl">
               {team.contact_email && (
                 <div className="flex items-center gap-3 min-w-0 p-4">

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, ChangeEvent, PointerEvent, useMemo } from "react";
+import { useState, useEffect, useRef, ChangeEvent, useMemo } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useRegisterRefresh } from "@/hooks/usePullToRefresh";
 import { ArrowLeft, Camera, User, Calendar, Trophy, Edit, Save, X, Upload, Video, Crown, Lock, Link as LinkIcon, Phone, Mail, Shield, Star, Building2, Briefcase, MapPin, Users, Heart, Eye, Check, BadgeCheck, Info } from "lucide-react";
@@ -19,6 +19,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ActiveMembership, LiveStandingSummary, TeamRosterPlayer, fetchActiveMembershipsForUser, fetchLiveStandingForMembership, fetchRosterForTeam, formatTeamLeagueLine, getMembershipTeamDestination, removeTeamRosterPlayer } from "@/lib/teamMemberships";
 import { OfferedClubTeam } from "@/components/club/ClubTeamsManager";
 import DaughterTeamEditDialog from "@/components/club/DaughterTeamEditDialog";
+import ProfilePhotoCropUploader, { type ProfilePhotoCropUploaderHandle } from "@/components/ProfilePhotoCropUploader";
 import { ClubTeamRecord, archiveClubTeam, createDaughterTeam, fetchClubByTeamId, fetchClubTeamOptionsForParentTeam, fetchClubTeams, fetchRosterForClubTeam, formatTeamGender, getAgeGroupSortValue, getOfferedTeamDuplicate, normalizeTeamGender, sanitizeClubTeamAccessCode, setDaughterTeamGender, updateClubTeamAccessCode } from "@/lib/clubTeams";
 import ClubNewsSection from "@/components/club-news/ClubNewsSection";
 import { Badge } from "@/components/ui/badge";
@@ -666,7 +667,7 @@ const ProfilePage = () => {
   const [savingClubTeamAccessCodeId, setSavingClubTeamAccessCodeId] = useState<string | null>(null);
   const [reviewingClubTeamRequestId, setReviewingClubTeamRequestId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [editingSection, setEditingSection] = useState<"details" | "contact" | null>(null);
+  const [editingSection, setEditingSection] = useState<"top" | "details" | "contact" | null>(null);
   const [saving, setSaving] = useState(false);
   const [daughterTeamDialogOpen, setDaughterTeamDialogOpen] = useState(false);
   const [creatingDaughterTeam, setCreatingDaughterTeam] = useState(false);
@@ -680,13 +681,7 @@ const ProfilePage = () => {
     level: "",
   });
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
-  const [showAvatarCropDialog, setShowAvatarCropDialog] = useState(false);
-  const [avatarCropSourceFile, setAvatarCropSourceFile] = useState<File | null>(null);
-  const [avatarCropPreviewUrl, setAvatarCropPreviewUrl] = useState<string | null>(null);
-  const [avatarCropImageSize, setAvatarCropImageSize] = useState<{ width: number; height: number } | null>(null);
-  const [avatarCropZoom, setAvatarCropZoom] = useState(1);
-  const [avatarCropOffsetX, setAvatarCropOffsetX] = useState(0);
-  const [avatarCropOffsetY, setAvatarCropOffsetY] = useState(0);
+  const avatarUploaderRef = useRef<ProfilePhotoCropUploaderHandle>(null);
   const [uploadingClip, setUploadingClip] = useState(false);
   // Progress (0-100) while the trimmed clip is being exported in the browser
   // before upload; null when no processing is in progress.
@@ -777,13 +772,10 @@ const ProfilePage = () => {
     }
   }, [clipPlaybackVolume, clipTrimEnd, clipTrimStart, selectedVideoPreviewUrl]);
 
-  const avatarInputRef = useRef<HTMLInputElement>(null);
   const clipInputRef = useRef<HTMLInputElement>(null);
   const clipPreviewVideoRef = useRef<HTMLVideoElement>(null);
-  const avatarCropDragRef = useRef<{ pointerId: number; startX: number; startY: number; offsetX: number; offsetY: number } | null>(null);
   const navigate = useNavigate();
   const { toast } = useToast();
-  const avatarCropPreviewSize = 288;
   const stopTileEvent = (event: { stopPropagation: () => void }) => {
     event.stopPropagation();
   };
@@ -804,78 +796,6 @@ const ProfilePage = () => {
     if (status === "rejected") return "Declined";
     return status.charAt(0).toUpperCase() + status.slice(1);
   };
-  const avatarCropMetrics = useMemo(() => {
-    if (!avatarCropImageSize) return null;
-
-    const baseScale = Math.max(
-      avatarCropPreviewSize / avatarCropImageSize.width,
-      avatarCropPreviewSize / avatarCropImageSize.height
-    );
-    const drawWidth = avatarCropImageSize.width * baseScale * avatarCropZoom;
-    const drawHeight = avatarCropImageSize.height * baseScale * avatarCropZoom;
-    const maxOffsetX = Math.max(0, (drawWidth - avatarCropPreviewSize) / 2);
-    const maxOffsetY = Math.max(0, (drawHeight - avatarCropPreviewSize) / 2);
-    const clampedOffsetX = Math.max(-maxOffsetX, Math.min(maxOffsetX, avatarCropOffsetX));
-    const clampedOffsetY = Math.max(-maxOffsetY, Math.min(maxOffsetY, avatarCropOffsetY));
-
-    return {
-      drawWidth,
-      drawHeight,
-      drawX: (avatarCropPreviewSize - drawWidth) / 2 + clampedOffsetX,
-      drawY: (avatarCropPreviewSize - drawHeight) / 2 + clampedOffsetY,
-      maxOffsetX,
-      maxOffsetY,
-      clampedOffsetX,
-      clampedOffsetY,
-    };
-  }, [avatarCropImageSize, avatarCropOffsetX, avatarCropOffsetY, avatarCropZoom]);
-
-  const clampAvatarCropOffset = (value: number, maxOffset = 0) =>
-    Math.max(-maxOffset, Math.min(maxOffset, value));
-
-  const setClampedAvatarCropOffsets = (nextX: number, nextY: number) => {
-    setAvatarCropOffsetX(clampAvatarCropOffset(nextX, avatarCropMetrics?.maxOffsetX ?? 0));
-    setAvatarCropOffsetY(clampAvatarCropOffset(nextY, avatarCropMetrics?.maxOffsetY ?? 0));
-  };
-
-  const handleAvatarCropPointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    if (!avatarCropMetrics) return;
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    avatarCropDragRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      offsetX: avatarCropMetrics.clampedOffsetX,
-      offsetY: avatarCropMetrics.clampedOffsetY,
-    };
-  };
-
-  const handleAvatarCropPointerMove = (event: PointerEvent<HTMLDivElement>) => {
-    const dragState = avatarCropDragRef.current;
-    if (!dragState || dragState.pointerId !== event.pointerId || !avatarCropMetrics) return;
-    event.preventDefault();
-    setClampedAvatarCropOffsets(
-      dragState.offsetX + event.clientX - dragState.startX,
-      dragState.offsetY + event.clientY - dragState.startY
-    );
-  };
-
-  const handleAvatarCropPointerUp = (event: PointerEvent<HTMLDivElement>) => {
-    if (avatarCropDragRef.current?.pointerId === event.pointerId) {
-      avatarCropDragRef.current = null;
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }
-    }
-  };
-
-  useEffect(() => {
-    if (!avatarCropMetrics) return;
-    setAvatarCropOffsetX(avatarCropMetrics.clampedOffsetX);
-    setAvatarCropOffsetY(avatarCropMetrics.clampedOffsetY);
-  }, [avatarCropMetrics]);
-
   const normalizeAccountCategory = (nextProfile?: ProfileData | null) =>
     nextProfile?.account_category ||
     (nextProfile?.role === "player" ? "player" : nextProfile?.role === "parent" ? "parent" : nextProfile?.role === "referee" ? "referee" : nextProfile?.role ? "team_staff" : null);
@@ -952,6 +872,15 @@ const ProfilePage = () => {
       : null;
 
   const getAccountRoleLabel = () => {
+    // The Footy Status admin is a private system account — never a Club Team or
+    // any other public account type. Identify it by the admin permission/role
+    // (email-verified official account or the internal admin account_role),
+    // never leave it labelled as whatever public type it was created under.
+    const adminRoles = ["official", "admin", "footy_status_official", "footy_status_admin"];
+    if (isOfficialFootyStatusAccount || adminRoles.includes(resolvedAccountRole || "")) {
+      return "Footy Status Admin";
+    }
+
     const selectedStaffRole =
       formatSpecificRoleDisplayLabel(staffAccountData?.coaching_role_type) ||
       formatSpecificRoleDisplayLabel(profile?.coaching_role_type) ||
@@ -989,10 +918,11 @@ const ProfilePage = () => {
     }
   };
 
+  const isEditingTop = editingSection === "top";
   const isEditingDetails = editingSection === "details";
   const isEditingContact = editingSection === "contact";
 
-  const startEditingSection = (section: "details" | "contact") => {
+  const startEditingSection = (section: "top" | "details" | "contact") => {
     setEditForm(buildEditFormFromCurrentState());
     if (isTeamAccount) setTeamStaffForm(buildTeamStaffForm());
     setEditingSection(section);
@@ -2969,7 +2899,7 @@ const ProfilePage = () => {
     const currentUsername = normalizeUsername(profile.username);
     const usernameWasEntered = String(editForm.username ?? "").trim().length > 0;
 
-    if (isEditingDetails && isTeamStaffAccount && !usernameWasEntered) {
+    if (isEditingTop && isTeamStaffAccount && !usernameWasEntered) {
       toast({ title: "Error", description: "Username is required", variant: "destructive" });
       setSaving(false);
       return;
@@ -3567,26 +3497,13 @@ const ProfilePage = () => {
     setReviewingParentLinkId(null);
   };
 
-  const resetAvatarCropState = () => {
-    if (avatarCropPreviewUrl) {
-      URL.revokeObjectURL(avatarCropPreviewUrl);
-    }
-    setShowAvatarCropDialog(false);
-    setAvatarCropSourceFile(null);
-    setAvatarCropPreviewUrl(null);
-    setAvatarCropImageSize(null);
-    setAvatarCropZoom(1);
-    setAvatarCropOffsetX(0);
-    setAvatarCropOffsetY(0);
-    if (avatarInputRef.current) avatarInputRef.current.value = "";
-  };
-
   const uploadAvatarBlob = async (file: Blob | File) => {
     if (!user) return false;
 
     setUploadingAvatar(true);
 
-    const originalExtension = avatarCropSourceFile?.name.split(".").pop()?.toLowerCase();
+    const originalExtension =
+      file instanceof File ? file.name.split(".").pop()?.toLowerCase() : undefined;
     const fileExt = originalExtension === "png" ? "png" : "jpg";
     const filePath = `${user.id}/avatar-${Date.now()}.${fileExt}`;
     const contentType = file.type || (fileExt === "png" ? "image/png" : "image/jpeg");
@@ -3677,112 +3594,6 @@ const ProfilePage = () => {
     await fetchProfile();
     setUploadingAvatar(false);
     return true;
-  };
-
-  const buildCroppedAvatarBlob = async () => {
-    if (!avatarCropPreviewUrl) {
-      throw new Error("No image selected.");
-    }
-
-    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const nextImage = new Image();
-      nextImage.onload = () => resolve(nextImage);
-      nextImage.onerror = () => reject(new Error("We couldn't load that image. Please try another one."));
-      nextImage.src = avatarCropPreviewUrl;
-    });
-
-    const canvas = document.createElement("canvas");
-    const size = 512;
-    canvas.width = size;
-    canvas.height = size;
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      throw new Error("We couldn't prepare that image for upload.");
-    }
-
-    const baseScale = Math.max(size / image.width, size / image.height);
-    const drawWidth = image.width * baseScale * avatarCropZoom;
-    const drawHeight = image.height * baseScale * avatarCropZoom;
-    const maxOffsetX = Math.max(0, (drawWidth - size) / 2);
-    const maxOffsetY = Math.max(0, (drawHeight - size) / 2);
-    const previewToCanvasScale = size / avatarCropPreviewSize;
-    const scaledOffsetX = avatarCropOffsetX * previewToCanvasScale;
-    const scaledOffsetY = avatarCropOffsetY * previewToCanvasScale;
-    const clampedOffsetX = Math.max(-maxOffsetX, Math.min(maxOffsetX, scaledOffsetX));
-    const clampedOffsetY = Math.max(-maxOffsetY, Math.min(maxOffsetY, scaledOffsetY));
-    const drawX = (size - drawWidth) / 2 + clampedOffsetX;
-    const drawY = (size - drawHeight) / 2 + clampedOffsetY;
-
-    ctx.clearRect(0, 0, size, size);
-    ctx.beginPath();
-    ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
-    ctx.closePath();
-    ctx.clip();
-    ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
-
-    return await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob((blob) => {
-        if (!blob) {
-          reject(new Error("We couldn't finish cropping that image."));
-          return;
-        }
-        resolve(blob);
-      }, "image/jpeg", 0.92);
-    });
-  };
-
-  const handleSaveCroppedAvatar = async () => {
-    try {
-      const croppedBlob = await buildCroppedAvatarBlob();
-      const originalExtension = avatarCropSourceFile?.name.split(".").pop()?.toLowerCase();
-      const fileExt = originalExtension === "png" ? "png" : "jpg";
-      const croppedFile = new File([croppedBlob], `avatar.${fileExt}`, { type: croppedBlob.type || `image/${fileExt}` });
-      const uploadSucceeded = await uploadAvatarBlob(croppedFile);
-      if (uploadSucceeded) {
-        resetAvatarCropState();
-      }
-    } catch (error: any) {
-      toast({ title: "Upload failed", description: error.message, variant: "destructive" });
-      setUploadingAvatar(false);
-    }
-  };
-
-  const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !user) return;
-
-    if (!file.type.startsWith("image/")) {
-      toast({ title: "Upload failed", description: "Please choose an image file.", variant: "destructive" });
-      if (avatarInputRef.current) avatarInputRef.current.value = "";
-      return;
-    }
-
-    if (avatarCropPreviewUrl) {
-      URL.revokeObjectURL(avatarCropPreviewUrl);
-    }
-
-    const previewUrl = URL.createObjectURL(file);
-    try {
-      const imageSize = await new Promise<{ width: number; height: number }>((resolve, reject) => {
-        const image = new Image();
-        image.onload = () => resolve({ width: image.width, height: image.height });
-        image.onerror = () => reject(new Error("We couldn't load that image. Please try another one."));
-        image.src = previewUrl;
-      });
-
-      setAvatarCropSourceFile(file);
-      setAvatarCropPreviewUrl(previewUrl);
-      setAvatarCropImageSize(imageSize);
-      setAvatarCropZoom(1);
-      setAvatarCropOffsetX(0);
-      setAvatarCropOffsetY(0);
-      setShowAvatarCropDialog(true);
-    } catch (error: any) {
-      URL.revokeObjectURL(previewUrl);
-      toast({ title: "Upload failed", description: error.message, variant: "destructive" });
-      if (avatarInputRef.current) avatarInputRef.current.value = "";
-    }
   };
 
   const getVideoDuration = (file: File) =>
@@ -4978,11 +4789,16 @@ const ProfilePage = () => {
         
         <div className="flex justify-between items-start mb-6">
           <h1 className="text-2xl font-bold">My Profile</h1>
+          {!isOfficialFootyStatusAccount && !isEditingContact && !isEditingDetails && (
+            <Button variant="outline" size="sm" className="gap-2" onClick={() => startEditingSection("top")}>
+              <Edit className="h-4 w-4" /> {isEditingTop ? "Editing" : "Edit"}
+            </Button>
+          )}
         </div>
 
         {/* Profile header */}
-        <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarUpload} />
-        {isEditingDetails ? (
+        <ProfilePhotoCropUploader ref={avatarUploaderRef} onSave={uploadAvatarBlob} />
+        {isEditingTop ? (
           <div className="mb-8 flex flex-col items-center">
             <div className="relative mb-4">
               <div className="flex h-28 w-28 items-center justify-center overflow-hidden rounded-full bg-muted">
@@ -4993,7 +4809,7 @@ const ProfilePage = () => {
                 )}
               </div>
               <button
-                onClick={() => avatarInputRef.current?.click()}
+                onClick={() => avatarUploaderRef.current?.open()}
                 className="absolute bottom-0 right-0 flex h-8 w-8 items-center justify-center rounded-full bg-primary text-white"
                 disabled={uploadingAvatar}
               >
@@ -5006,7 +4822,7 @@ const ProfilePage = () => {
                 setEditForm({
                   ...editForm,
                   ...(isTeamAccount
-                    ? { display_name: e.target.value }
+                    ? { display_name: e.target.value, club_name: e.target.value }
                     : isTeamStaffAccount
                       ? { display_name: e.target.value, full_name: e.target.value }
                       : { full_name: e.target.value }),
@@ -5015,6 +4831,45 @@ const ProfilePage = () => {
               className="max-w-xs text-center text-xl font-bold"
               placeholder={isTeamAccount ? "Club / Organization Name" : "Full Name"}
             />
+            <div className="mt-3 w-full max-w-xs">
+              <label className="text-sm text-muted-foreground">Username</label>
+              <Input
+                value={editForm.username || ""}
+                onChange={(e) => setEditForm({ ...editForm, username: normalizeUsername(e.target.value) })}
+                placeholder="username"
+                maxLength={USERNAME_MAX_LENGTH}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+              <UsernameAvailabilityHint state={editUsernameAvailability} />
+              <p className="mt-1 text-xs text-muted-foreground">You can change your username once every 14 days.</p>
+            </div>
+            <div className="mt-3 w-full max-w-xs">
+              <label className="text-sm text-muted-foreground">Bio</label>
+              <div className="space-y-2">
+                <Input
+                  value={editForm.bio || ""}
+                  onChange={(e) => setEditForm({ ...editForm, bio: e.target.value.slice(0, BIO_MAX_LENGTH) })}
+                  placeholder={
+                    isTeamAccount
+                      ? "Short club bio"
+                      : isRefereeAccount
+                        ? "Short referee bio"
+                        : isPlayerAccount
+                          ? "Tell us about yourself"
+                          : "Short bio"
+                  }
+                  maxLength={BIO_MAX_LENGTH}
+                  className="text-center placeholder:text-center"
+                  style={{ textAlign: "center" }}
+                />
+                <p className="text-xs text-muted-foreground text-right">{(editForm.bio || "").length}/{BIO_MAX_LENGTH}</p>
+              </div>
+            </div>
+            <Button className="w-full max-w-xs mt-4" onClick={handleSaveProfile} disabled={saving}>
+              <Save className="h-4 w-4 mr-2" /> {saving ? "Saving..." : "Save"}
+            </Button>
           </div>
         ) : (
           <ProfileHeader
@@ -5030,7 +4885,7 @@ const ProfilePage = () => {
             bio={displayProfileBio}
             avatarOverlay={
               <button
-                onClick={() => avatarInputRef.current?.click()}
+                onClick={() => avatarUploaderRef.current?.open()}
                 className="absolute bottom-0 right-0 flex h-8 w-8 items-center justify-center rounded-full bg-primary text-white"
                 disabled={uploadingAvatar}
               >
@@ -5147,7 +5002,7 @@ const ProfilePage = () => {
         <section className="mb-6">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-lg font-semibold text-navy">Details</h3>
-            {!isEditingContact && (
+            {!isEditingContact && !isEditingTop && (
               <Button variant="outline" size="sm" className="gap-2" onClick={() => startEditingSection("details")}>
                 <Edit className="h-4 w-4" /> {isEditingDetails ? "Editing" : "Edit"}
               </Button>
@@ -5215,57 +5070,12 @@ const ProfilePage = () => {
                   <label className="text-sm text-muted-foreground">Weight</label>
                   <Input value={editForm.weight || ""} onChange={(e) => setEditForm({ ...editForm, weight: e.target.value })} placeholder="e.g. 150 lbs" />
                 </div>
-                <div>
-                  <label className="text-sm text-muted-foreground">Username</label>
-                  <Input
-                    value={editForm.username || ""}
-                    onChange={(e) => setEditForm({ ...editForm, username: normalizeUsername(e.target.value) })}
-                    placeholder="username"
-                    maxLength={USERNAME_MAX_LENGTH}
-                    autoCapitalize="none"
-                    autoCorrect="off"
-                    spellCheck={false}
-                  />
-                  <UsernameAvailabilityHint state={editUsernameAvailability} />
-                  <p className="mt-1 text-xs text-muted-foreground">You can change your username once every 14 days.</p>
-                </div>
-                <div>
-                  <label className="text-sm text-muted-foreground">Bio</label>
-                  <div className="space-y-2">
-                    <Input
-                      value={editForm.bio || ""}
-                      onChange={(e) => setEditForm({ ...editForm, bio: e.target.value.slice(0, BIO_MAX_LENGTH) })}
-                      placeholder="Tell us about yourself"
-                      maxLength={BIO_MAX_LENGTH}
-                      className="text-center placeholder:text-center"
-                      style={{ textAlign: "center" }}
-                    />
-                    <p className="text-xs text-muted-foreground text-right">{(editForm.bio || "").length}/{BIO_MAX_LENGTH}</p>
-                  </div>
-                </div>
                 <Button className="w-full mt-4" onClick={handleSaveProfile} disabled={saving}>
                   <Save className="h-4 w-4 mr-2" /> {saving ? "Saving..." : "Save"}
                 </Button>
               </div>
             ) : isEditingDetails && isTeamAccount ? (
               <div className="p-4 space-y-3">
-                <div>
-                  <label className="text-sm text-muted-foreground">Club / Organization Name</label>
-                  <Input value={editForm.display_name || ""} onChange={(e) => setEditForm({ ...editForm, display_name: e.target.value, club_name: e.target.value })} placeholder="Club / Organization Name" />
-                </div>
-                <div>
-                  <label className="text-sm text-muted-foreground">Username</label>
-                  <Input
-                    value={editForm.username || ""}
-                    onChange={(e) => setEditForm({ ...editForm, username: normalizeUsername(e.target.value) })}
-                    placeholder="username"
-                    maxLength={USERNAME_MAX_LENGTH}
-                    autoCapitalize="none"
-                    autoCorrect="off"
-                    spellCheck={false}
-                  />
-                  <UsernameAvailabilityHint state={editUsernameAvailability} />
-                </div>
                 <div>
                   <label className="text-sm text-muted-foreground">Leagues Provided</label>
                   <Input value={editForm.leagues_offered_text || ""} onChange={(e) => setEditForm({ ...editForm, leagues_offered_text: e.target.value })} placeholder="MLS Next, ECNL" />
@@ -5326,20 +5136,6 @@ const ProfilePage = () => {
                     </div>
                   </>
                 ) : null}
-                <div>
-                  <label className="text-sm text-muted-foreground">Bio</label>
-                  <div className="space-y-2">
-                    <Input
-                      value={editForm.bio || ""}
-                      onChange={(e) => setEditForm({ ...editForm, bio: e.target.value.slice(0, BIO_MAX_LENGTH) })}
-                      placeholder="Short club bio"
-                      maxLength={BIO_MAX_LENGTH}
-                      className="text-center placeholder:text-center"
-                      style={{ textAlign: "center" }}
-                    />
-                    <p className="text-xs text-muted-foreground text-right">{(editForm.bio || "").length}/{BIO_MAX_LENGTH}</p>
-                  </div>
-                </div>
                 <div>
                   <label className="text-sm text-muted-foreground">Home Field Address</label>
                   <Input value={editForm.home_field_address || ""} onChange={(e) => setEditForm({ ...editForm, home_field_address: e.target.value })} placeholder="123 Main St, Dallas, TX" />
@@ -5501,10 +5297,6 @@ const ProfilePage = () => {
             ) : isEditingDetails && isParentAccount ? (
               <div className="p-4 space-y-3">
                 <div>
-                  <label className="text-sm text-muted-foreground">Parent Full Name</label>
-                  <Input value={editForm.full_name || ""} onChange={(e) => setEditForm({ ...editForm, full_name: e.target.value })} placeholder="Full Name" />
-                </div>
-                <div>
                   <label className="text-sm text-muted-foreground">Email</label>
                   <Input value={editForm.contact_email || ""} onChange={(e) => setEditForm({ ...editForm, contact_email: e.target.value })} placeholder="parent@email.com" />
                 </div>
@@ -5646,37 +5438,6 @@ const ProfilePage = () => {
             ) : isEditingDetails && isRefereeAccount ? (
               <div className="p-4 space-y-3">
                 <div>
-                  <label className="text-sm text-muted-foreground">Full Name</label>
-                  <Input value={editForm.full_name || ""} onChange={(e) => setEditForm({ ...editForm, full_name: e.target.value })} placeholder="Full Name" />
-                </div>
-                <div>
-                  <label className="text-sm text-muted-foreground">Username</label>
-                  <Input
-                    value={editForm.username || ""}
-                    onChange={(e) => setEditForm({ ...editForm, username: normalizeUsername(e.target.value) })}
-                    placeholder="username"
-                    maxLength={USERNAME_MAX_LENGTH}
-                    autoCapitalize="none"
-                    autoCorrect="off"
-                    spellCheck={false}
-                  />
-                  <UsernameAvailabilityHint state={editUsernameAvailability} />
-                </div>
-                <div>
-                  <label className="text-sm text-muted-foreground">Bio</label>
-                  <div className="space-y-2">
-                    <Input
-                      value={editForm.bio || ""}
-                      onChange={(e) => setEditForm({ ...editForm, bio: e.target.value.slice(0, BIO_MAX_LENGTH) })}
-                      placeholder="Short referee bio"
-                      maxLength={BIO_MAX_LENGTH}
-                      className="text-center placeholder:text-center"
-                      style={{ textAlign: "center" }}
-                    />
-                    <p className="text-xs text-muted-foreground text-right">{(editForm.bio || "").length}/{BIO_MAX_LENGTH}</p>
-                  </div>
-                </div>
-                <div>
                   <label className="text-sm text-muted-foreground">Certification Level</label>
                   <Input value={editForm.referee_certification_level || ""} onChange={(e) => setEditForm({ ...editForm, referee_certification_level: e.target.value })} placeholder="Grassroots, Regional, National..." />
                 </div>
@@ -5803,23 +5564,6 @@ const ProfilePage = () => {
               </>
             ) : isEditingDetails && isTeamStaffAccount ? (
               <div className="p-4 space-y-3">
-                <div>
-                  <label className="text-sm text-muted-foreground">Full Name</label>
-                  <Input value={editForm.display_name || editForm.full_name || ""} onChange={(e) => setEditForm({ ...editForm, display_name: e.target.value, full_name: e.target.value })} placeholder="Full Name" />
-                </div>
-                <div>
-                  <label className="text-sm text-muted-foreground">Username</label>
-                  <Input
-                    value={editForm.username || ""}
-                    onChange={(e) => setEditForm({ ...editForm, username: normalizeUsername(e.target.value) })}
-                    placeholder="coachusername"
-                    maxLength={USERNAME_MAX_LENGTH}
-                    autoCapitalize="none"
-                    autoCorrect="off"
-                    spellCheck={false}
-                  />
-                  <UsernameAvailabilityHint state={editUsernameAvailability} />
-                </div>
                 {profile?.account_role === "scout" ? (
                   <>
                     <div>
@@ -5868,18 +5612,6 @@ const ProfilePage = () => {
                         <Input value={editForm.country || ""} onChange={(e) => setEditForm({ ...editForm, country: e.target.value })} placeholder="USA" />
                       </div>
                     </div>
-                    <div>
-                      <label className="text-sm text-muted-foreground">Bio</label>
-                      <Input
-                        value={editForm.bio || ""}
-                        onChange={(e) => setEditForm({ ...editForm, bio: e.target.value.slice(0, BIO_MAX_LENGTH) })}
-                        placeholder="Short bio"
-                        maxLength={BIO_MAX_LENGTH}
-                        className="text-center placeholder:text-center"
-                        style={{ textAlign: "center" }}
-                      />
-                      <p className="text-xs text-muted-foreground text-right">{(editForm.bio || "").length}/{BIO_MAX_LENGTH}</p>
-                    </div>
                   </>
                 ) : profile?.account_role === "academy_director" ? (
                   <>
@@ -5918,17 +5650,6 @@ const ProfilePage = () => {
                         <label className="text-sm text-muted-foreground">Country</label>
                         <Input value={editForm.country || ""} onChange={(e) => setEditForm({ ...editForm, country: e.target.value })} placeholder="USA" />
                       </div>
-                    </div>
-                    <div>
-                      <label className="text-sm text-muted-foreground">Bio / About Me</label>
-                      <Input
-                        value={editForm.bio || ""}
-                        onChange={(e) => setEditForm({ ...editForm, bio: e.target.value.slice(0, BIO_MAX_LENGTH) })}
-                        placeholder="Short bio"
-                        maxLength={BIO_MAX_LENGTH}
-                        className="text-center placeholder:text-center"
-                        style={{ textAlign: "center" }}
-                      />
                     </div>
                     <div>
                       <label className="text-sm text-muted-foreground">Work Experience</label>
@@ -5976,20 +5697,6 @@ const ProfilePage = () => {
                   <Input value={editForm.team_organization_name || ""} onChange={(e) => setEditForm({ ...editForm, team_organization_name: e.target.value, teams_currently_coaching: e.target.value })} placeholder="Current teams" />
                 </div>
                 <div>
-                  <label className="text-sm text-muted-foreground">Bio</label>
-                  <div className="space-y-2">
-                    <Input
-                      value={editForm.bio || ""}
-                      onChange={(e) => setEditForm({ ...editForm, bio: e.target.value.slice(0, BIO_MAX_LENGTH) })}
-                      placeholder="Short bio"
-                      maxLength={BIO_MAX_LENGTH}
-                      className="text-center placeholder:text-center"
-                      style={{ textAlign: "center" }}
-                    />
-                    <p className="text-xs text-muted-foreground text-right">{(editForm.bio || "").length}/{BIO_MAX_LENGTH}</p>
-                  </div>
-                </div>
-                <div>
                   <label className="text-sm text-muted-foreground">City / State</label>
                   <Input value={editForm.city || ""} onChange={(e) => setEditForm({ ...editForm, city: e.target.value })} placeholder="Miami, FL" />
                 </div>
@@ -6025,42 +5732,9 @@ const ProfilePage = () => {
               </div>
             ) : isEditingDetails ? (
               <div className="p-4 space-y-3">
-                <div>
-                  <label className="text-sm text-muted-foreground">Full Name</label>
-                  <Input
-                    value={editForm.full_name || ""}
-                    onChange={(e) => setEditForm({ ...editForm, full_name: e.target.value })}
-                    placeholder="Full Name"
-                  />
-                </div>
-                <div>
-                  <label className="text-sm text-muted-foreground">Username</label>
-                  <Input
-                    value={editForm.username || ""}
-                    onChange={(e) => setEditForm({ ...editForm, username: normalizeUsername(e.target.value) })}
-                    placeholder="username"
-                    maxLength={USERNAME_MAX_LENGTH}
-                    autoCapitalize="none"
-                    autoCorrect="off"
-                    spellCheck={false}
-                  />
-                  <UsernameAvailabilityHint state={editUsernameAvailability} />
-                  <p className="mt-1 text-xs text-muted-foreground">You can change your username once every 14 days.</p>
-                </div>
-                <div>
-                  <label className="text-sm text-muted-foreground">Bio</label>
-                  <div className="space-y-2">
-                    <Input
-                      value={editForm.bio || ""}
-                      onChange={(e) => setEditForm({ ...editForm, bio: e.target.value.slice(0, BIO_MAX_LENGTH) })}
-                      placeholder="Short bio"
-                      maxLength={BIO_MAX_LENGTH}
-                      className="text-center placeholder:text-center"
-                      style={{ textAlign: "center" }}
-                    />
-                    <p className="text-xs text-muted-foreground text-right">{(editForm.bio || "").length}/{BIO_MAX_LENGTH}</p>
-                  </div>
-                </div>
+                <p className="rounded-lg border border-dashed border-border p-3 text-xs text-muted-foreground">
+                  Your name, username, and bio are edited with the Edit button next to "My Profile" at the top of this page.
+                </p>
                 <Button className="w-full mt-4" onClick={handleSaveProfile} disabled={saving}>
                   <Save className="h-4 w-4 mr-2" /> {saving ? "Saving..." : "Save"}
                 </Button>
@@ -6257,7 +5931,7 @@ const ProfilePage = () => {
                                   if (destination) navigate(destination);
                                 }}
                               >
-                                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-accent to-red-light flex items-center justify-center shadow-md overflow-hidden">
+                                <div className="w-12 h-12 shrink-0 rounded-full bg-gradient-to-br from-accent to-red-light flex items-center justify-center shadow-md overflow-hidden">
                                   {activeMembershipLogoUrls[membership.id] ? (
                                     <img src={activeMembershipLogoUrls[membership.id] || ""} alt={membership.team?.name || "Team"} className="w-full h-full object-cover" />
                                   ) : (
@@ -6807,7 +6481,7 @@ const ProfilePage = () => {
         <section className="mb-6">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-lg font-semibold text-navy">{isPlayerAccount ? "My Contacts / Links" : "Contact Information"}</h3>
-            {!isEditingDetails && (
+            {!isEditingDetails && !isEditingTop && (
               <Button variant="outline" size="sm" className="gap-2" onClick={() => startEditingSection("contact")}>
                 <Edit className="h-4 w-4" /> {isEditingContact ? "Editing" : "Edit"}
               </Button>
@@ -8370,90 +8044,6 @@ const ProfilePage = () => {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={showAvatarCropDialog} onOpenChange={(open) => !open && resetAvatarCropState()}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Crop Profile Photo</DialogTitle>
-            <DialogDescription>
-              Adjust the photo so it fits neatly inside the profile circle across the app.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-5">
-            <div
-              className="mx-auto relative overflow-hidden rounded-full bg-muted ring-1 ring-border"
-              style={{ width: avatarCropPreviewSize, height: avatarCropPreviewSize, cursor: "grab", touchAction: "none" }}
-              onPointerDown={handleAvatarCropPointerDown}
-              onPointerMove={handleAvatarCropPointerMove}
-              onPointerUp={handleAvatarCropPointerUp}
-              onPointerCancel={handleAvatarCropPointerUp}
-            >
-              {avatarCropPreviewUrl && avatarCropMetrics ? (
-                <img
-                  src={avatarCropPreviewUrl}
-                  alt="Avatar crop preview"
-                  className="absolute left-0 top-0 max-w-none select-none"
-                  style={{
-                    width: avatarCropMetrics.drawWidth,
-                    height: avatarCropMetrics.drawHeight,
-                    maxWidth: "none",
-                    left: avatarCropMetrics.drawX,
-                    top: avatarCropMetrics.drawY,
-                  }}
-                />
-              ) : null}
-            </div>
-            <div className="space-y-3">
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span>Zoom</span>
-                  <span>{avatarCropZoom.toFixed(1)}x</span>
-                </div>
-                <Slider
-                  min={1}
-                  max={2.5}
-                  step={0.05}
-                  value={[avatarCropZoom]}
-                  onValueChange={(value) => setAvatarCropZoom(value[0] ?? 1)}
-                />
-              </div>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span>Move Left / Right</span>
-                  <span>{Math.round(avatarCropOffsetX)}px</span>
-                </div>
-                <Slider
-                  min={-(avatarCropMetrics?.maxOffsetX ?? 140)}
-                  max={avatarCropMetrics?.maxOffsetX ?? 140}
-                  step={1}
-                  value={[avatarCropMetrics?.clampedOffsetX ?? avatarCropOffsetX]}
-                  onValueChange={(value) => setClampedAvatarCropOffsets(value[0] ?? 0, avatarCropOffsetY)}
-                />
-              </div>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span>Move Up / Down</span>
-                  <span>{Math.round(avatarCropOffsetY)}px</span>
-                </div>
-                <Slider
-                  min={-(avatarCropMetrics?.maxOffsetY ?? 140)}
-                  max={avatarCropMetrics?.maxOffsetY ?? 140}
-                  step={1}
-                  value={[avatarCropMetrics?.clampedOffsetY ?? avatarCropOffsetY]}
-                  onValueChange={(value) => setClampedAvatarCropOffsets(avatarCropOffsetX, value[0] ?? 0)}
-                />
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={resetAvatarCropState} disabled={uploadingAvatar}>
-              Cancel
-            </Button>
-            <Button onClick={handleSaveCroppedAvatar} disabled={uploadingAvatar}>
-              {uploadingAvatar ? "Saving..." : "Save Photo"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       <Dialog
         open={daughterTeamDialogOpen}

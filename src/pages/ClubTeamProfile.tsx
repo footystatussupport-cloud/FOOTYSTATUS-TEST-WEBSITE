@@ -570,7 +570,7 @@ const ClubTeamProfile = () => {
       </header>
 
       <div className="space-y-6 p-4">
-        <InlineProfileAdminControls targetUserId={parentTeam.owner_user_id} targetName={`${clubName} ${ageGroupLabel || ""}`.trim()} />
+        <InlineProfileAdminControls targetUserId={parentTeam.owner_user_id} targetName={`${clubName} ${ageGroupLabel || ""}`.trim()} onChanged={() => loadPageRef.current?.()} />
         <section className="rounded-xl border border-border bg-card p-6 text-center">
           <button
             type="button"

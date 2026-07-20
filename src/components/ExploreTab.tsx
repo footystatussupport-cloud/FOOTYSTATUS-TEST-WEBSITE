@@ -128,6 +128,22 @@ const ExploreTab = () => {
 
   useEffect(() => {
     const fetchData = async () => {
+      // Footy Status admin accounts are private system accounts and must never
+      // appear in Explore (any category, search, gender view, or recommendation).
+      // The exclusion set is sourced from the admin permission registry in the
+      // database — never from a name/username/email string — so it holds for
+      // existing and future admins and cannot be bypassed by changing filters.
+      let adminUserIds = new Set<string>();
+      try {
+        const { data: adminRows } = await (supabase as any).rpc("footy_status_admin_user_ids");
+        adminUserIds = new Set(
+          ((adminRows || []) as Array<{ user_id: string }>).map((row) => row.user_id).filter(Boolean)
+        );
+      } catch {
+        adminUserIds = new Set();
+      }
+      const isAdminUser = (userId?: string | null) => !!userId && adminUserIds.has(userId);
+
       const [playersRes, playerProfilesRes, teamsRes, leaguesRes, coachStaffProfiles, refereeProfilesRes, parentProfilesRes] = await Promise.all([
         supabase.from("players").select("*"),
         supabase.from("player_profiles_public").select("id, user_id, full_name, team, team_name, position, school_grade, player_gender, profile_image_url, username"),
@@ -239,6 +255,17 @@ const ExploreTab = () => {
         clubById.set(club.id, club);
       });
 
+      // Team ids owned by (or whose team profile belongs to) a Footy Status
+      // admin — these teams and any of their sub-teams are hidden from Explore.
+      const adminTeamIds = new Set<string>(
+        ((teamsRes.data as any[]) || [])
+          .filter(
+            (team) =>
+              isAdminUser(team.owner_user_id) || isAdminUser(teamProfileUserByTeamId.get(team.id) || null)
+          )
+          .map((team) => team.id)
+      );
+
       // Merge players table and player_profiles into a unified player list
       const legacyPlayers: Player[] = (playersRes.data || []).map(p => ({
         id: p.id,
@@ -288,6 +315,7 @@ const ExploreTab = () => {
       });
 
       const merged = Array.from(mergedByName.values()).filter((player) => {
+        if (isAdminUser(player.user_id)) return false;
         if (!viewerPlayerGender) return true;
         return player.player_gender === viewerPlayerGender;
       });
@@ -295,7 +323,10 @@ const ExploreTab = () => {
       setAllPlayers(merged);
       setPlayers(merged);
       const nonTeamOrganizationStaff = coachStaffProfiles.filter(
-        (staff) => staff.account_role !== "team_club" && staff.account_role !== "school_team"
+        (staff) =>
+          staff.account_role !== "team_club" &&
+          staff.account_role !== "school_team" &&
+          !isAdminUser((staff as any).user_id)
       );
       const scoutProfiles = nonTeamOrganizationStaff.filter((staff) => staff.account_role === "scout");
       const academyStaffProfiles = nonTeamOrganizationStaff.filter(
@@ -310,8 +341,11 @@ const ExploreTab = () => {
       setAcademyStaff(academyStaffProfiles);
       setAllScouts(scoutProfiles);
       setScouts(scoutProfiles);
-      setAllReferees(refereeProfilesRes.data || []);
-      setReferees(refereeProfilesRes.data || []);
+      const refereeProfiles = ((refereeProfilesRes.data || []) as any[]).filter(
+        (referee) => !isAdminUser(referee.user_id)
+      );
+      setAllReferees(refereeProfiles);
+      setReferees(refereeProfiles);
       const parentUserIds = [...new Set(((parentProfilesRes.data || []) as any[]).map((parent) => parent.user_id).filter(Boolean))];
       const { data: parentDetails } = parentUserIds.length
         ? await (supabase as any)
@@ -322,7 +356,9 @@ const ExploreTab = () => {
       const parentDetailsByUserId = new Map(
         ((parentDetails || []) as any[]).map((detail) => [detail.user_id, detail])
       );
-      const parentProfiles = ((parentProfilesRes.data || []) as any[]).map((parent) => ({
+      const parentProfiles = ((parentProfilesRes.data || []) as any[])
+        .filter((parent) => !isAdminUser(parent.user_id))
+        .map((parent) => ({
         user_id: parent.user_id,
         full_name: parent.full_name || parentDetailsByUserId.get(parent.user_id)?.full_name || "Parent",
         username: parent.username,
@@ -334,7 +370,9 @@ const ExploreTab = () => {
       setParents(parentProfiles);
 
       if (teamsRes.data) {
-        const baseTeams = (teamsRes.data as Team[]).map((team) => ({
+        const baseTeams = (teamsRes.data as Team[])
+          .filter((team) => !adminTeamIds.has(team.id) && !isAdminUser((team as any).owner_user_id))
+          .map((team) => ({
           ...team,
           username: usernameByUserId.get(teamProfileUserByTeamId.get(team.id) || team.owner_user_id || "") || null,
           logo_url: team.logo_url || teamLogoById.get(team.id) || null,
@@ -375,7 +413,10 @@ const ExploreTab = () => {
               subtitle,
               is_sub_team: true,
             };
-          });
+          })
+          .filter(
+            (team) => !adminTeamIds.has(team.parent_team_id || "") && !isAdminUser(team.owner_user_id)
+          );
         const visibleSubTeams = viewerPlayerGender
           ? subTeams.filter((team) => {
               const gender = (team.gender || "").toLowerCase();

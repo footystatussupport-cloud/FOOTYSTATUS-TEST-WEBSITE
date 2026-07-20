@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useRegisterRefresh } from "@/hooks/usePullToRefresh";
-import { ArrowLeft, CalendarDays, Pencil, Plus, Search, Shield, Trophy, Users } from "lucide-react";
+import { ArrowLeft, CalendarDays, Camera, Pencil, Plus, Search, Shield, Trophy, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import MatchCard from "@/components/MatchCard";
+import ProfilePhotoCropUploader from "@/components/ProfilePhotoCropUploader";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
+import { useGlobalAdmin } from "@/hooks/useGlobalAdmin";
 import {
   assignClubTeamToLeague,
   assignTeamToLeague,
@@ -57,6 +59,7 @@ const LeaguePage = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { toast } = useToast();
+  const { isGlobalAdmin } = useGlobalAdmin();
   const [league, setLeague] = useState<LeagueRecord | null>(null);
   const [standings, setStandings] = useState<LeagueStandingRow[]>([]);
   const [matches, setMatches] = useState<MatchFeedItem[]>([]);
@@ -343,6 +346,31 @@ const LeaguePage = () => {
     setSubmitting(false);
   };
 
+  // Admin-only: save a cropped league logo through the same storage + update
+  // path used elsewhere, then refresh so it shows immediately. The leagues table
+  // and league-logos bucket are both restricted to the Footy Status admin.
+  const handleSaveLeagueLogo = async (croppedFile: File): Promise<boolean> => {
+    if (!id) return false;
+    const previousLogoUrl = league?.logo_url || null;
+    try {
+      const nextLogoUrl = await uploadLeagueLogo(id, croppedFile);
+      const { error } = await updateLeague(id, { logo_url: nextLogoUrl });
+      if (error) {
+        toast({ title: "Save failed", description: error.message, variant: "destructive" });
+        return false;
+      }
+      if (previousLogoUrl && previousLogoUrl !== nextLogoUrl) {
+        await deleteLeagueLogoByUrl(previousLogoUrl);
+      }
+      toast({ title: "League photo updated" });
+      await loadLeague();
+      return true;
+    } catch (uploadError: any) {
+      toast({ title: "Upload failed", description: uploadError?.message, variant: "destructive" });
+      return false;
+    }
+  };
+
   const handleUpdateLeague = async () => {
     if (!id || !leagueEditForm.name.trim()) {
       toast({ title: "League name required", variant: "destructive" });
@@ -427,12 +455,33 @@ const LeaguePage = () => {
 
       <div className="space-y-6 p-4">
         <section className="rounded-xl border border-border bg-card p-5 text-center">
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-navy/10">
-            {league.logo_url ? (
-              <img src={league.logo_url} alt={league.name} className="h-full w-full object-cover" />
-            ) : (
-              <Trophy className="h-8 w-8 text-navy" />
-            )}
+          <div className="relative mx-auto mb-4 h-16 w-16">
+            <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-navy/10">
+              {league.logo_url ? (
+                <img src={league.logo_url} alt={league.name} className="h-full w-full object-cover" />
+              ) : (
+                <Trophy className="h-8 w-8 text-navy" />
+              )}
+            </div>
+            {isGlobalAdmin ? (
+              <ProfilePhotoCropUploader
+                title="Crop League Photo"
+                description="Adjust the league photo so it fits neatly inside the circle across the app."
+                onSave={handleSaveLeagueLogo}
+              >
+                {(openPicker, uploading) => (
+                  <button
+                    type="button"
+                    onClick={openPicker}
+                    disabled={uploading}
+                    aria-label="Change league profile picture"
+                    className="absolute -bottom-1 -right-1 flex h-7 w-7 items-center justify-center rounded-full bg-primary text-white shadow-md ring-2 ring-card transition-colors hover:bg-primary/90 disabled:opacity-60"
+                  >
+                    <Camera className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </ProfilePhotoCropUploader>
+            ) : null}
           </div>
           <h1 className="text-2xl font-bold text-foreground">{league.name}</h1>
           <p className="mt-2 text-sm text-muted-foreground">{formatLeagueSubtitle(league) || "League details"}</p>
