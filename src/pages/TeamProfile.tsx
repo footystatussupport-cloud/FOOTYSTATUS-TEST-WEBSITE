@@ -656,7 +656,12 @@ const TeamProfile = () => {
     const { error } = await reviewCoachStaffJoinRequest(request, approve);
 
     if (error) {
-      toast({ title: "Update failed", description: error.message, variant: "destructive" });
+      console.error("Footy Status coach/staff link review failed", { requestId: request?.id, approve, error });
+      toast({
+        title: "Update failed",
+        description: "We couldn't complete the coach-to-team link. Please try again.",
+        variant: "destructive",
+      });
     } else {
       toast({ title: approve ? "Coach/staff approved" : "Request rejected" });
       await fetchTeamData();

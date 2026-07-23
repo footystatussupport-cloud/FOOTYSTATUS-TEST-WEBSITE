@@ -92,11 +92,18 @@ const HomeTab = () => {
     });
 
     if (error) {
-      toast({ title: "Invite update failed", description: error.message, variant: "destructive" });
+      console.error("Footy Status team invite response failed", { inviteId, accept, error });
+      toast({
+        title: "Invite update failed",
+        description: accept
+          ? "We couldn't accept this team invitation. Please try again."
+          : "We couldn't decline this team invitation. Please try again.",
+        variant: "destructive",
+      });
       return;
     }
 
-    toast({ title: accept ? "Invite accepted" : "Invite declined" });
+    toast({ title: accept ? "You have joined the team successfully." : "Invite declined" });
     await Promise.all([loadPendingInvites(), fetchNotifications()]);
   };
 
@@ -130,7 +137,12 @@ const HomeTab = () => {
 
     const { error } = await reviewCoachStaffJoinRequest(request, approve);
     if (error) {
-      toast({ title: "Update failed", description: error.message, variant: "destructive" });
+      console.error("Footy Status coach/staff link review failed", { requestId: request?.id, approve, error });
+      toast({
+        title: "Update failed",
+        description: "We couldn't complete the coach-to-team link. Please try again.",
+        variant: "destructive",
+      });
       return;
     }
 

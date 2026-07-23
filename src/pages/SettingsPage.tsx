@@ -26,6 +26,21 @@ interface SettingItem {
   linkPath?: string;
 }
 
+// Extract a meaningful message from whatever the delete-account call throws.
+// Supabase RPC errors are plain objects ({ message, details, hint, code }),
+// not Error instances, so `error instanceof Error` alone loses the real cause.
+const getDeleteAccountErrorMessage = (error: unknown): string => {
+  const fallback = "Please try again. If this keeps happening, contact Footy Status support.";
+  if (!error) return fallback;
+  if (error instanceof Error) return error.message || fallback;
+  if (typeof error === "string") return error || fallback;
+  if (typeof error === "object") {
+    const supabaseError = error as { message?: string; details?: string; hint?: string };
+    return supabaseError.message || supabaseError.details || supabaseError.hint || fallback;
+  }
+  return fallback;
+};
+
 const SettingsPage = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -96,12 +111,14 @@ const SettingsPage = () => {
         await assertUserCanBeDeleted(user.id);
       }
 
-      const { error } = await supabase.rpc("delete_my_account");
+      const { error } = await (supabase as any).rpc("delete_my_account");
 
       if (error) {
         throw error;
       }
 
+      // The auth user no longer exists server-side; clear every cached token and
+      // local/session state so the deleted session can never be restored.
       await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
       localStorage.clear();
       sessionStorage.clear();
@@ -114,12 +131,14 @@ const SettingsPage = () => {
       navigate("/auth", { replace: true });
     } catch (error) {
       console.error("Delete account failed", error);
+      // Supabase returns a plain error object (PostgrestError), not an Error
+      // instance, so surface its message/details directly instead of always
+      // falling back to the generic text — otherwise the real backend cause
+      // (e.g. a missing function or constraint) is hidden from the user and logs.
+      const message = getDeleteAccountErrorMessage(error);
       toast({
         title: "Account could not be deleted",
-        description:
-          error instanceof Error
-            ? error.message
-            : "Please try again. If this keeps happening, contact Footy Status support.",
+        description: message,
         variant: "destructive",
       });
     } finally {

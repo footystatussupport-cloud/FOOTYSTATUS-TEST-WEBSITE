@@ -1,13 +1,27 @@
 export const ACCOUNT_TIERS = {
   FREE: "free",
+  PRO_MONTHLY: "pro_monthly",
+  PRO_YEARLY: "pro_yearly",
+  // Legacy tiers — no longer sold, but still honored so existing Pro members
+  // keep their access. Never granted by the new purchase flow.
   PRO_ANNUAL: "pro_annual",
   PRO_LIFETIME: "pro_lifetime",
 };
 
+// The plans a Player can purchase today. The value is the plan the user
+// selects; proPurchases.ts maps it to the correct App Store / Google Play
+// product id so the right subscription is charged.
 export const PRO_PLANS = {
-  ANNUAL: "annual",
-  LIFETIME: "lifetime",
+  MONTHLY: "monthly",
+  YEARLY: "yearly",
 };
+
+// Tiers that are time-limited (need a valid, future pro_expires_at to be active).
+const EXPIRING_PRO_TIERS = [
+  ACCOUNT_TIERS.PRO_MONTHLY,
+  ACCOUNT_TIERS.PRO_YEARLY,
+  ACCOUNT_TIERS.PRO_ANNUAL, // legacy
+];
 
 export const FREE_VISIBLE_CLIP_LIMIT = 3;
 export const FREE_DELETION_LIMIT = 2;
@@ -15,8 +29,12 @@ export const PRO_FEED_BOOST_MULTIPLIER = 1.5;
 
 export const isActiveProTier = (profile, now = new Date()) => {
   if (!profile) return false;
+  // Lifetime (legacy) never expires.
   if (profile.account_tier === ACCOUNT_TIERS.PRO_LIFETIME) return true;
-  if (profile.account_tier !== ACCOUNT_TIERS.PRO_ANNUAL) return false;
+  // Every other Pro tier is time-limited: it is only active while it has a
+  // valid, still-in-the-future expiry. Monthly/Yearly renewals push this date
+  // forward on the backend after each verified renewal.
+  if (!EXPIRING_PRO_TIERS.includes(profile.account_tier)) return false;
   if (!profile.pro_expires_at) return false;
   return new Date(profile.pro_expires_at).getTime() > now.getTime();
 };
@@ -62,6 +80,18 @@ export const getDaysRemaining = (profile, now = new Date()) => {
   return Math.max(0, Math.ceil(ms / 86400000));
 };
 
+// Add one calendar month, clamping the day when the next month is shorter
+// (e.g. Jan 31 -> Feb 28). Mirrors how the stores bill a monthly cycle.
+const addOneMonth = (date) => {
+  const result = new Date(date);
+  const targetMonth = result.getMonth() + 1;
+  result.setMonth(targetMonth);
+  if (result.getMonth() !== ((targetMonth % 12) + 12) % 12) {
+    result.setDate(0); // roll back to the last day of the intended month
+  }
+  return result;
+};
+
 export const canUploadVisibleClip = (profile, visibleClipCount, now = new Date()) =>
   getIsPro(profile, now) || visibleClipCount < FREE_VISIBLE_CLIP_LIMIT;
 
@@ -83,9 +113,34 @@ export const splitClipsForFreeDowngrade = (clips) => {
   };
 };
 
+// Maps a purchased plan to the account_tier + expiry the backend should store.
+// Used server-side conceptually; the authoritative grant lives in the
+// apply_verified_pro_purchase RPC (called only after receipt verification).
+// This client-side copy is kept only for computing/displaying expiry and for
+// tests — it never writes to the database on its own.
 export const createUpgradePatch = (planType, purchaseDate = new Date()) => {
   const startedAt = purchaseDate.toISOString();
-  if (planType === PRO_PLANS.LIFETIME) {
+
+  if (planType === PRO_PLANS.MONTHLY) {
+    return {
+      account_tier: ACCOUNT_TIERS.PRO_MONTHLY,
+      pro_started_at: startedAt,
+      pro_expires_at: addOneMonth(purchaseDate).toISOString(),
+    };
+  }
+
+  if (planType === PRO_PLANS.YEARLY) {
+    const expiresAt = new Date(purchaseDate);
+    expiresAt.setFullYear(expiresAt.getFullYear() + 1);
+    return {
+      account_tier: ACCOUNT_TIERS.PRO_YEARLY,
+      pro_started_at: startedAt,
+      pro_expires_at: expiresAt.toISOString(),
+    };
+  }
+
+  // --- Legacy plans (not sold by the new flow; kept for backward compat) ---
+  if (planType === "lifetime") {
     return {
       account_tier: ACCOUNT_TIERS.PRO_LIFETIME,
       pro_started_at: startedAt,
@@ -93,6 +148,7 @@ export const createUpgradePatch = (planType, purchaseDate = new Date()) => {
     };
   }
 
+  // "annual" (legacy)
   const expiresAt = new Date(purchaseDate);
   expiresAt.setFullYear(expiresAt.getFullYear() + 1);
   return {

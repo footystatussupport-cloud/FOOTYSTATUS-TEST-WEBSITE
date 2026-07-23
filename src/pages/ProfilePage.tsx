@@ -234,6 +234,10 @@ interface ContactFormState {
   player_phone: string;
   coach_email: string;
   coach_phone: string;
+  // Player-only link to an external highlight video (YouTube, Vimeo, Hudl,
+  // Google Drive, ...). Replaces the Website field on player profiles only —
+  // every other account type keeps its Website field unchanged.
+  highlight_reel: string;
   instagram: string;
   tiktok: string;
   youtube: string;
@@ -514,6 +518,7 @@ const CONTACT_LABELS: Record<keyof ContactFormState, string> = {
   player_phone: "Player Phone",
   coach_email: "Coach Email",
   coach_phone: "Coach Phone",
+  highlight_reel: "Highlight Reel Link",
   instagram: "Instagram",
   tiktok: "TikTok",
   youtube: "YouTube",
@@ -532,15 +537,34 @@ const mapContactVisibility = (showContactInfo: string): "public" | "restricted" 
 };
 
 const SOCIAL_CONTACTS: Array<keyof ContactFormState> = ["instagram", "tiktok", "youtube", "website"];
+// Player accounts show the Highlight Reel Link first and have no Website field.
+// Every other account type keeps SOCIAL_CONTACTS exactly as it was.
+const PLAYER_SOCIAL_CONTACTS: Array<keyof ContactFormState> = ["highlight_reel", "instagram", "tiktok", "youtube"];
 const RESTRICTED_CONTACTS: Array<keyof ContactFormState> = ["player_email", "player_phone", "coach_email", "coach_phone"];
-const CONTACT_DISPLAY_ORDER: Array<keyof ContactFormState> = ["player_email", "player_phone", "coach_email", "coach_phone", "instagram", "tiktok", "youtube", "website"];
+const CONTACT_DISPLAY_ORDER: Array<keyof ContactFormState> = ["player_email", "player_phone", "coach_email", "coach_phone", "highlight_reel", "instagram", "tiktok", "youtube", "website"];
 const BIO_MAX_LENGTH = 100;
+
+// A highlight reel must be a full external URL so it always opens the exact
+// saved destination in a new tab (never an internal app route).
+const HIGHLIGHT_REEL_ERROR = "Enter a full highlight reel link starting with https:// or http://";
+const isValidHighlightReelUrl = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return true; // optional field
+  if (!/^https?:\/\//i.test(trimmed)) return false;
+  try {
+    const parsed = new URL(trimmed);
+    return Boolean(parsed.hostname && parsed.hostname.includes("."));
+  } catch {
+    return false;
+  }
+};
 
 const emptyContactForm = (): ContactFormState => ({
   player_email: "",
   player_phone: "",
   coach_email: "",
   coach_phone: "",
+  highlight_reel: "",
   instagram: "",
   tiktok: "",
   youtube: "",
@@ -2893,6 +2917,14 @@ const ProfilePage = () => {
 
   const handleSaveProfile = async () => {
     if (!user || !profile) return;
+
+    // Highlight reel is optional, but when provided it must be a full external
+    // URL — refuse to save an invalid one rather than storing a broken link.
+    if (!isValidHighlightReelUrl(contactForm.highlight_reel)) {
+      toast({ title: "Invalid highlight reel link", description: HIGHLIGHT_REEL_ERROR, variant: "destructive" });
+      return;
+    }
+
     setSaving(true);
     const normalizedBio = editForm.bio?.trim().slice(0, BIO_MAX_LENGTH) || null;
     const normalizedUsername = normalizeUsername(editForm.username);
@@ -4245,11 +4277,20 @@ const ProfilePage = () => {
     });
 
     if (error) {
-      toast({ title: "Invite update failed", description: error.message, variant: "destructive" });
+      // Keep the full technical error in the logs only — never show raw
+      // PostgreSQL/Supabase details to the player.
+      console.error("Footy Status team invite response failed", { inviteId, accept, error });
+      toast({
+        title: "Invite update failed",
+        description: accept
+          ? "We couldn't accept this team invitation. Please try again."
+          : "We couldn't decline this team invitation. Please try again.",
+        variant: "destructive",
+      });
       return;
     }
 
-    toast({ title: accept ? "Invite accepted" : "Invite declined" });
+    toast({ title: accept ? "You have joined the team successfully." : "Invite declined" });
     await Promise.all([fetchProfile(), fetchTeamConnectionData()]);
   };
 
@@ -4266,14 +4307,23 @@ const ProfilePage = () => {
       : await (supabase as any).rpc("leave_current_team");
     setSaving(false);
 
-    const firstError = rpcError;
-
-    if (firstError) {
-      toast({ title: "Could not leave team", description: firstError.message, variant: "destructive" });
+    if (rpcError) {
+      // Log the full database error for debugging, but never surface raw
+      // PostgreSQL/constraint details to the player.
+      console.error("Footy Status leave team failed", {
+        authUserId: user.id,
+        membershipId: membershipId ?? null,
+        error: rpcError,
+      });
+      toast({
+        title: "Could not leave team",
+        description: "We couldn't remove you from the team. Please try again.",
+        variant: "destructive",
+      });
       return;
     }
 
-    toast({ title: "Left team successfully" });
+    toast({ title: "You have left the team successfully." });
       setActiveMembership(null);
       setActiveMemberships([]);
       setTeamStanding(null);
@@ -4413,10 +4463,20 @@ const ProfilePage = () => {
     setReviewingCoachStaffRequestId(request.id);
     const { error } = await reviewCoachStaffJoinRequest(request, approve);
     if (error) {
-      toast({ title: "Could not update request", description: error.message, variant: "destructive" });
+      console.error("Footy Status coach/staff link review failed", { requestId: request?.id, approve, error });
+      toast({
+        title: "Could not update request",
+        description: "We couldn't complete the coach-to-team link. Please try again.",
+        variant: "destructive",
+      });
     } else {
       toast({ title: approve ? "Coach/staff approved" : "Request rejected" });
-      await fetchTeamOwnerCoachStaffRequests(resolvedTeamId);
+      // Refresh the club's own staff list and profile links too, so the newly
+      // linked coach appears immediately without a manual refresh.
+      await Promise.all([
+        fetchTeamOwnerCoachStaffRequests(resolvedTeamId),
+        fetchTeamConnectionData(),
+      ]);
     }
     setReviewingCoachStaffRequestId(null);
   };
@@ -6516,17 +6576,31 @@ const ProfilePage = () => {
                     />
                   </div>
                 ))}
-                {SOCIAL_CONTACTS.map((contactType) => (
-                  <div key={contactType}>
-                    <label className="text-sm text-muted-foreground">{CONTACT_LABELS[contactType]}</label>
-                    <Input
-                      type={contactType === "website" ? "url" : "text"}
-                      value={contactForm[contactType]}
-                      onChange={(e) => setContactForm((prev) => ({ ...prev, [contactType]: e.target.value }))}
-                      placeholder={CONTACT_LABELS[contactType]}
-                    />
-                  </div>
-                ))}
+                {PLAYER_SOCIAL_CONTACTS.map((contactType) => {
+                  const isHighlightReel = contactType === "highlight_reel";
+                  const showHighlightReelError =
+                    isHighlightReel && !isValidHighlightReelUrl(contactForm.highlight_reel);
+                  return (
+                    <div key={contactType}>
+                      <label className="text-sm text-muted-foreground">{CONTACT_LABELS[contactType]}</label>
+                      <Input
+                        type={isHighlightReel ? "url" : "text"}
+                        value={contactForm[contactType]}
+                        onChange={(e) => setContactForm((prev) => ({ ...prev, [contactType]: e.target.value }))}
+                        placeholder={isHighlightReel ? "https://youtube.com/watch?v=..." : CONTACT_LABELS[contactType]}
+                      />
+                      {isHighlightReel ? (
+                        showHighlightReelError ? (
+                          <p className="mt-1 text-xs text-destructive">{HIGHLIGHT_REEL_ERROR}</p>
+                        ) : (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Paste a YouTube, Vimeo, Hudl, Google Drive, or other highlight video link. Optional.
+                          </p>
+                        )
+                      ) : null}
+                    </div>
+                  );
+                })}
                 <Button className="w-full mt-2" onClick={handleSaveProfile} disabled={saving}>
                   <Save className="h-4 w-4 mr-2" /> {saving ? "Saving..." : "Save"}
                 </Button>

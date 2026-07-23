@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { User, Settings, Info, HelpCircle, Shield, LogOut, ChevronRight, Trophy, Crown, BarChart3, Heart, RefreshCw } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import Header from "@/components/Header";
+import TabNavigation from "@/components/TabNavigation";
 import { supabase } from "@/integrations/supabase/client";
 import { fetchMatchAdminContext } from "@/lib/matches";
 import { isProEligible } from "@/lib/subscriptions";
@@ -39,6 +40,18 @@ const OtherPage = () => {
   const [showLeagueOperations, setShowLeagueOperations] = useState(false);
   const showPlayerProOptions = !authLoading && isProEligible(profile);
   const visibleMenuItems = menuItems.filter((item) => !item.playerOnly || showPlayerProOptions);
+
+  const handleTabChange = (tab: string) => {
+    const tabPaths: Record<string, string> = {
+      Home: "/",
+      Matches: "/?tab=matches",
+      "Next-Up Clips": "/?tab=next-up",
+      Explore: "/?tab=explore",
+      Other: "/other",
+    };
+
+    navigate(tabPaths[tab] ?? "/");
+  };
 
   useEffect(() => {
     const loadAdminAccess = async () => {
@@ -113,8 +126,11 @@ const OtherPage = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background">
-      <div className="min-h-screen bg-background max-w-md mx-auto border-x border-border">
+    <div className="min-h-[100dvh] bg-background">
+      <div
+        className="mx-auto min-h-[100dvh] max-w-md border-x border-border bg-background"
+        style={{ paddingBottom: "calc(var(--footy-bottom-nav) + env(safe-area-inset-bottom))" }}
+      >
         <Header />
         
         <div className="px-4 py-6">
@@ -191,6 +207,8 @@ const OtherPage = () => {
           </button>
         </div>
       </div>
+
+      <TabNavigation activeTab="Other" onTabChange={handleTabChange} />
 
       <AlertDialog open={showLogoutDialog} onOpenChange={setShowLogoutDialog}>
         <AlertDialogContent>

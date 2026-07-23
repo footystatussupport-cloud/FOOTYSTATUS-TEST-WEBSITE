@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Heart, Play, Eye, User } from "lucide-react";
 import Header from "@/components/Header";
@@ -13,17 +13,33 @@ const formatLikedDate = (value?: string | null) => {
   return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(d);
 };
 
+// In-memory cache of the loaded liked clips + scroll position. When the user
+// opens a video and taps Back, we reuse this exact list and scroll offset
+// instead of refetching — so nothing reloads, reorders, or flashes a spinner.
+// Cleared by pull-to-refresh (a fresh fetch) and after the TTL.
+interface LikedVideosCache {
+  userId: string;
+  clips: LikedClip[];
+  scrollY: number;
+  savedAt: number;
+}
+let likedVideosCache: LikedVideosCache | null = null;
+const LIKED_CACHE_TTL_MS = 30 * 60 * 1000;
+
 const LikedVideosPage = () => {
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
   const [clips, setClips] = useState<LikedClip[]>([]);
   const [loading, setLoading] = useState(true);
+  const scrollRestoredRef = useRef(false);
 
   const loadLikedClips = useCallback(async () => {
     if (!user?.id) return;
     setLoading(true);
     try {
-      setClips(await fetchMyLikedClips());
+      const next = await fetchMyLikedClips();
+      setClips(next);
+      likedVideosCache = { userId: user.id, clips: next, scrollY: 0, savedAt: Date.now() };
     } catch (error) {
       console.warn("Could not load liked videos", error);
       setClips([]);
@@ -38,10 +54,50 @@ const LikedVideosPage = () => {
       navigate("/auth");
       return;
     }
+    // Returning from a video viewer: restore the cached list immediately with no
+    // refetch, so the order and loaded videos are preserved exactly.
+    if (
+      likedVideosCache &&
+      likedVideosCache.userId === user.id &&
+      likedVideosCache.clips.length > 0 &&
+      Date.now() - likedVideosCache.savedAt <= LIKED_CACHE_TTL_MS
+    ) {
+      setClips(likedVideosCache.clips);
+      setLoading(false);
+      return;
+    }
     loadLikedClips();
   }, [authLoading, user?.id, navigate, loadLikedClips]);
 
+  // Restore the previous scroll position once the cached list has rendered.
+  useEffect(() => {
+    if (loading || scrollRestoredRef.current) return;
+    const cached = likedVideosCache;
+    if (!cached || cached.userId !== user?.id || cached.scrollY <= 0) return;
+    scrollRestoredRef.current = true;
+    const targetY = cached.scrollY;
+    const restore = () => window.scrollTo({ top: targetY, behavior: "auto" });
+    restore();
+    const timers = [window.setTimeout(restore, 100), window.setTimeout(restore, 300)];
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [loading, clips.length, user?.id]);
+
   useRegisterRefresh(loadLikedClips);
+
+  // Open a liked video in the Next Up viewer, remembering the scroll position
+  // and that we came from Liked Videos so the viewer's Back button returns here.
+  const openLikedClip = (clipId: string) => {
+    if (user?.id) {
+      likedVideosCache = {
+        userId: user.id,
+        clips: likedVideosCache?.userId === user.id ? likedVideosCache.clips : clips,
+        scrollY: window.scrollY,
+        savedAt: Date.now(),
+      };
+    }
+    const params = new URLSearchParams({ tab: "next-up", clip: clipId, returnTo: "/liked-videos" });
+    navigate(`/?${params.toString()}`);
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -78,7 +134,7 @@ const LikedVideosPage = () => {
               {clips.map((clip) => (
                 <button
                   key={clip.id}
-                  onClick={() => navigate(`/?tab=next-up&clip=${clip.id}`)}
+                  onClick={() => openLikedClip(clip.id)}
                   className="group overflow-hidden rounded-xl border border-border bg-card text-left transition-all hover:border-navy hover:shadow-md"
                 >
                   <div className="relative aspect-[3/4] w-full bg-muted">

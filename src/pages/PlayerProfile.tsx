@@ -83,17 +83,22 @@ const CONTACT_LABELS: Record<string, string> = {
   player_phone: "Player Phone",
   coach_email: "Coach Email",
   coach_phone: "Coach Phone",
+  highlight_reel: "Highlight Reel",
   instagram: "Instagram",
   tiktok: "TikTok",
   youtube: "YouTube",
   website: "Website",
 };
 
+// Highlight Reel is listed above the other social links on player profiles.
+// "website" stays in the list so any legacy value still renders for accounts
+// that were never migrated.
 const CONTACT_DISPLAY_ORDER = [
   "player_email",
   "player_phone",
   "coach_email",
   "coach_phone",
+  "highlight_reel",
   "instagram",
   "tiktok",
   "youtube",

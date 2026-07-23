@@ -16,8 +16,10 @@ import {
   shouldShowAds,
 } from "@/lib/subscriptionRules";
 
-export type AccountTier = "free" | "pro_annual" | "pro_lifetime";
-export type ProPlanType = "annual" | "lifetime";
+// New plans are Monthly / Yearly. pro_annual / pro_lifetime remain valid tiers
+// for existing members but are never sold or granted by the new purchase flow.
+export type AccountTier = "free" | "pro_monthly" | "pro_yearly" | "pro_annual" | "pro_lifetime";
+export type ProPlanType = "monthly" | "yearly";
 
 export interface SubscriptionProfile {
   user_id?: string | null;
@@ -44,33 +46,13 @@ export {
   shouldShowAds,
 };
 
-export const upgradeToPro = async (userId: string, planType: ProPlanType) => {
-  const patch = createUpgradePatch(planType);
-  const rpcResult = await (supabase as any).rpc("upgrade_to_pro", {
-    _user_id: userId,
-    _plan_type: planType,
-  });
-
-  if (!rpcResult.error) return;
-
-  const { error } = await (supabase as any)
-    .from("profiles")
-    .update({ ...patch, is_pro: true, updated_at: new Date().toISOString() })
-    .eq("user_id", userId);
-
-  if (error) throw error;
-
-  const restore = await (supabase as any)
-    .from("clips")
-    .update({ visibility: "public" })
-    .eq("user_id", userId)
-    .eq("visibility", "inactive");
-
-  if (restore.error) throw restore.error;
-};
-
-export const placeholderPaymentSuccess = async (userId: string, planType: ProPlanType) =>
-  upgradeToPro(userId, planType);
+// NOTE: There is intentionally NO client-side "grant Pro" function here.
+// Pro is granted ONLY by the server after a real store purchase is verified
+// (see src/lib/proPurchases.ts -> the verify-pro-purchase Edge Function ->
+// the apply_verified_pro_purchase RPC, which runs with the service role).
+// The old placeholderPaymentSuccess / upgradeToPro helpers and the
+// self-serve upgrade_to_pro RPC have been removed so no account can become
+// Pro without a verified payment.
 
 export const hideClipsForFreeTier = async (userId: string) => {
   const { data: clips, error } = await (supabase as any)
@@ -102,11 +84,13 @@ export const hideClipsForFreeTier = async (userId: string) => {
   }
 };
 
-export const downgradeExpiredAnnualProAccounts = async () => {
+export const downgradeExpiredProAccounts = async () => {
+  // Every time-limited Pro tier (monthly, yearly, and legacy annual) drops back
+  // to Free once its expiry passes. Lifetime never expires and is excluded.
   const { data: profiles, error } = await (supabase as any)
     .from("profiles")
     .select("user_id")
-    .eq("account_tier", "pro_annual")
+    .in("account_tier", ["pro_monthly", "pro_yearly", "pro_annual"])
     .lt("pro_expires_at", new Date().toISOString());
 
   if (error) throw error;

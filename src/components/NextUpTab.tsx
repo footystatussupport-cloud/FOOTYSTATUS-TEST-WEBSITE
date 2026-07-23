@@ -3,7 +3,8 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useSettings } from "@/hooks/useSettings";
-import { Heart, Share2, Eye, Play, EyeOff, Flag, User, Volume2, VolumeX, MessageCircle, Copy, Send, MoreHorizontal, Link2, Download, Ban, ArrowLeft } from "lucide-react";
+import { useRegisterRefresh } from "@/hooks/usePullToRefresh";
+import { Heart, Share2, Eye, Play, EyeOff, Flag, User, Volume2, VolumeX, MessageCircle, Copy, Send, MoreHorizontal, Link2, Download, Ban, ArrowLeft, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { fetchLikedClipIds, recordClipView, toggleClipLike } from "@/lib/clipInteractions";
@@ -53,6 +54,14 @@ interface Clip {
   } | null;
 }
 
+// The Next Up feed repeats real clips once a viewer has seen everything, so the
+// same clip id can legitimately appear more than once in the rendered list.
+// `feedKey` gives every occurrence a stable identity for React keys, video refs
+// and per-occurrence view counting.
+interface FeedEntry extends Clip {
+  feedKey: string;
+}
+
 const isRealNextUpClip = (clip: Clip) =>
   Boolean(
     clip.id &&
@@ -61,6 +70,29 @@ const isRealNextUpClip = (clip: Clip) =>
     (!clip.review_status || clip.review_status === "approved") &&
     clip.player_profile?.id
   );
+
+// Only clips near the active one keep a real <video> element. Everything else
+// renders its poster, so an endless repeating feed never accumulates media.
+const VIDEO_WINDOW = 2;
+const PULL_TRIGGER_DISTANCE = 70;
+const PULL_MAX_DISTANCE = 110;
+const PULL_RESISTANCE = 0.5;
+
+const isSameSource = (a: Clip, b: Clip) =>
+  a.id === b.id ||
+  Boolean(a.player_profile?.id && a.player_profile.id === b.player_profile?.id);
+
+// Keep a repeated clip (or a second clip from the same player) off the seam
+// between two loaded pages when another clip in the batch can go first.
+const avoidBackToBack = (previous: Clip | undefined, batch: Clip[]) => {
+  if (!previous || batch.length < 2 || !isSameSource(previous, batch[0])) return batch;
+  const swapIndex = batch.findIndex((clip, index) => index > 0 && !isSameSource(previous, clip));
+  if (swapIndex < 0) return batch;
+  const reordered = [...batch];
+  const [moved] = reordered.splice(swapIndex, 1);
+  reordered.unshift(moved);
+  return reordered;
+};
 
 
 const reportReasons = [
@@ -93,7 +125,7 @@ const canUseScoutingGenderFilter = (profile?: {
 
 const NextUpTab = () => {
   const [searchParams] = useSearchParams();
-  const [clips, setClips] = useState<Clip[]>([]);
+  const [clips, setClips] = useState<FeedEntry[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [likedClips, setLikedClips] = useState<Set<string>>(new Set());
   const [showReportDialog, setShowReportDialog] = useState(false);
@@ -103,7 +135,9 @@ const NextUpTab = () => {
   const [reportReason, setReportReason] = useState("");
   const [reportDetails, setReportDetails] = useState("");
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [isCaughtUp, setIsCaughtUp] = useState(false);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [pullDistance, setPullDistance] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const holdTimeoutRef = useRef<number | null>(null);
@@ -112,6 +146,13 @@ const NextUpTab = () => {
   const pointerDownRef = useRef(false);
   const countedPlaybackRef = useRef<Record<string, boolean>>({});
   const loadingMoreRef = useRef(false);
+  const feedKeyCounterRef = useRef(0);
+  const pullStartYRef = useRef<number | null>(null);
+  const pullActiveRef = useRef(false);
+  // "Not interested" is honoured for the rest of this session. It is not a
+  // permanent block, because the launch catalogue is small and the feed has to
+  // keep cycling the real clips that remain.
+  const hiddenClipIdsRef = useRef<Set<string>>(new Set());
   const navigate = useNavigate();
   const { toast } = useToast();
   const { user, profile, loading: authLoading, refreshProfile } = useAuth();
@@ -121,6 +162,11 @@ const NextUpTab = () => {
   const clipIdFromUrl = searchParams.get("clip");
   const returnTo = searchParams.get("returnTo");
   const safeReturnTo = returnTo?.startsWith("/") && !returnTo.startsWith("//") ? returnTo : null;
+  // Label the back button by where the viewer came from, so it reads correctly
+  // whether the clip was opened from Liked Videos, a profile, or elsewhere.
+  const returnLabel = safeReturnTo?.startsWith("/liked-videos")
+    ? "Liked Videos"
+    : null;
 
   const enrichClips = useCallback(async (data: any[]): Promise<Clip[]> => {
     if (!data.length) return [];
@@ -183,21 +229,47 @@ const NextUpTab = () => {
   const loadMoreClips = useCallback(async (reset = false) => {
     if (!user) {
       setClips([]);
-      setIsCaughtUp(false);
       setIsLoadingMore(false);
       return;
     }
-    if (loadingMoreRef.current || (!reset && isCaughtUp)) return;
+    if (loadingMoreRef.current) return;
     loadingMoreRef.current = true;
     setIsLoadingMore(true);
 
     try {
-      const { data, error } = await (supabase as any).rpc("get_next_up_feed", {
-        _limit: 12,
-        _gender_preference: canFilterByGender ? genderPreference : null,
-      });
-      if (error) throw error;
-      let rawClips = data || [];
+      // `_restart` opens a fresh rotation server-side: newest approved clips
+      // first, then everything else. Paging calls continue the current rotation
+      // and, once the viewer has seen it all, automatically begin repeating the
+      // same real clips in a new shuffled order.
+      const fetchPage = async (restart: boolean) => {
+        const args = {
+          _limit: 12,
+          _gender_preference: canFilterByGender ? genderPreference : null,
+        };
+        const { data, error } = await (supabase as any).rpc("get_next_up_feed", {
+          ...args,
+          _restart: restart,
+        });
+        if (!error) return (data || []) as any[];
+
+        // The repeat-rotation migration may not be applied to this database
+        // yet. Fall back to the previous signature so the feed still works.
+        const missingSignature =
+          error.code === "PGRST202" || /Could not find the function/i.test(error.message || "");
+        if (!missingSignature) throw error;
+
+        const legacy = await (supabase as any).rpc("get_next_up_feed", args);
+        if (legacy.error) throw legacy.error;
+        return (legacy.data || []) as any[];
+      };
+
+      let rawClips = await fetchPage(reset);
+      // The feed only returns nothing when there is genuinely nothing eligible.
+      // Restart once before believing an empty paging response.
+      if (rawClips.length === 0 && !reset) {
+        rawClips = await fetchPage(true);
+      }
+
       if (reset && clipIdFromUrl) {
         const { data: requestedClip } = await supabase
           .from("clips")
@@ -209,8 +281,15 @@ const NextUpTab = () => {
           rawClips = [requestedClip, ...rawClips.filter((clip: any) => clip.id !== requestedClip.id)];
         }
       }
-      let enriched = (await enrichClips(rawClips)).filter(isRealNextUpClip);
+
+      let enriched = (await enrichClips(rawClips))
+        .filter(isRealNextUpClip)
+        .filter((clip) => !hiddenClipIdsRef.current.has(clip.id));
+
       if (enriched.length === 0 && reset && user?.id) {
+        // Nothing from other accounts is visible yet. The viewer's own approved
+        // clips are still real, permitted content, so show those rather than an
+        // empty screen.
         const { data: ownClips } = await supabase
           .from("clips")
           .select("*")
@@ -220,33 +299,47 @@ const NextUpTab = () => {
           .order("created_at", { ascending: false });
         enriched = (await enrichClips(ownClips || [])).filter(isRealNextUpClip);
       }
+
       if (enriched.length === 0) {
         if (reset) {
           setClips([]);
           setCurrentIndex(0);
-        } else {
-          setIsCaughtUp(true);
         }
         return;
       }
-      setIsCaughtUp(false);
+
       setClips((previous) => {
         const base = reset ? [] : previous;
-        const known = new Set(base.map((clip) => clip.id));
-        return [...base, ...enriched.filter((clip) => !known.has(clip.id))];
+        const ordered = avoidBackToBack(base[base.length - 1], enriched);
+        const appended = ordered.map((clip) => {
+          feedKeyCounterRef.current += 1;
+          return { ...clip, feedKey: `${clip.id}#${feedKeyCounterRef.current}` };
+        });
+        return [...base, ...appended];
       });
       if (reset) setCurrentIndex(0);
     } catch (error) {
       console.error("Failed to load the Next Up feed", error);
-      if (reset) {
-        setClips([]);
-        setIsCaughtUp(false);
-      }
+      if (reset) setClips([]);
     } finally {
       loadingMoreRef.current = false;
       setIsLoadingMore(false);
+      setHasLoadedOnce(true);
     }
-  }, [canFilterByGender, clipIdFromUrl, enrichClips, genderPreference, isCaughtUp, user]);
+  }, [canFilterByGender, clipIdFromUrl, enrichClips, genderPreference, user]);
+
+  const refreshFeed = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      await loadMoreClips(true);
+      containerRef.current?.scrollTo({ top: 0 });
+    } finally {
+      setIsRefreshing(false);
+      setPullDistance(0);
+    }
+  }, [loadMoreClips]);
+
+  useRegisterRefresh(refreshFeed);
 
   useEffect(() => {
     const savedPreference = profile?.next_up_gender_preference;
@@ -261,7 +354,6 @@ const NextUpTab = () => {
     setGenderPreference(value);
     setClips([]);
     setCurrentIndex(0);
-    setIsCaughtUp(false);
     loadingMoreRef.current = false;
 
     const { error } = await (supabase as any)
@@ -277,35 +369,73 @@ const NextUpTab = () => {
     await refreshProfile();
   };
 
+  // Any change to the viewer's own gender, role or account state changes what
+  // they are allowed to see, so the already-loaded feed is thrown away and
+  // rebuilt from the top instead of being served from stale local data.
+  const viewerAccessKey = [
+    profile?.player_gender || "",
+    profile?.account_role || "",
+    profile?.account_type || "",
+    profile?.account_category || "",
+  ].join("|");
+
   useEffect(() => {
     if (!user) {
       setClips([]);
       setCurrentIndex(0);
-      setIsCaughtUp(false);
       return;
     }
-    setIsCaughtUp(false);
     loadMoreClips(true);
-  }, [genderPreference, user?.id, loadMoreClips]);
+  }, [genderPreference, viewerAccessKey, user?.id, loadMoreClips]);
 
   useEffect(() => {
     if (!user) return;
+    const dropClip = (clipId: string | undefined) => {
+      if (!clipId) return;
+      setClips((previous) => previous.filter((entry) => entry.id !== clipId));
+    };
     const channel = supabase
       .channel("next-up-clips")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "clips" }, () => setIsCaughtUp(false))
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "clips" },
+        (payload) => {
+          // A clip that loses approval or gets hidden must disappear from the
+          // feed that is already on screen, not just from the next page.
+          const next = payload.new as any;
+          const stillEligible =
+            next?.review_status === "approved" &&
+            next?.visibility !== "inactive" &&
+            next?.visibility !== "private";
+          if (!stillEligible) dropClip(next?.id);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: "clips" },
+        (payload) => dropClip((payload.old as any)?.id)
+      )
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [user]);
 
+  useEffect(() => {
+    if (clips.length === 0) {
+      if (currentIndex !== 0) setCurrentIndex(0);
+      return;
+    }
+    if (currentIndex > clips.length - 1) setCurrentIndex(clips.length - 1);
+  }, [clips.length, currentIndex]);
+
   const getActiveVideo = () => {
     const activeClip = clips[currentIndex];
     if (!activeClip) return null;
-    return videoRefs.current[activeClip.id] || null;
+    return videoRefs.current[activeClip.feedKey] || null;
   };
 
   useEffect(() => {
     clips.forEach((clip, index) => {
-      const video = videoRefs.current[clip.id];
+      const video = videoRefs.current[clip.feedKey];
       if (!video) return;
       video.muted = isMuted;
       if (index === currentIndex) {
@@ -316,7 +446,7 @@ const NextUpTab = () => {
       } else {
         video.pause();
         video.currentTime = 0;
-        resetPlaybackCounter(clip.id);
+        resetPlaybackCounter(clip.feedKey);
       }
     });
   }, [clips, currentIndex, isMuted]);
@@ -414,28 +544,29 @@ const NextUpTab = () => {
     }
   };
 
-  const handleVideoPlay = async (clipId: string, event: any) => {
+  const handleVideoPlay = async (clip: FeedEntry, event: any) => {
     const video = event.currentTarget as HTMLVideoElement;
     if (!user) return;
-    const clip = clips.find((item) => item.id === clipId);
-    if (clip?.user_id && clip.user_id === user.id) return;
-    if (countedPlaybackRef.current[clipId]) return;
+    if (clip.user_id && clip.user_id === user.id) return;
+    if (countedPlaybackRef.current[clip.feedKey]) return;
     if (video.currentTime > 0.35) return;
 
-    countedPlaybackRef.current[clipId] = true;
+    countedPlaybackRef.current[clip.feedKey] = true;
     try {
-      const nextViewsCount = await recordClipView(clipId);
+      // Also marks the clip watched for this viewer, which moves it into the
+      // repeat rotation without removing it from the eligible set.
+      const nextViewsCount = await recordClipView(clip.id);
       setClips((prev) =>
-        prev.map((clip) => (clip.id === clipId ? { ...clip, views_count: nextViewsCount } : clip))
+        prev.map((entry) => (entry.id === clip.id ? { ...entry, views_count: nextViewsCount } : entry))
       );
     } catch (error) {
-      countedPlaybackRef.current[clipId] = false;
+      countedPlaybackRef.current[clip.feedKey] = false;
       console.error("Failed to record clip view", error);
     }
   };
 
-  const resetPlaybackCounter = (clipId: string) => {
-    countedPlaybackRef.current[clipId] = false;
+  const resetPlaybackCounter = (feedKey: string) => {
+    countedPlaybackRef.current[feedKey] = false;
   };
 
   const getShareUrl = () => {
@@ -517,10 +648,11 @@ const NextUpTab = () => {
   const handleNotInterested = () => {
     if (!currentClip) return;
     const removedIndex = currentIndex;
+    hiddenClipIdsRef.current.add(currentClip.id);
     setClips((previous) => previous.filter((clip) => clip.id !== currentClip.id));
     setCurrentIndex(Math.max(0, Math.min(removedIndex, clips.length - 2)));
     setShowShareDialog(false);
-    toast({ title: "Clip hidden", description: "You wonâ€™t be shown this clip again." });
+    toast({ title: "Clip hidden", description: "You won't see this clip again while you keep browsing." });
     loadMoreClips();
   };
 
@@ -560,6 +692,41 @@ const NextUpTab = () => {
     });
   };
 
+  // Pull-to-refresh lives inside the feed itself: the global gesture is opted
+  // out of here (data-no-pull-refresh) because this container owns its scroll.
+  // A pull at the top restarts the rotation, which puts any newly approved
+  // clips at the very top.
+  const handlePullTouchStart = (event: React.TouchEvent) => {
+    const container = containerRef.current;
+    if (!container || container.scrollTop > 0 || isRefreshing || event.touches.length !== 1) {
+      pullStartYRef.current = null;
+      return;
+    }
+    pullStartYRef.current = event.touches[0].clientY;
+  };
+
+  const handlePullTouchMove = (event: React.TouchEvent) => {
+    if (pullStartYRef.current === null) return;
+    const container = containerRef.current;
+    if (!container || container.scrollTop > 0) {
+      pullStartYRef.current = null;
+      setPullDistance(0);
+      return;
+    }
+    const delta = event.touches[0].clientY - pullStartYRef.current;
+    if (delta > 0) pullActiveRef.current = true;
+    setPullDistance(delta <= 0 ? 0 : Math.min(PULL_MAX_DISTANCE, delta * PULL_RESISTANCE));
+  };
+
+  const handlePullTouchEnd = () => {
+    pullActiveRef.current = false;
+    if (pullStartYRef.current === null) return;
+    pullStartYRef.current = null;
+    const shouldRefresh = pullDistance >= PULL_TRIGGER_DISTANCE;
+    setPullDistance(0);
+    if (shouldRefresh) refreshFeed();
+  };
+
   const handlePressStart = () => {
     pointerDownRef.current = true;
     clearHoldTimeout();
@@ -576,6 +743,15 @@ const NextUpTab = () => {
     const wasHoldingPause = holdPausedRef.current;
     pointerDownRef.current = false;
     clearHoldTimeout();
+
+    // A pull-to-refresh drag must not double as a tap-to-mute.
+    if (pullActiveRef.current) {
+      if (wasHoldingPause) {
+        holdPausedRef.current = false;
+        getActiveVideo()?.play().catch(() => undefined);
+      }
+      return;
+    }
 
     if (wasHoldingPause) {
       holdPausedRef.current = false;
@@ -653,6 +829,18 @@ const NextUpTab = () => {
     );
   }
 
+  if (clips.length === 0 && !hasLoadedOnce) {
+    return (
+      <div className="flex h-full min-h-[70vh] flex-col items-center justify-center px-6 text-center">
+        <Play className="mb-4 h-12 w-12 text-muted-foreground" />
+        <p className="text-sm text-muted-foreground">Loading Next Up Clips...</p>
+      </div>
+    );
+  }
+
+  // Reached only when there is genuinely no clip this account is permitted to
+  // see. Having already watched everything no longer lands here: the feed
+  // repeats the real clips instead.
   if (clips.length === 0) {
     return (
       <div className="flex h-[70vh] flex-col items-center justify-center px-6 text-center">
@@ -661,7 +849,7 @@ const NextUpTab = () => {
         </div>
         <h3 className="mb-2 text-xl font-bold text-foreground">No New Next Up Clips</h3>
         <p className="max-w-xs text-sm text-muted-foreground">
-          You&apos;re all caught up. Check back later for new player highlights.
+          There are no approved clips available for your account yet.
         </p>
         <p className="mt-2 max-w-xs text-xs text-muted-foreground">
           New clips will appear here after they are uploaded and approved.
@@ -684,11 +872,22 @@ const NextUpTab = () => {
       {safeReturnTo ? (
         <button
           type="button"
-          onClick={() => navigate(-1)}
-          className="absolute left-3 top-[max(0.75rem,env(safe-area-inset-top))] z-40 inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-black/45 text-white shadow-lg backdrop-blur-sm transition-colors hover:bg-black/65"
-          aria-label="Back to player profile"
+          onClick={() => {
+            // Pause the current clip before leaving so it never keeps playing.
+            getActiveVideo()?.pause();
+            // navigate(-1) returns to the exact previous entry (Liked Videos,
+            // a profile, etc.) so browser/device Back and this button match and
+            // the destination keeps its scroll position and loaded list.
+            navigate(-1);
+          }}
+          className={cn(
+            "absolute left-3 top-[max(0.75rem,env(safe-area-inset-top))] z-40 inline-flex h-10 items-center rounded-full border border-white/20 bg-black/45 text-white shadow-lg backdrop-blur-sm transition-colors hover:bg-black/65",
+            returnLabel ? "gap-1.5 pl-2.5 pr-3.5" : "w-10 justify-center"
+          )}
+          aria-label={returnLabel ? `Back to ${returnLabel}` : "Go back"}
         >
           <ArrowLeft className="h-5 w-5" />
+          {returnLabel ? <span className="whitespace-nowrap text-sm font-medium">{returnLabel}</span> : null}
         </button>
       ) : null}
       {canFilterByGender ? (
@@ -710,18 +909,60 @@ const NextUpTab = () => {
           </div>
         </div>
       ) : null}
+
+      {/* Desktop/keyboard equivalent of the pull gesture. */}
+      <button
+        type="button"
+        onClick={refreshFeed}
+        disabled={isRefreshing}
+        className="absolute right-3 top-[max(0.75rem,env(safe-area-inset-top))] z-40 inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-black/45 text-white shadow-lg backdrop-blur-sm transition-colors hover:bg-black/65 disabled:opacity-60"
+        aria-label="Check for new Next Up clips"
+      >
+        <RotateCw className={cn("h-4 w-4", isRefreshing && "animate-spin")} />
+      </button>
+
+      {pullDistance > 0 || isRefreshing ? (
+        <div
+          aria-hidden={!isRefreshing && pullDistance === 0}
+          className="pointer-events-none absolute inset-x-0 top-0 z-40 flex justify-center"
+          style={{
+            transform: `translateY(${isRefreshing ? PULL_MAX_DISTANCE * 0.5 : pullDistance}px)`,
+            transition: isRefreshing ? "transform 0.25s ease" : "none",
+            paddingTop: "calc(env(safe-area-inset-top, 0px) + 8px)",
+          }}
+        >
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-black/60 text-white shadow-lg backdrop-blur-sm">
+            <RotateCw
+              className={cn("h-5 w-5", isRefreshing && "animate-spin")}
+              style={
+                isRefreshing
+                  ? undefined
+                  : { transform: `rotate(${Math.min(1, pullDistance / PULL_TRIGGER_DISTANCE) * 270}deg)` }
+              }
+            />
+          </div>
+        </div>
+      ) : null}
+
       <div
         ref={containerRef}
         className="relative h-full min-h-0 w-full overscroll-y-contain overflow-y-auto snap-y snap-mandatory hide-scrollbar"
         onScroll={handleFeedScroll}
+        onTouchStart={handlePullTouchStart}
+        onTouchMove={handlePullTouchMove}
+        onTouchEnd={handlePullTouchEnd}
+        onTouchCancel={handlePullTouchEnd}
       >
         {clips.map((clip, index) => {
           const clipCaption = clip.caption || clip.description;
           const isActive = index === currentIndex;
+          // Only the active clip and its immediate neighbours hold a <video>,
+          // so a feed that repeats forever never accumulates media elements.
+          const shouldMountVideo = Math.abs(index - currentIndex) <= VIDEO_WINDOW;
 
           return (
             <section
-              key={clip.id}
+              key={clip.feedKey}
               data-index={index}
               data-clip-id={clip.id}
               className="relative h-full min-h-full snap-start snap-always overflow-hidden"
@@ -755,35 +996,50 @@ const NextUpTab = () => {
                     isActive ? "scale-100 opacity-100" : "scale-[0.96] opacity-70"
                   )}
                 >
-                  {clip.video_url ? (
+                  {clip.video_url && shouldMountVideo ? (
                     <video
                       ref={(node) => {
-                        videoRefs.current[clip.id] = node;
+                        if (node) videoRefs.current[clip.feedKey] = node;
+                        else delete videoRefs.current[clip.feedKey];
                       }}
-                      key={clip.id}
+                      key={clip.feedKey}
                       src={clip.video_url}
+                      poster={clip.thumbnail_url || undefined}
                       className={`w-full h-full ${clip.fit_mode === "contain" ? "object-contain" : "object-cover"}`}
                       controls={false}
                       autoPlay={isActive && settings.autoplayVideos}
                       loop
                       playsInline
                       muted={isMuted}
-                      preload="auto"
-                      onPlay={(event) => handleVideoPlay(clip.id, event)}
+                      preload={isActive ? "auto" : "metadata"}
+                      onPlay={(event) => handleVideoPlay(clip, event)}
                       onTimeUpdate={(event) => {
                         const end = getClipEnd(clip);
                         if (end && event.currentTarget.currentTime >= end) {
                           event.currentTarget.currentTime = getClipStart(clip);
                         }
                       }}
-                      onEnded={() => resetPlaybackCounter(clip.id)}
+                      onEnded={() => resetPlaybackCounter(clip.feedKey)}
                       onPause={() => {
-                        const video = videoRefs.current[clip.id];
+                        const video = videoRefs.current[clip.feedKey];
                         if (!video || video.currentTime <= 0.35) {
-                          resetPlaybackCounter(clip.id);
+                          resetPlaybackCounter(clip.feedKey);
                         }
                       }}
                     />
+                  ) : clip.video_url ? (
+                    // Off-window placeholder: the real clip's own poster frame,
+                    // never stand-in or sample content.
+                    <div className="h-full w-full bg-secondary">
+                      {clip.thumbnail_url ? (
+                        <img
+                          src={clip.thumbnail_url}
+                          alt=""
+                          aria-hidden
+                          className={`h-full w-full ${clip.fit_mode === "contain" ? "object-contain" : "object-cover"}`}
+                        />
+                      ) : null}
+                    </div>
                   ) : (
                     <div
                       className={cn(
@@ -903,23 +1159,6 @@ const NextUpTab = () => {
             </section>
           );
         })}
-
-        {isCaughtUp ? (
-          <section className="flex h-full min-h-full snap-start snap-always items-center justify-center bg-background px-6 text-center">
-            <div>
-              <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-accent/10 text-accent">
-                <Play className="h-8 w-8 fill-current" />
-              </div>
-              <h3 className="mb-2 text-xl font-bold text-foreground">No New Next Up Clips</h3>
-              <p className="max-w-xs text-sm text-muted-foreground">
-                You&apos;re all caught up. Check back later for new player highlights.
-              </p>
-              <p className="mt-2 max-w-xs text-xs text-muted-foreground">
-                New clips will appear here after they are uploaded and approved.
-              </p>
-            </div>
-          </section>
-        ) : null}
 
       </div>
 

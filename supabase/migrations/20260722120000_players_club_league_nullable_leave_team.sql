@@ -1,0 +1,50 @@
+-- =============================================================================
+-- Fix "Leave Team": allow a player to exist with no club
+-- =============================================================================
+-- SYMPTOM
+--   A player leaving their club team gets:
+--     null value in column "club" of relation "players" violates not-null constraint
+--
+-- EXACT CAUSE
+--   public.players was created with:
+--     club   TEXT NOT NULL
+--     league TEXT NOT NULL
+--   The leave-team RPCs correctly clear the association when the player has no
+--   remaining team:
+--     leave_team_membership() -> update public.players
+--                                set team_id = null, club = null, league = null
+--     leave_current_team()    -> update public.players set team_id = null, club = null ...
+--   Those NULL writes are rejected by the NOT NULL constraints, so the whole
+--   transaction rolls back and the player can never leave.
+--
+-- FIX
+--   Drop the NOT NULL on the two optional association columns so "no club" is
+--   stored honestly as NULL. No placeholder text ("None" / "Unassigned" / "") is
+--   ever written. Every other players column is unchanged, and no other column
+--   on this table has an incorrect NOT NULL (team_id, user_id, jersey_number,
+--   player_gender, position, height, weight, contact_* were all added nullable;
+--   id/name/created_at stay NOT NULL, which is correct).
+--
+-- NOT CHANGED (already correct — verified before writing this migration):
+--   * The leave RPCs are already atomic (a single plpgsql function runs in one
+--     transaction, so a failure at any step rolls the whole thing back).
+--   * They are already scoped to the caller: leave_team_membership matches
+--     id = _membership_id AND player_user_id = auth.uid(), so it can never
+--     unlink another player or an unrelated team.
+--   * Membership rows are set to status 'revoked' (not deleted), and every
+--     roster query filters status in ('accepted','approved') — so the player
+--     disappears from the daughter-team and mother-club rosters immediately
+--     while the club, its teams, other roster members, and historical fixtures
+--     are all left intact.
+--
+-- Safe to run repeatedly (idempotent). Changes no data, deletes nothing.
+-- =============================================================================
+
+alter table public.players alter column club   drop not null;
+alter table public.players alter column league drop not null;
+
+-- =============================================================================
+-- ROLLBACK (only if every players row has a non-null club/league):
+--   alter table public.players alter column club   set not null;
+--   alter table public.players alter column league set not null;
+-- =============================================================================

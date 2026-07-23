@@ -37,6 +37,22 @@ assert.deepEqual(splitClipsForFreeDowngrade(clips), {
 
 assert.equal(createUpgradePatch("annual", now).account_tier, ACCOUNT_TIERS.PRO_ANNUAL, "Annual upgrade sets annual tier");
 assert.equal(createUpgradePatch("lifetime", now).pro_expires_at, null, "Lifetime upgrade never expires");
+
+// New Monthly / Yearly plans map to the correct tier and expiry, and each is
+// only active while unexpired.
+const monthlyPatch = createUpgradePatch("monthly", now);
+assert.equal(monthlyPatch.account_tier, ACCOUNT_TIERS.PRO_MONTHLY, "Monthly upgrade sets monthly tier");
+assert.equal(monthlyPatch.pro_expires_at, "2026-07-14T12:00:00.000Z", "Monthly upgrade expires one month later");
+const yearlyPatch = createUpgradePatch("yearly", now);
+assert.equal(yearlyPatch.account_tier, ACCOUNT_TIERS.PRO_YEARLY, "Yearly upgrade sets yearly tier");
+assert.equal(yearlyPatch.pro_expires_at, "2027-06-14T12:00:00.000Z", "Yearly upgrade expires one year later");
+
+const activeMonthly = { account_tier: ACCOUNT_TIERS.PRO_MONTHLY, pro_expires_at: "2026-07-14T12:00:00Z" };
+const expiredMonthly = { account_tier: ACCOUNT_TIERS.PRO_MONTHLY, pro_expires_at: "2026-05-14T12:00:00Z" };
+const activeYearly = { account_tier: ACCOUNT_TIERS.PRO_YEARLY, pro_expires_at: "2027-06-14T12:00:00Z" };
+assert.equal(getIsPro(activeMonthly, now), true, "Active monthly Pro is Pro");
+assert.equal(getIsPro(expiredMonthly, now), false, "Expired monthly Pro returns to Free");
+assert.equal(getIsPro(activeYearly, now), true, "Active yearly Pro is Pro");
 assert.equal(applyFeedBoost(10, annual, now), 10 * PRO_FEED_BOOST_MULTIPLIER, "Pro feed boost is 1.5x");
 assert.equal(applyFeedBoost(10, free, now), 10, "Free feed ranking is unboosted");
 assert.equal(shouldShowAds(free, now), true, "Free users see ads");

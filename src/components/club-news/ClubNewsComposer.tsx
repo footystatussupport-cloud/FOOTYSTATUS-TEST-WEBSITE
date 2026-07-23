@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ImagePlus, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
@@ -208,90 +208,110 @@ const ClubNewsComposer = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[90dvh] w-[calc(100%-2rem)] max-w-lg flex-col gap-0 overflow-hidden p-0 sm:w-full">
+        <DialogHeader className="shrink-0 space-y-1.5 border-b border-border px-6 pb-4 pt-6 pr-12 text-left">
           <DialogTitle>{initialPost ? "Edit News/Update" : "Post News/Update"}</DialogTitle>
           <DialogDescription>
             Only Team / Club accounts can publish updates. Keep it concise and useful for your players and families.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
-          <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title" />
-          <Textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="Write your update..." className="min-h-[140px]" />
 
-          <div className="rounded-xl border border-border p-3 space-y-3">
-            <div className="flex items-center justify-between">
-            <p className="text-sm font-medium">Media</p>
-            <span className="text-xs text-muted-foreground">
-                {totalMediaCount}/{CLUB_NEWS_MAX_MEDIA_ITEMS} items
-              </span>
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+          <div className="space-y-5">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">Title</label>
+              <Input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Title"
+                className="w-full"
+              />
             </div>
-            <input
-              ref={mediaInputRef}
-              type="file"
-              accept="image/*,video/*"
-              multiple
-              onChange={handlePickFiles}
-              className="hidden"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="w-full justify-center gap-2"
-              onClick={() => mediaInputRef.current?.click()}
-            >
-              <ImagePlus className="h-4 w-4" />
-              Add Photos / Video
-            </Button>
-            <p className="text-xs text-muted-foreground">
-              Up to {CLUB_NEWS_MAX_IMAGES} photos and {CLUB_NEWS_MAX_VIDEOS} videos per post.
-            </p>
 
-            {visibleExistingMedia.length > 0 || newFiles.length > 0 ? (
-              <div className="space-y-2">
-                {visibleExistingMedia.map((media) => (
-                  <div key={media.id} className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
-                    <button type="button" className="min-w-0 text-left flex-1" onClick={() => setCoverSelection(`existing:${media.id}`)}>
-                      <p className="text-sm font-medium">{media.media_type === "video" ? "Video" : "Image"}</p>
-                      <p className="text-xs text-muted-foreground">{coverSelection === `existing:${media.id}` ? "Cover image selected" : "Tap to use as cover"}</p>
-                    </button>
-                    <Button size="sm" variant="outline" onClick={() => handleRemoveExistingMedia(media.id)}>
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                ))}
-                {newFiles.map((file, index) => (
-                  <div key={`${file.name}-${index}`} className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
-                    <button type="button" className="min-w-0 text-left flex-1" onClick={() => setCoverSelection(`new:${index}`)}>
-                      <p className="text-sm font-medium truncate">{file.name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {coverSelection === `new:${index}` ? "Cover image selected" : file.type.startsWith("video/") ? "Video" : "Image"}
-                      </p>
-                    </button>
-                    <Button size="sm" variant="outline" onClick={() => handleRemoveNewFile(index)}>
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground">
-                <Upload className="h-4 w-4 mx-auto mb-1" />
-                Add up to {CLUB_NEWS_MAX_IMAGES} photos and {CLUB_NEWS_MAX_VIDEOS} videos for this post.
-              </div>
-            )}
-          </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">Update</label>
+              <Textarea
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                placeholder="Write your update..."
+                className="min-h-[140px] w-full resize-y"
+              />
+            </div>
 
-          <div className="flex gap-2">
-            <Button variant="outline" className="flex-1" onClick={() => onOpenChange(false)} disabled={saving}>
-              Cancel
-            </Button>
-            <Button className="flex-1" onClick={handleSave} disabled={saving}>
-              {saving ? "Saving..." : initialPost ? "Save Changes" : "Publish"}
-            </Button>
+            <div className="space-y-3 rounded-xl border border-border p-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-medium">Media</p>
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {totalMediaCount}/{CLUB_NEWS_MAX_MEDIA_ITEMS} items
+                </span>
+              </div>
+              <input
+                ref={mediaInputRef}
+                type="file"
+                accept="image/*,video/*"
+                multiple
+                onChange={handlePickFiles}
+                className="hidden"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="w-full justify-center gap-2"
+                onClick={() => mediaInputRef.current?.click()}
+              >
+                <ImagePlus className="h-4 w-4" />
+                Add Photos / Video
+              </Button>
+              <p className="text-xs text-muted-foreground">
+                Up to {CLUB_NEWS_MAX_IMAGES} photos and {CLUB_NEWS_MAX_VIDEOS} videos per post.
+              </p>
+
+              {visibleExistingMedia.length > 0 || newFiles.length > 0 ? (
+                <div className="space-y-2">
+                  {visibleExistingMedia.map((media) => (
+                    <div key={media.id} className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
+                      <button type="button" className="min-w-0 flex-1 text-left" onClick={() => setCoverSelection(`existing:${media.id}`)}>
+                        <p className="truncate text-sm font-medium">{media.media_type === "video" ? "Video" : "Image"}</p>
+                        <p className="truncate text-xs text-muted-foreground">{coverSelection === `existing:${media.id}` ? "Cover image selected" : "Tap to use as cover"}</p>
+                      </button>
+                      <Button size="sm" variant="outline" className="shrink-0" onClick={() => handleRemoveExistingMedia(media.id)}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))}
+                  {newFiles.map((file, index) => (
+                    <div key={`${file.name}-${index}`} className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
+                      <button type="button" className="min-w-0 flex-1 text-left" onClick={() => setCoverSelection(`new:${index}`)}>
+                        <p className="truncate text-sm font-medium">{file.name}</p>
+                        <p className="truncate text-xs text-muted-foreground">
+                          {coverSelection === `new:${index}` ? "Cover image selected" : file.type.startsWith("video/") ? "Video" : "Image"}
+                        </p>
+                      </button>
+                      <Button size="sm" variant="outline" className="shrink-0" onClick={() => handleRemoveNewFile(index)}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground">
+                  <Upload className="mx-auto mb-1 h-4 w-4" />
+                  Add up to {CLUB_NEWS_MAX_IMAGES} photos and {CLUB_NEWS_MAX_VIDEOS} videos for this post.
+                </div>
+              )}
+            </div>
           </div>
         </div>
+
+        <DialogFooter className="shrink-0 gap-2 border-t border-border px-6 py-4">
+          <Button variant="outline" className="flex-1 sm:flex-none" onClick={() => onOpenChange(false)} disabled={saving}>
+            Cancel
+          </Button>
+          <Button className="flex-1 sm:flex-none" onClick={handleSave} disabled={saving}>
+            {saving ? "Saving..." : initialPost ? "Save Changes" : "Publish"}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

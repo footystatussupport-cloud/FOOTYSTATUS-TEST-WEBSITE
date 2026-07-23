@@ -2118,5 +2118,1687 @@ create trigger footy_status_cleanup_app_data_before_auth_user_delete
 --   -- 20260713230000_complete_account_deletion_all_types.sql if desired.
 -- =============================================================================
 
+-- ############################################################################
+-- 20260720200000_real_pro_purchase_verification
+-- ############################################################################
+-- =============================================================================
+-- Real Footy Status Pro purchases — remove the free-Pro bypass, add verified
+-- store-purchase granting, and lock subscription columns server-side.
+-- =============================================================================
+-- WHAT THIS FIXES
+--   * Removes public.upgrade_to_pro(uuid, text): a self-serve RPC that granted
+--     Pro with NO payment (the server side of the "free Pro" bypass).
+--   * Closes the direct-write hole: profiles RLS lets a player update their own
+--     row, so a player could set account_tier/is_pro themselves. A new guard
+--     trigger rejects ANY unauthorized escalation of the subscription columns;
+--     only the verified-purchase RPC and the admin tool (which set an in-txn
+--     authorization flag) may raise a tier. De-escalation to Free is always
+--     allowed (expiry downgrades, the player-only backstop, admin).
+--   * Adds monthly/yearly to the account_tier CHECK (annual/lifetime kept for
+--     existing members; never sold by the new flow).
+--   * Adds the subscription metadata the backend must own (platform, dates,
+--     transaction ids, renewal + verification status).
+--   * Adds public.apply_verified_pro_purchase(...): the ONLY grant path. It is
+--     callable only by the service_role (used by the verify-pro-purchase Edge
+--     Function AFTER it verifies the receipt with Apple/Google). Player-only,
+--     idempotent by original transaction id, never downgrades a longer entitlement.
+--
+-- Safe to run repeatedly (idempotent). Grants Pro to nobody by itself.
+-- =============================================================================
+
+-- ---------------------------------------------------------------------------
+-- 1. Remove the free-Pro bypass RPC entirely.
+-- ---------------------------------------------------------------------------
+drop function if exists public.upgrade_to_pro(uuid, text);
+
+-- ---------------------------------------------------------------------------
+-- 2. Extend the account_tier CHECK to include the new monthly/yearly tiers.
+-- ---------------------------------------------------------------------------
+alter table public.profiles drop constraint if exists profiles_account_tier_check;
+alter table public.profiles
+  add constraint profiles_account_tier_check
+  check (account_tier in ('free', 'pro_monthly', 'pro_yearly', 'pro_annual', 'pro_lifetime'))
+  not valid;
+alter table public.profiles validate constraint profiles_account_tier_check;
+
+-- ---------------------------------------------------------------------------
+-- 3. Subscription metadata owned by the backend (single source of truth).
+-- ---------------------------------------------------------------------------
+alter table public.profiles
+  add column if not exists pro_platform text,                 -- 'apple' | 'google'
+  add column if not exists pro_purchase_date timestamptz,
+  add column if not exists pro_renewal_status text,           -- 'auto_renew_on' | 'auto_renew_off' | 'cancelled' | 'expired'
+  add column if not exists pro_original_transaction_id text,
+  add column if not exists pro_current_transaction_id text,
+  add column if not exists pro_verification_status text;       -- 'verified' | 'failed' | 'pending'
+
+create unique index if not exists idx_profiles_pro_original_txn
+  on public.profiles(pro_original_transaction_id)
+  where pro_original_transaction_id is not null;
+
+-- ---------------------------------------------------------------------------
+-- 4. Guard trigger: block unauthorized escalation of the subscription columns.
+--    Only pathways that set app.pro_change_authorized = 'on' (the grant RPC and
+--    the admin tool below) may raise a tier / extend expiry. Everything else —
+--    a direct client update, a stray patch — has its subscription fields
+--    reverted to the stored values. Losing Pro (-> free) is always permitted.
+-- ---------------------------------------------------------------------------
+create or replace function public.tg_guard_subscription_columns()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_authorized boolean := coalesce(current_setting('app.pro_change_authorized', true), '') = 'on';
+  v_escalates boolean;
+begin
+  if v_authorized then
+    return new;  -- verified purchase / admin action
+  end if;
+
+  v_escalates :=
+       (coalesce(new.is_pro, false) is true and coalesce(old.is_pro, false) is not true)
+    or (new.account_tier is distinct from old.account_tier and coalesce(new.account_tier, 'free') <> 'free')
+    or (
+         new.pro_expires_at is distinct from old.pro_expires_at
+         and new.pro_expires_at is not null
+         and (old.pro_expires_at is null or new.pro_expires_at > old.pro_expires_at)
+       );
+
+  if v_escalates then
+    -- Keep the stored subscription state; ignore the attempted upgrade.
+    new.account_tier              := old.account_tier;
+    new.is_pro                    := old.is_pro;
+    new.pro_expires_at            := old.pro_expires_at;
+    new.pro_started_at            := old.pro_started_at;
+    new.pro_platform              := old.pro_platform;
+    new.pro_purchase_date         := old.pro_purchase_date;
+    new.pro_renewal_status        := old.pro_renewal_status;
+    new.pro_original_transaction_id := old.pro_original_transaction_id;
+    new.pro_current_transaction_id  := old.pro_current_transaction_id;
+    new.pro_verification_status     := old.pro_verification_status;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists guard_subscription_columns on public.profiles;
+create trigger guard_subscription_columns
+  before update on public.profiles
+  for each row execute function public.tg_guard_subscription_columns();
+
+-- ---------------------------------------------------------------------------
+-- 5. The ONLY grant path: apply a verified store purchase. Called by the
+--    verify-pro-purchase Edge Function with the service_role key, AFTER the
+--    receipt has been verified with Apple / Google.
+--      _plan: 'monthly' | 'yearly'
+--    Player-only, idempotent by original transaction id, never shortens a
+--    longer existing entitlement (so a stale restore can't downgrade).
+-- ---------------------------------------------------------------------------
+create or replace function public.apply_verified_pro_purchase(
+  _user_id                  uuid,
+  _plan                     text,
+  _platform                 text,
+  _expires_at               timestamptz,
+  _original_transaction_id  text,
+  _current_transaction_id   text default null,
+  _renewal_status           text default 'auto_renew_on'
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_tier text;
+  v_expires timestamptz;
+  v_existing_expires timestamptz;
+begin
+  if _user_id is null then
+    raise exception 'A target account is required.';
+  end if;
+
+  -- Player-only product — refuse every other account type.
+  if not public.account_is_pro_eligible(_user_id) then
+    raise exception 'Footy Status Pro is only available for player accounts.';
+  end if;
+
+  v_tier := case _plan
+    when 'monthly' then 'pro_monthly'
+    when 'yearly'  then 'pro_yearly'
+    else null
+  end;
+  if v_tier is null then
+    raise exception 'Unknown Pro plan: %', _plan;
+  end if;
+
+  if _plan in ('monthly', 'yearly') and _expires_at is null then
+    raise exception 'A subscription expiry is required for the % plan.', _plan;
+  end if;
+
+  -- Never shorten an existing, longer entitlement (idempotent restore safety).
+  select pro_expires_at into v_existing_expires
+  from public.profiles where user_id = _user_id;
+  v_expires := greatest(_expires_at, coalesce(v_existing_expires, _expires_at));
+
+  -- Authorize the subscription-column change for this transaction only.
+  perform set_config('app.pro_change_authorized', 'on', true);
+
+  update public.profiles
+  set account_tier                = v_tier,
+      is_pro                      = true,
+      pro_started_at              = coalesce(pro_started_at, now()),
+      pro_expires_at              = v_expires,
+      pro_platform                = _platform,
+      pro_purchase_date           = now(),
+      pro_renewal_status          = coalesce(_renewal_status, 'auto_renew_on'),
+      pro_original_transaction_id = coalesce(_original_transaction_id, pro_original_transaction_id),
+      pro_current_transaction_id  = coalesce(_current_transaction_id, _original_transaction_id, pro_current_transaction_id),
+      pro_verification_status     = 'verified',
+      updated_at                  = now()
+  where user_id = _user_id;
+
+  -- Bring back any clips that were hidden while on Free, if the helper exists.
+  if to_regprocedure('public.restore_pro_clips(uuid)') is not null then
+    begin
+      perform public.restore_pro_clips(_user_id);
+    exception when others then
+      null;
+    end;
+  end if;
+
+  return jsonb_build_object(
+    'success', true,
+    'user_id', _user_id,
+    'tier', v_tier,
+    'expires_at', v_expires
+  );
+end;
+$$;
+
+-- The grant path is service-role only — never reachable from the client.
+revoke all on function public.apply_verified_pro_purchase(uuid, text, text, timestamptz, text, text, text) from public, anon, authenticated;
+grant execute on function public.apply_verified_pro_purchase(uuid, text, text, timestamptz, text, text, text) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- 6. Expiry sweep -> Free. Any time-limited tier past its expiry returns to
+--    Free (lifetime excluded). Sets the authorization flag so the guard allows
+--    the (de-escalating) write. Intended to be run on a schedule.
+-- ---------------------------------------------------------------------------
+create or replace function public.expire_lapsed_pro_accounts()
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_count integer := 0;
+begin
+  perform set_config('app.pro_change_authorized', 'on', true);
+
+  with lapsed as (
+    update public.profiles
+    set account_tier = 'free',
+        is_pro = false,
+        pro_renewal_status = 'expired',
+        pro_verification_status = 'expired',
+        updated_at = now()
+    where account_tier in ('pro_monthly', 'pro_yearly', 'pro_annual')
+      and pro_expires_at is not null
+      and pro_expires_at < now()
+    returning 1
+  )
+  select count(*) into v_count from lapsed;
+
+  return v_count;
+end;
+$$;
+
+revoke all on function public.expire_lapsed_pro_accounts() from public, anon, authenticated;
+grant execute on function public.expire_lapsed_pro_accounts() to service_role;
+
+-- =============================================================================
+-- ROLLBACK (manual, if ever needed):
+--   drop trigger if exists guard_subscription_columns on public.profiles;
+--   drop function if exists public.tg_guard_subscription_columns();
+--   drop function if exists public.apply_verified_pro_purchase(uuid, text, text, timestamptz, text, text, text);
+--   drop function if exists public.expire_lapsed_pro_accounts();
+--   -- (Recreating upgrade_to_pro would restore the free-Pro bypass — do not.)
+-- =============================================================================
+
+
+-- ############################################################################
+-- 20260722150000_next_up_launch_repeat_feed
+-- ############################################################################
+-- =============================================================================
+-- Next Up feed: launch-window algorithm (real clips only, endless via repeats)
+-- =============================================================================
+-- Problem this fixes
+-- ------------------
+-- get_next_up_feed excluded every clip that already had a clip_feed_impressions
+-- row, and that row is written the moment a clip is *recommended* (not watched).
+-- With a small launch catalogue the eligible set drained to zero after one pass
+-- and the RPC returned no rows forever, so every viewer got stuck on the
+-- "No New Next Up Clips" empty state even though approved clips existed.
+--
+-- New behaviour
+-- -------------
+-- Viewing history is now recorded WITHOUT removing a clip from eligibility.
+-- The feed runs in "rounds": within a round every eligible clip is served once,
+-- and when the round is exhausted a new round starts and the same real clips
+-- are served again in a fresh, shuffled rotation. No duplicate clip rows are
+-- created and no mock/placeholder content is ever introduced.
+--
+-- Ranking inside a round:
+--   tier 0  never served to this viewer  (includes newly approved clips)
+--   tier 1  served before but never watched
+--   tier 2  already watched -> the repeat rotation
+-- tiers 0/1 order newest-approved first; tier 2 is a weighted shuffle that
+-- differs every round. Within each tier clips are round-robined by owner so one
+-- clip or one player never appears back-to-back while other clips exist.
+--
+-- Gender/visibility rules are unchanged and are re-applied on every single row
+-- returned (see the final SELECT), including when clips repeat.
+-- =============================================================================
+
+
+-- 1) Viewing history: keep it, but stop using it as an exclusion list. ---------
+
+alter table public.clip_feed_impressions
+  add column if not exists last_served_at timestamptz,
+  add column if not exists last_viewed_at timestamptz,
+  add column if not exists serve_count integer not null default 0,
+  add column if not exists view_count integer not null default 0;
+
+update public.clip_feed_impressions
+set last_served_at = coalesce(last_served_at, viewed_at, recommended_at),
+    last_viewed_at = coalesce(last_viewed_at, viewed_at),
+    serve_count = greatest(serve_count, 1),
+    view_count = case
+      when view_count > 0 then view_count
+      when viewed_at is not null then 1
+      else 0
+    end
+where last_served_at is null
+   or (viewed_at is not null and last_viewed_at is null);
+
+create index if not exists idx_clip_feed_impressions_user_served
+  on public.clip_feed_impressions(user_id, last_served_at);
+
+
+-- 2) Per-viewer round state. --------------------------------------------------
+
+create table if not exists public.next_up_feed_state (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  round_started_at timestamptz not null default now(),
+  round_number integer not null default 1,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.next_up_feed_state enable row level security;
+
+drop policy if exists "Users view own next up feed state" on public.next_up_feed_state;
+create policy "Users view own next up feed state"
+on public.next_up_feed_state for select to authenticated
+using (auth.uid() = user_id);
+
+-- Only the SECURITY DEFINER feed functions write this table.
+revoke all on public.next_up_feed_state from anon, authenticated;
+grant select on public.next_up_feed_state to authenticated;
+
+
+-- 3) Eligibility, in one place. -----------------------------------------------
+-- Every rule a clip must satisfy to be shown to _viewer_user_id. Used by the
+-- feed for both the "remaining this round" check and the actual page, so the
+-- two can never drift apart.
+--
+-- NOT granted to client roles: it is called only from inside the SECURITY
+-- DEFINER feed function, which already scopes _viewer_user_id to auth.uid().
+
+create or replace function public.next_up_eligible_clips(
+  _viewer_user_id uuid,
+  _gender_preference text default null
+)
+returns table (
+  clip_id uuid,
+  owner_user_id uuid,
+  approved_at timestamptz,
+  exposure_weight numeric
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    c.id,
+    coalesce(c.user_id, pp.user_id),
+    coalesce(c.reviewed_at, c.created_at),
+    (
+      1.0 + least(coalesce(es.bonus_exposures_remaining, 0), 100)::numeric / 20.0
+    ) * case when public.clip_owner_is_active_pro(c.id) then 1.5 else 1.0 end
+  from public.clips c
+  -- Resolve exactly one player profile per clip, preferring the direct
+  -- player_id link, so the gender filter can never latch onto the wrong row.
+  join lateral (
+    select pp_any.*
+    from public.player_profiles pp_any
+    where (c.player_id is not null and pp_any.id = c.player_id)
+       or (c.user_id is not null and pp_any.user_id = c.user_id)
+    order by case when pp_any.id = c.player_id then 0 else 1 end, pp_any.id
+    limit 1
+  ) pp on true
+  join public.profiles owner_profile
+    on owner_profile.user_id = coalesce(c.user_id, pp.user_id)
+  left join public.clip_exposure_state es on es.clip_id = c.id
+  where
+    -- Approved, real, still-published content only.
+    c.review_status = 'approved'
+    and c.visibility in ('public', 'restricted')
+    and nullif(trim(coalesce(c.video_url, '')), '') is not null
+    -- Restricted clips stay staff-only.
+    and (
+      c.visibility = 'public'
+      or public.is_staff_member(_viewer_user_id)
+      or exists (
+        select 1
+        from public.profiles vp
+        where vp.user_id = _viewer_user_id
+          and coalesce(vp.account_role, vp.account_type, vp.role::text) in (
+            'team_club', 'head_coach_assistant', 'coach', 'scout', 'trainer',
+            'academy_director', 'team_staff', 'school_team'
+          )
+      )
+    )
+    -- Active, non-deleted owner account.
+    and coalesce(owner_profile.is_active, true)
+    and owner_profile.deleted_at is null
+    -- Never show the viewer their own clips in the discovery feed.
+    and coalesce(c.user_id, pp.user_id) is distinct from _viewer_user_id
+    -- Gender separation + every other account visibility rule.
+    and public.can_view_account_content(coalesce(c.user_id, pp.user_id))
+    -- Optional scouting-only boys/girls narrowing.
+    and (_gender_preference is null or pp.player_gender = _gender_preference)
+$$;
+
+revoke all on function public.next_up_eligible_clips(uuid, text) from public;
+revoke all on function public.next_up_eligible_clips(uuid, text) from anon, authenticated;
+
+
+-- 4) The feed. ----------------------------------------------------------------
+
+drop function if exists public.get_next_up_feed(integer, text);
+drop function if exists public.get_next_up_feed(integer);
+
+create or replace function public.get_next_up_feed(
+  _limit integer default 12,
+  _gender_preference text default null,
+  _restart boolean default false
+)
+returns setof public.clips
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_limit integer := greatest(1, least(coalesce(_limit, 12), 30));
+  v_viewer_role text;
+  v_effective_gender text := null;
+  v_round_started_at timestamptz;
+  v_has_remaining boolean := false;
+  v_has_any boolean := false;
+begin
+  if v_user_id is null then
+    raise exception 'Log in or sign up to watch Next Up Clips.';
+  end if;
+
+  -- The boys/girls selector is a scouting convenience for accounts that are
+  -- already permitted to see both. Player accounts never reach this branch, so
+  -- they can never widen their own access with it.
+  select coalesce(p.account_role, p.account_type, p.role::text)
+  into v_viewer_role
+  from public.profiles p
+  where p.user_id = v_user_id
+  limit 1;
+
+  if v_viewer_role in (
+    'scout', 'team_staff', 'head_coach_assistant', 'coach', 'trainer',
+    'academy_director', 'team_club', 'school_team'
+  ) then
+    v_effective_gender := case
+      when lower(coalesce(_gender_preference, 'both')) in ('boy', 'boys', 'male') then 'boy'
+      when lower(coalesce(_gender_preference, 'both')) in ('girl', 'girls', 'female') then 'girl'
+      else null
+    end;
+  end if;
+
+  insert into public.next_up_feed_state (user_id)
+  values (v_user_id)
+  on conflict (user_id) do nothing;
+
+  select s.round_started_at into v_round_started_at
+  from public.next_up_feed_state s
+  where s.user_id = v_user_id;
+
+  -- Pull-to-refresh / first load: start a fresh round so the newest approved
+  -- clips are at the top again instead of resuming mid-rotation.
+  if coalesce(_restart, false) then
+    v_round_started_at := now();
+    update public.next_up_feed_state
+    set round_started_at = v_round_started_at,
+        round_number = round_number + 1,
+        updated_at = now()
+    where user_id = v_user_id;
+  end if;
+
+  -- Existence probes rather than counts: these stop at the first matching row,
+  -- so the feed never scans the whole clip catalogue to decide what to do.
+  select exists (
+    select 1
+    from public.next_up_eligible_clips(v_user_id, v_effective_gender) e
+    left join public.clip_feed_impressions fi
+      on fi.user_id = v_user_id and fi.clip_id = e.clip_id
+    where fi.clip_id is null
+       or fi.last_served_at is null
+       or fi.last_served_at < v_round_started_at
+  )
+  into v_has_remaining;
+
+  if not v_has_remaining then
+    select exists (
+      select 1 from public.next_up_eligible_clips(v_user_id, v_effective_gender)
+    )
+    into v_has_any;
+
+    -- Genuinely nothing this viewer is allowed to see -> real empty state.
+    -- This is the ONLY path that returns zero rows.
+    if not v_has_any then
+      return;
+    end if;
+
+    -- Round exhausted: the viewer has watched everything available, so open a
+    -- new round and replay the same real clips in a different order.
+    v_round_started_at := now();
+    update public.next_up_feed_state
+    set round_started_at = v_round_started_at,
+        round_number = round_number + 1,
+        updated_at = now()
+    where user_id = v_user_id;
+  end if;
+
+  return query
+  with candidates as (
+    select
+      e.clip_id,
+      e.owner_user_id,
+      e.approved_at,
+      e.exposure_weight,
+      case
+        when fi.clip_id is null then 0        -- never served (new / newly approved)
+        when fi.viewed_at is null then 1      -- served but not watched yet
+        else 2                                -- watched -> repeat rotation
+      end as tier
+    from public.next_up_eligible_clips(v_user_id, v_effective_gender) e
+    left join public.clip_feed_impressions fi
+      on fi.user_id = v_user_id and fi.clip_id = e.clip_id
+    where fi.clip_id is null
+       or fi.last_served_at is null
+       or fi.last_served_at < v_round_started_at
+  ),
+  ranked as (
+    select
+      c.*,
+      row_number() over (
+        partition by c.tier
+        order by
+          -- Unwatched: newest approved first.
+          case when c.tier < 2 then c.approved_at end desc nulls last,
+          -- Repeats: weighted shuffle, re-drawn every round.
+          case
+            when c.tier = 2
+            then (-ln(greatest(random(), 0.000001)) / greatest(c.exposure_weight, 0.1))
+          end asc nulls last,
+          c.clip_id
+      ) as tier_rank
+    from candidates c
+  ),
+  spread as (
+    -- Round-robin by owner so the same player never stacks back-to-back while
+    -- another eligible player is available.
+    select
+      r.*,
+      row_number() over (
+        partition by r.tier, r.owner_user_id
+        order by r.tier_rank
+      ) as owner_round
+    from ranked r
+  ),
+  page as (
+    select
+      s.clip_id,
+      row_number() over (order by s.tier, s.owner_round, s.tier_rank) as feed_position
+    from spread s
+    order by s.tier, s.owner_round, s.tier_rank
+    limit v_limit
+  ),
+  served as (
+    insert into public.clip_feed_impressions (
+      user_id, clip_id, recommended_at, last_served_at, serve_count
+    )
+    select v_user_id, p.clip_id, now(), now(), 1
+    from page p
+    on conflict (user_id, clip_id) do update
+    set last_served_at = now(),
+        serve_count = public.clip_feed_impressions.serve_count + 1
+    returning clip_id
+  )
+  -- Final permission revalidation: every row handed back is re-checked against
+  -- approval, publication state and the viewer's gender/visibility rules, so a
+  -- repeated clip can never escape the restrictions a fresh clip obeys.
+  select c.*
+  from page p
+  join served sv on sv.clip_id = p.clip_id
+  join public.clips c on c.id = p.clip_id
+  where c.review_status = 'approved'
+    and c.visibility in ('public', 'restricted')
+    and public.can_view_account_content(
+      coalesce(
+        c.user_id,
+        (
+          select pp.user_id
+          from public.player_profiles pp
+          where pp.id = c.player_id
+          limit 1
+        )
+      )
+    )
+  order by p.feed_position;
+end;
+$$;
+
+revoke all on function public.get_next_up_feed(integer, text, boolean) from public;
+revoke execute on function public.get_next_up_feed(integer, text, boolean) from anon;
+grant execute on function public.get_next_up_feed(integer, text, boolean) to authenticated;
+
+
+-- 5) Watch history: record the view, never drop the clip from eligibility. -----
+
+create or replace function public.mark_next_up_clip_viewed(_clip_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then
+    return;
+  end if;
+
+  insert into public.clip_feed_impressions (
+    user_id, clip_id, viewed_at, last_viewed_at, last_served_at, serve_count, view_count
+  )
+  values (auth.uid(), _clip_id, now(), now(), now(), 1, 1)
+  on conflict (user_id, clip_id) do update
+  set viewed_at = coalesce(public.clip_feed_impressions.viewed_at, now()),
+      last_viewed_at = now(),
+      view_count = public.clip_feed_impressions.view_count + 1;
+end;
+$$;
+
+grant execute on function public.mark_next_up_clip_viewed(uuid) to authenticated;
+
+
+-- 6) Invalidate a viewer's round when their own access rules change. ----------
+-- Eligibility is recomputed from scratch on every call, so a permission change
+-- is enforced immediately. Restarting the round on top of that guarantees the
+-- viewer's next page is rebuilt from the top rather than resuming a rotation
+-- that was planned under the old permissions.
+
+create or replace function public.reset_next_up_feed_round()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  delete from public.next_up_feed_state
+  where user_id = coalesce(new.user_id, old.user_id);
+  return null;
+end;
+$$;
+
+drop trigger if exists reset_next_up_feed_round_on_gender_change on public.player_profiles;
+create trigger reset_next_up_feed_round_on_gender_change
+after update of player_gender on public.player_profiles
+for each row
+when (new.player_gender is distinct from old.player_gender)
+execute function public.reset_next_up_feed_round();
+
+drop trigger if exists reset_next_up_feed_round_on_account_change on public.profiles;
+create trigger reset_next_up_feed_round_on_account_change
+after update on public.profiles
+for each row
+when (
+  new.account_role is distinct from old.account_role
+  or new.account_type is distinct from old.account_type
+  or new.role is distinct from old.role
+  or new.is_active is distinct from old.is_active
+  or new.next_up_gender_preference is distinct from old.next_up_gender_preference
+)
+execute function public.reset_next_up_feed_round();
+
+-- ############################################################################
+-- 20260706110000_update_daughter_team_details
+-- ############################################################################
+-- Per-team daughter update RPC. This migration exists in the repo but was
+-- never included in a deploy bundle, so the live database is missing the
+-- function. That is why editing a daughter team from the Mother Team profile
+-- fails with "Could not find the function public.update_daughter_team_details
+-- ... in the schema cache" and the UI shows "Could not save team".
+--
+-- Each school/club daughter team (Varsity, Junior Varsity, Prep, Middle
+-- School, ...) is managed as its own entity. This RPC updates exactly one
+-- team and nothing else: not the school account, not any sibling team. Only
+-- the owning school/club account or a Footy Status admin may call it.
+-- club_teams is the single source of truth for daughter-team display fields
+-- (daughter teams share the mother team's teams row), so updating this one
+-- row propagates everywhere the daughter team is shown.
+
+create or replace function public.update_daughter_team_details(
+  _club_team_id uuid,
+  _age_group text default null,
+  _league_name text default null,
+  _gender text default null,
+  _season text default null,
+  _level text default null,
+  _coach_name text default null,
+  _head_coach_user_id uuid default null,
+  _school_level text default null
+)
+returns public.club_teams
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  team_row public.club_teams;
+  club_row public.clubs;
+  normalized_gender text;
+begin
+  if v_user_id is null then
+    raise exception 'You must be signed in.';
+  end if;
+
+  select * into team_row
+  from public.club_teams
+  where id = _club_team_id;
+
+  if team_row.id is null then
+    raise exception 'Team not found.';
+  end if;
+
+  select * into club_row
+  from public.clubs
+  where id = team_row.club_id;
+
+  if not (club_row.owner_user_id = v_user_id or public.is_footy_status_admin()) then
+    raise exception 'Only the school or club account can edit this team.';
+  end if;
+
+  normalized_gender := case lower(trim(coalesce(_gender, '')))
+    when 'boy' then 'boy'
+    when 'boys' then 'boy'
+    when 'girl' then 'girl'
+    when 'girls' then 'girl'
+    else null
+  end;
+
+  update public.club_teams
+  set age_group = coalesce(nullif(trim(_age_group), ''), age_group),
+      league_name = coalesce(nullif(trim(_league_name), ''), league_name),
+      gender = coalesce(normalized_gender, gender),
+      season = nullif(trim(coalesce(_season, '')), ''),
+      level = nullif(trim(coalesce(_level, '')), ''),
+      coach_name = nullif(trim(coalesce(_coach_name, '')), ''),
+      head_coach_user_id = _head_coach_user_id,
+      school_level = coalesce(nullif(trim(_school_level), ''), school_level),
+      updated_at = now()
+  where id = _club_team_id
+  returning * into team_row;
+
+  return team_row;
+end;
+$$;
+
+grant execute on function public.update_daughter_team_details(uuid, text, text, text, text, text, text, uuid, text) to authenticated;
+
+comment on function public.update_daughter_team_details(uuid, text, text, text, text, text, text, uuid, text) is
+  'Updates a single daughter team; never touches the parent school/club account or sibling teams.';
+
+-- ############################################################################
+-- 20260627190000_public_text_profanity_filter  +  20260709180000_club_news_profanity
+-- ############################################################################
+-- The centralized profanity function public.contains_profanity(text) was never
+-- included in a deploy bundle, so it is missing from the live database. The
+-- club-news enforcement trigger (which DID get deployed) calls it, so every
+-- attempt to publish a Club Team news post fails at insert time with
+-- "function public.contains_profanity(text) does not exist" and the UI shows
+-- "Could not save post" -- even for completely clean content. Deploying the
+-- profanity functions (and re-asserting the triggers idempotently) fixes it
+-- without weakening or bypassing validation.
+
+create or replace function public.profanity_normalized_text(_text text)
+returns text
+language plpgsql
+immutable
+as $$
+declare
+  value text := lower(coalesce(_text, ''));
+begin
+  value := replace(value, '0', 'o');
+  value := replace(value, '1', 'i');
+  value := replace(value, '!', 'i');
+  value := replace(value, '|', 'i');
+  value := replace(value, '3', 'e');
+  value := replace(value, '4', 'a');
+  value := replace(value, '@', 'a');
+  value := replace(value, '5', 's');
+  value := replace(value, '$', 's');
+  value := replace(value, '7', 't');
+  value := replace(value, '+', 't');
+  value := replace(value, '8', 'b');
+  return value;
+end;
+$$;
+
+create or replace function public.profanity_compact_text(_text text)
+returns text
+language sql
+immutable
+as $$
+  select regexp_replace(public.profanity_normalized_text(coalesce(_text, '')), '[^a-z]+', '', 'g');
+$$;
+
+create or replace function public.profanity_squeezed_text(_text text)
+returns text
+language sql
+immutable
+as $$
+  select regexp_replace(public.profanity_compact_text(coalesce(_text, '')), '([a-z])\1+', '\1', 'g');
+$$;
+
+create or replace function public.contains_profanity(_text text)
+returns boolean
+language plpgsql
+immutable
+as $$
+declare
+  normalized text := public.profanity_normalized_text(_text);
+  compact text := public.profanity_compact_text(_text);
+  squeezed text := public.profanity_squeezed_text(_text);
+  term text;
+  compact_terms text[] := array[
+    'fuck',
+    'fucker',
+    'fucking',
+    'motherfucker',
+    'shit',
+    'shitty',
+    'bitch',
+    'bitches',
+    'cunt',
+    'pussy',
+    'asshole',
+    'bastard',
+    'douche',
+    'douchebag',
+    'nigger',
+    'nigga',
+    'faggot',
+    'retard',
+    'slut',
+    'whore'
+  ];
+begin
+  if coalesce(_text, '') = '' then
+    return false;
+  end if;
+
+  foreach term in array compact_terms loop
+    if normalized ~* ('(^|[^a-z])' || term || '([^a-z]|$)') then
+      return true;
+    end if;
+
+    if compact like '%' || term || '%' then
+      return true;
+    end if;
+
+    if squeezed like '%' || regexp_replace(term, '([a-z])\1+', '\1', 'g') || '%' then
+      return true;
+    end if;
+  end loop;
+
+  return false;
+end;
+$$;
+
+create or replace function public.enforce_match_comment_profanity()
+returns trigger
+language plpgsql
+as $$
+begin
+  if public.contains_profanity(new.body) then
+    raise exception 'Your comment contains inappropriate language. Please edit it and try again.';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists enforce_match_comment_profanity_trigger on public.match_comments;
+create trigger enforce_match_comment_profanity_trigger
+before insert or update of body on public.match_comments
+for each row execute function public.enforce_match_comment_profanity();
+
+create or replace function public.enforce_clip_comment_profanity()
+returns trigger
+language plpgsql
+as $$
+begin
+  if public.contains_profanity(new.content) then
+    raise exception 'Your comment contains inappropriate language. Please edit it and try again.';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists enforce_clip_comment_profanity_trigger on public.clip_comments;
+create trigger enforce_clip_comment_profanity_trigger
+before insert or update of content on public.clip_comments
+for each row execute function public.enforce_clip_comment_profanity();
+
+create or replace function public.enforce_clip_public_text_profanity()
+returns trigger
+language plpgsql
+as $$
+begin
+  if public.contains_profanity(new.title)
+     or public.contains_profanity(new.caption)
+     or public.contains_profanity(new.description) then
+    raise exception 'Your post contains inappropriate language. Please edit it and try again.';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists enforce_clip_public_text_profanity_trigger on public.clips;
+create trigger enforce_clip_public_text_profanity_trigger
+before insert or update of title, caption, description on public.clips
+for each row execute function public.enforce_clip_public_text_profanity();
+
+grant execute on function public.contains_profanity(text) to authenticated;
+
+-- Club/team news enforcement (title + body), re-asserted idempotently so the
+-- trigger and its dependency are guaranteed to exist together.
+create or replace function public.enforce_club_news_profanity()
+returns trigger
+language plpgsql
+as $$
+begin
+  if public.contains_profanity(new.title)
+     or public.contains_profanity(new.body) then
+    raise exception 'Your post contains inappropriate language. Please edit it and try again.';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists enforce_club_news_profanity_trigger on public.club_news_posts;
+create trigger enforce_club_news_profanity_trigger
+before insert or update of title, body on public.club_news_posts
+for each row execute function public.enforce_club_news_profanity();
+
 -- Refresh PostgREST schema cache so new functions are found immediately
+notify pgrst, 'reload schema';
+
+-- ############################################################################
+-- 20260711120000 + 20260713230000 + 20260714130000 + 20260720190000
+-- COMPLETE ACCOUNT DELETION CHAIN (self-delete RPC + full cleanup + protection)
+-- ############################################################################
+-- The frontend calls public.delete_my_account(); that function and its
+-- dependencies were never bundled, so deletion failed with a missing-function
+-- error surfaced as the generic "Account could not be deleted". This section
+-- deploys the whole chain, idempotently.
+
+-- 1. Protected-account registry + the shared "can this user be deleted?" guard.
+--    (Only the Footy Status Official Admin is ever in this registry; every
+--    ordinary account passes the guard unchanged.)
+-- ---------------------------------------------------------------------------
+create table if not exists public.protected_accounts (
+  user_id                    uuid primary key
+                               references auth.users(id) on delete restrict,
+  official_email             text,
+  reason                     text not null
+                               default 'Footy Status Official Admin — permanently protected',
+  protected_role             text,
+  protected_account_category text,
+  freeze_profile_role        boolean not null default true,
+  created_at                 timestamptz not null default now()
+);
+
+alter table public.protected_accounts enable row level security;
+revoke all on public.protected_accounts from anon, authenticated;
+
+create or replace function public.ensure_protected_official_admin()
+returns uuid
+language plpgsql
+security definer
+set search_path = public, pg_catalog, pg_temp
+as $$
+declare
+  v_official_email text := 'footystatussupport@gmail.com';
+  v_user_id uuid;
+  v_role text;
+  v_category text;
+begin
+  select u.id into v_user_id
+  from auth.users u
+  where lower(coalesce(u.email, '')) = v_official_email
+  order by u.created_at asc
+  limit 1;
+
+  if v_user_id is null and to_regclass('public.global_admin_users') is not null then
+    select gau.user_id into v_user_id
+    from public.global_admin_users gau
+    where lower(coalesce(gau.email, '')) = v_official_email
+    limit 1;
+  end if;
+
+  if v_user_id is null then
+    select p.user_id into v_user_id
+    from public.profiles p
+    where lower(coalesce(p.email, '')) = v_official_email
+    limit 1;
+  end if;
+
+  if v_user_id is null then
+    raise notice 'Footy Status Official Admin (%) not found; protection not seeded yet.', v_official_email;
+    return null;
+  end if;
+
+  select account_role, account_category
+    into v_role, v_category
+  from public.profiles
+  where user_id = v_user_id
+  limit 1;
+
+  insert into public.protected_accounts
+    (user_id, official_email, protected_role, protected_account_category)
+  values
+    (v_user_id, v_official_email, v_role, v_category)
+  on conflict (user_id) do nothing;
+
+  return v_user_id;
+end;
+$$;
+
+revoke all on function public.ensure_protected_official_admin() from anon, authenticated;
+select public.ensure_protected_official_admin();
+
+create or replace function public.is_account_protected(_user_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, pg_catalog, pg_temp
+as $$
+  select exists (
+    select 1 from public.protected_accounts pa where pa.user_id = _user_id
+  );
+$$;
+
+create or replace function public.assert_user_can_be_deleted(_user_id uuid)
+returns void
+language plpgsql
+stable
+security definer
+set search_path = public, pg_catalog, pg_temp
+as $$
+begin
+  if _user_id is not null and public.is_account_protected(_user_id) then
+    raise exception
+      'The Footy Status Official Admin account is permanently protected and cannot be deleted.'
+      using errcode = 'check_violation';
+  end if;
+end;
+$$;
+
+create or replace function public.current_user_deletion_protected()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, pg_catalog, pg_temp
+as $$
+  select public.is_account_protected(auth.uid());
+$$;
+
+grant execute on function public.is_account_protected(uuid) to authenticated;
+grant execute on function public.assert_user_can_be_deleted(uuid) to authenticated;
+grant execute on function public.current_user_deletion_protected() to authenticated;
+
+-- Protection triggers (last line of defense for the official admin only).
+create or replace function public.tg_protect_auth_user_deletion()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_catalog, pg_temp
+as $$
+begin
+  if public.is_account_protected(old.id) then
+    raise exception
+      'The Footy Status Official Admin account is permanently protected and cannot be deleted.'
+      using errcode = 'check_violation';
+  end if;
+  return old;
+end;
+$$;
+
+drop trigger if exists protect_official_admin_auth_delete on auth.users;
+create trigger protect_official_admin_auth_delete
+  before delete on auth.users
+  for each row execute function public.tg_protect_auth_user_deletion();
+
+create or replace function public.tg_protect_profile_deletion()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_catalog, pg_temp
+as $$
+begin
+  if public.is_account_protected(old.user_id) then
+    raise exception
+      'The Footy Status Official Admin account is permanently protected and cannot be deleted.'
+      using errcode = 'check_violation';
+  end if;
+  return old;
+end;
+$$;
+
+drop trigger if exists protect_official_admin_profile_delete on public.profiles;
+create trigger protect_official_admin_profile_delete
+  before delete on public.profiles
+  for each row execute function public.tg_protect_profile_deletion();
+
+create or replace function public.tg_protect_registry_rows()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_catalog, pg_temp
+as $$
+begin
+  raise exception
+    'The Footy Status Official Admin protection registry is locked and cannot be modified or removed.'
+    using errcode = 'check_violation';
+  return null;
+end;
+$$;
+
+drop trigger if exists protect_registry_no_update on public.protected_accounts;
+create trigger protect_registry_no_update
+  before update on public.protected_accounts
+  for each row execute function public.tg_protect_registry_rows();
+
+drop trigger if exists protect_registry_no_delete on public.protected_accounts;
+create trigger protect_registry_no_delete
+  before delete on public.protected_accounts
+  for each row execute function public.tg_protect_registry_rows();
+
+-- ---------------------------------------------------------------------------
+-- 2. Generic, schema-safe row/storage cleanup helpers.
+-- ---------------------------------------------------------------------------
+create or replace function public.delete_account_rows_if_column_exists(
+  _table_name text,
+  _column_name text,
+  _user_id uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if to_regclass('public.' || quote_ident(_table_name)) is null then
+    return;
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = _table_name and column_name = _column_name
+  ) then
+    execute format('delete from public.%I where %I = $1', _table_name, _column_name) using _user_id;
+  end if;
+end;
+$$;
+
+create or replace function public.delete_account_rows_if_column_matches_any(
+  _table_name text,
+  _column_name text,
+  _ids uuid[]
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if coalesce(array_length(_ids, 1), 0) = 0 then
+    return;
+  end if;
+  if to_regclass('public.' || quote_ident(_table_name)) is null then
+    return;
+  end if;
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = _table_name and column_name = _column_name
+  ) then
+    execute format('delete from public.%I where %I = any($1)', _table_name, _column_name) using _ids;
+  end if;
+end;
+$$;
+
+create or replace function public.null_account_column_if_exists(
+  _table_name text,
+  _column_name text,
+  _user_id uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if to_regclass('public.' || quote_ident(_table_name)) is null then
+    return;
+  end if;
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = _table_name
+      and column_name = _column_name and is_nullable = 'YES'
+  ) then
+    execute format('update public.%I set %I = null where %I = $1', _table_name, _column_name, _column_name) using _user_id;
+  end if;
+end;
+$$;
+
+create or replace function public.delete_account_storage_objects(_target_user_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  begin
+    delete from storage.objects
+    where owner::text = _target_user_id::text
+       or name like _target_user_id::text || '/%'
+       or name like '%/' || _target_user_id::text || '/%'
+       or name like '%/' || _target_user_id::text || '-%'
+       or name like '%/' || _target_user_id::text || '_%';
+  exception
+    when undefined_table or insufficient_privilege then
+      null;
+  end;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 3. Dynamic sweep of every direct auth.users(id) reference (belt and braces
+--    for tables the explicit cleanup below might not enumerate).
+-- ---------------------------------------------------------------------------
+create or replace function public.footy_purge_direct_auth_user_refs(_user_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public, pg_catalog, pg_temp
+as $$
+declare
+  r record;
+begin
+  if _user_id is null then
+    return;
+  end if;
+
+  for r in
+    select ns.nspname as schema_name, rel.relname as table_name,
+           att.attname as column_name, att.attnotnull as not_null
+    from pg_constraint con
+    join pg_class rel     on rel.oid = con.conrelid
+    join pg_namespace ns  on ns.oid = rel.relnamespace
+    join pg_attribute att on att.attrelid = con.conrelid and att.attnum = con.conkey[1]
+    where con.contype = 'f'
+      and con.confrelid = 'auth.users'::regclass
+      and array_length(con.conkey, 1) = 1
+      and rel.relkind = 'r'
+      and ns.nspname in ('public', 'storage')
+      and not (ns.nspname = 'public' and rel.relname = 'protected_accounts')
+  loop
+    begin
+      if r.not_null then
+        execute format('delete from %I.%I where %I = $1', r.schema_name, r.table_name, r.column_name) using _user_id;
+      else
+        execute format('update %I.%I set %I = null where %I = $1', r.schema_name, r.table_name, r.column_name, r.column_name) using _user_id;
+      end if;
+    exception when others then
+      null;
+    end;
+  end loop;
+end;
+$$;
+
+revoke all on function public.footy_purge_direct_auth_user_refs(uuid) from public;
+grant execute on function public.footy_purge_direct_auth_user_refs(uuid) to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- 4. The comprehensive, ordered app-data cleanup for any account type.
+--    Deletes owned content (clips + all clip-derived rows, posts, stats,
+--    owned teams/clubs) and removes/detaches every link; NEVER destroys a
+--    shared team/match owned by someone else (those are only detached).
+-- ---------------------------------------------------------------------------
+create or replace function public.delete_account_app_data(
+  _target_user_id uuid,
+  _deleted_by_user_id uuid default null,
+  _reason text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_player_profile_ids uuid[] := '{}'::uuid[];
+  v_legacy_player_ids uuid[] := '{}'::uuid[];
+  v_clip_ids uuid[] := '{}'::uuid[];
+  v_parent_profile_ids uuid[] := '{}'::uuid[];
+  v_team_profile_ids uuid[] := '{}'::uuid[];
+  v_team_ids uuid[] := '{}'::uuid[];
+  v_club_ids uuid[] := '{}'::uuid[];
+  v_club_team_ids uuid[] := '{}'::uuid[];
+begin
+  if _target_user_id is null then
+    raise exception 'Target account is required.';
+  end if;
+
+  perform public.assert_user_can_be_deleted(_target_user_id);
+
+  if to_regclass('public.player_profiles') is not null then
+    select coalesce(array_agg(id), '{}'::uuid[]) into v_player_profile_ids
+    from public.player_profiles where user_id = _target_user_id;
+  end if;
+
+  if to_regclass('public.players') is not null then
+    select coalesce(array_agg(id), '{}'::uuid[]) into v_legacy_player_ids
+    from public.players where user_id = _target_user_id;
+  end if;
+
+  if to_regclass('public.parent_profiles') is not null then
+    select coalesce(array_agg(id), '{}'::uuid[]) into v_parent_profile_ids
+    from public.parent_profiles where user_id = _target_user_id;
+  end if;
+
+  if to_regclass('public.team_profiles') is not null then
+    select coalesce(array_agg(id), '{}'::uuid[]) into v_team_profile_ids
+    from public.team_profiles where user_id = _target_user_id;
+    select coalesce(array_agg(team_id), '{}'::uuid[]) into v_team_ids
+    from public.team_profiles where user_id = _target_user_id and team_id is not null;
+    select coalesce(array_agg(club_id), '{}'::uuid[]) into v_club_ids
+    from public.team_profiles where user_id = _target_user_id and club_id is not null;
+  end if;
+
+  if to_regclass('public.teams') is not null then
+    select coalesce(array_agg(id), '{}'::uuid[]) into v_team_ids
+    from (
+      select unnest(v_team_ids) as id
+      union select id from public.teams where owner_user_id = _target_user_id
+      union select id from public.teams where user_id = _target_user_id
+    ) ids where id is not null;
+  end if;
+
+  if to_regclass('public.clubs') is not null then
+    select coalesce(array_agg(id), '{}'::uuid[]) into v_club_ids
+    from (
+      select unnest(v_club_ids) as id
+      union select id from public.clubs where owner_user_id = _target_user_id
+    ) ids where id is not null;
+  end if;
+
+  if to_regclass('public.club_teams') is not null then
+    select coalesce(array_agg(id), '{}'::uuid[]) into v_club_team_ids
+    from public.club_teams
+    where owner_user_id = _target_user_id
+       or team_profile_id = any(v_team_profile_ids)
+       or club_id = any(v_club_ids)
+       or team_id = any(v_team_ids);
+  end if;
+
+  if to_regclass('public.clips') is not null then
+    select coalesce(array_agg(id), '{}'::uuid[]) into v_clip_ids
+    from public.clips
+    where user_id = _target_user_id
+       or player_id = any(v_player_profile_ids)
+       or player_id = any(v_legacy_player_ids);
+  end if;
+
+  -- Clip-derived rows first so a clip's likes/comments/views/feed/exposure/
+  -- reports are gone and the clip can never resurface in the Next Up feed.
+  perform public.delete_account_rows_if_column_matches_any('clip_likes', 'clip_id', v_clip_ids);
+  perform public.delete_account_rows_if_column_matches_any('clip_comments', 'clip_id', v_clip_ids);
+  perform public.delete_account_rows_if_column_matches_any('clip_views', 'clip_id', v_clip_ids);
+  perform public.delete_account_rows_if_column_matches_any('clip_feed_impressions', 'clip_id', v_clip_ids);
+  perform public.delete_account_rows_if_column_matches_any('clip_shares', 'clip_id', v_clip_ids);
+  perform public.delete_account_rows_if_column_matches_any('clip_exposure_state', 'clip_id', v_clip_ids);
+  perform public.delete_account_rows_if_column_matches_any('clip_engagement_exposure_awards', 'clip_id', v_clip_ids);
+  perform public.delete_account_rows_if_column_matches_any('content_reports', 'reported_clip_id', v_clip_ids);
+
+  perform public.delete_account_rows_if_column_exists('user_contacts', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('user_settings', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('blocked_users', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('blocked_users', 'blocked_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('profile_views', 'viewer_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('profile_views', 'profile_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('profile_views', 'viewed_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('notifications', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('notifications', 'actor_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('notifications', 'secondary_user_id', _target_user_id);
+
+  perform public.delete_account_rows_if_column_exists('parent_player_links', 'parent_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('parent_player_links', 'player_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('parent_player_links', 'requested_by_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('parent_player_links', 'approved_by_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('parent_player_links', 'removed_by_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_matches_any('parent_player_links', 'parent_profile_id', v_parent_profile_ids);
+  perform public.delete_account_rows_if_column_matches_any('parent_player_links', 'player_profile_id', v_player_profile_ids);
+
+  perform public.delete_account_rows_if_column_exists('player_team_memberships', 'player_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_matches_any('player_team_memberships', 'player_profile_id', v_player_profile_ids);
+  perform public.delete_account_rows_if_column_matches_any('player_team_memberships', 'team_id', v_team_ids);
+  perform public.delete_account_rows_if_column_matches_any('player_team_memberships', 'club_team_id', v_club_team_ids);
+  perform public.delete_account_rows_if_column_exists('team_player_invites', 'player_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('team_player_invites', 'invited_by', _target_user_id);
+  perform public.delete_account_rows_if_column_matches_any('team_player_invites', 'player_profile_id', v_player_profile_ids);
+  perform public.delete_account_rows_if_column_matches_any('team_player_invites', 'team_id', v_team_ids);
+  perform public.delete_account_rows_if_column_matches_any('team_player_invites', 'club_team_id', v_club_team_ids);
+  perform public.delete_account_rows_if_column_exists('team_join_requests', 'player_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('team_join_requests', 'reviewed_by', _target_user_id);
+  perform public.delete_account_rows_if_column_matches_any('team_join_requests', 'player_profile_id', v_player_profile_ids);
+  perform public.delete_account_rows_if_column_matches_any('team_join_requests', 'team_id', v_team_ids);
+  perform public.delete_account_rows_if_column_matches_any('team_join_requests', 'club_team_id', v_club_team_ids);
+
+  perform public.delete_account_rows_if_column_exists('coach_staff_team_memberships', 'coach_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_matches_any('coach_staff_team_memberships', 'team_id', v_team_ids);
+  perform public.delete_account_rows_if_column_matches_any('coach_staff_team_memberships', 'club_team_id', v_club_team_ids);
+  perform public.delete_account_rows_if_column_exists('coach_staff_team_invites', 'coach_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('coach_staff_team_invites', 'invited_by', _target_user_id);
+  perform public.delete_account_rows_if_column_matches_any('coach_staff_team_invites', 'team_id', v_team_ids);
+  perform public.delete_account_rows_if_column_matches_any('coach_staff_team_invites', 'club_team_id', v_club_team_ids);
+  perform public.delete_account_rows_if_column_exists('coach_staff_join_requests', 'coach_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('coach_staff_join_requests', 'reviewed_by', _target_user_id);
+  perform public.delete_account_rows_if_column_matches_any('coach_staff_join_requests', 'team_id', v_team_ids);
+  perform public.delete_account_rows_if_column_matches_any('coach_staff_join_requests', 'club_team_id', v_club_team_ids);
+
+  perform public.delete_account_rows_if_column_exists('referee_match_claims', 'referee_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('referee_report_uploads', 'uploaded_by_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('match_comments', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('assist_claims', 'claimant_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_matches_any('assist_claims', 'claimant_player_profile_id', v_player_profile_ids);
+  perform public.null_account_column_if_exists('assist_claims', 'reviewed_by_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('match_events', 'player_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_matches_any('match_events', 'player_profile_id', v_player_profile_ids);
+  perform public.delete_account_rows_if_column_matches_any('match_events', 'team_id', v_team_ids);
+  perform public.null_account_column_if_exists('match_events', 'created_by_user_id', _target_user_id);
+  perform public.null_account_column_if_exists('matches', 'referee_user_id', _target_user_id);
+  perform public.null_account_column_if_exists('matches', 'created_by_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('match_film_links', 'submitted_by_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('match_film_links', 'user_id', _target_user_id);
+
+  perform public.delete_account_rows_if_column_exists('club_news_posts', 'author_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_matches_any('club_news_posts', 'team_id', v_team_ids);
+  perform public.delete_account_rows_if_column_matches_any('club_news_posts', 'club_id', v_club_ids);
+
+  perform public.delete_account_rows_if_column_exists('content_reports', 'reporter_account_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('content_reports', 'reported_account_id', _target_user_id);
+  perform public.null_account_column_if_exists('content_reports', 'reviewed_by_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('content_report_actions', 'target_account_id', _target_user_id);
+  perform public.null_account_column_if_exists('content_report_actions', 'admin_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('account_strikes', 'account_id', _target_user_id);
+  perform public.null_account_column_if_exists('account_strikes', 'admin_user_id', _target_user_id);
+  perform public.null_account_column_if_exists('account_strikes', 'removed_by_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('temporary_bans', 'account_id', _target_user_id);
+  perform public.null_account_column_if_exists('temporary_bans', 'admin_user_id', _target_user_id);
+  perform public.null_account_column_if_exists('account_email_bans', 'account_id', _target_user_id);
+  perform public.null_account_column_if_exists('account_email_bans', 'admin_user_id', _target_user_id);
+
+  -- Clip rows themselves (storage files removed at the end).
+  perform public.delete_account_rows_if_column_matches_any('clips', 'id', v_clip_ids);
+  perform public.delete_account_rows_if_column_exists('clips', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_matches_any('clips', 'player_id', v_player_profile_ids);
+  perform public.delete_account_rows_if_column_matches_any('clips', 'player_id', v_legacy_player_ids);
+
+  perform public.delete_account_rows_if_column_matches_any('current_player_statistics', 'player_profile_id', v_player_profile_ids);
+  perform public.delete_account_rows_if_column_matches_any('player_statistics', 'player_profile_id', v_player_profile_ids);
+  perform public.delete_account_rows_if_column_matches_any('player_statistics', 'player_id', v_legacy_player_ids);
+  perform public.delete_account_rows_if_column_matches_any('club_history', 'player_profile_id', v_player_profile_ids);
+  perform public.delete_account_rows_if_column_matches_any('club_history', 'player_id', v_legacy_player_ids);
+  perform public.delete_account_rows_if_column_matches_any('player_match_minutes', 'player_profile_id', v_player_profile_ids);
+
+  -- Owned team structures only (never a team belonging to another account).
+  perform public.delete_account_rows_if_column_matches_any('club_teams', 'id', v_club_team_ids);
+  perform public.delete_account_rows_if_column_matches_any('clubs', 'id', v_club_ids);
+  perform public.delete_account_rows_if_column_matches_any('teams', 'id', v_team_ids);
+  perform public.delete_account_rows_if_column_exists('club_teams', 'owner_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('clubs', 'owner_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('teams', 'owner_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('teams', 'user_id', _target_user_id);
+
+  -- Core profile rows last (releases username/search/Explore visibility).
+  perform public.delete_account_rows_if_column_exists('players', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('player_profiles', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('staff_profiles', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('parent_profiles', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('team_staff', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('team_profiles', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('user_roles', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('global_admin_users', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('profiles', 'user_id', _target_user_id);
+
+  -- Delete the actual video/thumbnail/media files from storage.
+  perform public.delete_account_storage_objects(_target_user_id);
+
+  return jsonb_build_object(
+    'success', true,
+    'target_user_id', _target_user_id,
+    'deleted_by_user_id', _deleted_by_user_id,
+    'player_profiles_removed', coalesce(array_length(v_player_profile_ids, 1), 0),
+    'clips_removed', coalesce(array_length(v_clip_ids, 1), 0),
+    'teams_removed', coalesce(array_length(v_team_ids, 1), 0),
+    'club_teams_removed', coalesce(array_length(v_club_team_ids, 1), 0)
+  );
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 5. Resilient auth.users BEFORE DELETE cleanup trigger (best-effort app-data
+--    cleanup + guaranteed sweep). The separate protect_official_admin trigger
+--    still hard-blocks the protected account.
+-- ---------------------------------------------------------------------------
+create or replace function public.cleanup_app_data_after_auth_user_delete()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if to_regprocedure('public.delete_account_app_data(uuid, uuid, text)') is not null then
+    begin
+      perform public.delete_account_app_data(old.id, null, 'auth_user_deleted_cleanup');
+    exception when others then
+      null;
+    end;
+  end if;
+
+  perform public.footy_purge_direct_auth_user_refs(old.id);
+  return old;
+end;
+$$;
+
+drop trigger if exists footy_status_cleanup_app_data_before_auth_user_delete on auth.users;
+create trigger footy_status_cleanup_app_data_before_auth_user_delete
+  before delete on auth.users
+  for each row
+  execute function public.cleanup_app_data_after_auth_user_delete();
+
+-- ---------------------------------------------------------------------------
+-- 6. Repoint the three moderation admin_user_id FKs to ON DELETE SET NULL so an
+--    admin who ever issued a strike/ban/report action can still be deleted
+--    (the audit record survives, detached). Discovers the real constraint name.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_tables text[] := array['account_strikes', 'temporary_bans', 'content_report_actions'];
+  v_table  text;
+  v_conname text;
+  v_deltype "char";
+begin
+  foreach v_table in array v_tables loop
+    if not exists (
+      select 1 from information_schema.columns
+      where table_schema = 'public' and table_name = v_table and column_name = 'admin_user_id'
+    ) then
+      continue;
+    end if;
+
+    select con.conname, con.confdeltype into v_conname, v_deltype
+    from pg_constraint con
+    join pg_class rel on rel.oid = con.conrelid
+    join pg_namespace ns on ns.oid = rel.relnamespace
+    join pg_attribute att on att.attrelid = con.conrelid and att.attnum = con.conkey[1]
+    where con.contype = 'f' and con.confrelid = 'auth.users'::regclass
+      and ns.nspname = 'public' and rel.relname = v_table
+      and att.attname = 'admin_user_id' and array_length(con.conkey, 1) = 1
+    limit 1;
+
+    execute format('alter table public.%I alter column admin_user_id drop not null', v_table);
+
+    if v_conname is not null and v_deltype is distinct from 'n' then
+      execute format('alter table public.%I drop constraint %I', v_table, v_conname);
+    end if;
+
+    if not exists (
+      select 1 from pg_constraint con
+      join pg_class rel on rel.oid = con.conrelid
+      join pg_namespace ns on ns.oid = rel.relnamespace
+      join pg_attribute att on att.attrelid = con.conrelid and att.attnum = con.conkey[1]
+      where con.contype = 'f' and con.confrelid = 'auth.users'::regclass
+        and ns.nspname = 'public' and rel.relname = v_table
+        and att.attname = 'admin_user_id' and con.confdeltype = 'n'
+    ) then
+      execute format(
+        'alter table public.%I add constraint %I foreign key (admin_user_id) references auth.users(id) on delete set null',
+        v_table, v_table || '_admin_user_id_fkey'
+      );
+    end if;
+  end loop;
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- 7. The user-facing deletion RPCs. Self-delete verifies the caller is deleting
+--    their own account (auth.uid()); the auth-user delete triggers the cleanup
+--    above; the whole call is one transaction, so any critical failure rolls
+--    back and the account is never left half-deleted.
+-- ---------------------------------------------------------------------------
+create or replace function public.delete_my_account()
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id uuid := auth.uid();
+begin
+  if v_user_id is null then
+    raise exception 'You must be signed in to delete your account.';
+  end if;
+
+  perform public.assert_user_can_be_deleted(v_user_id);
+
+  begin
+    perform public.delete_account_app_data(v_user_id, v_user_id, 'self_delete_account');
+  exception when others then
+    null;
+  end;
+  perform public.footy_purge_direct_auth_user_refs(v_user_id);
+
+  delete from auth.identities where user_id = v_user_id;
+  delete from auth.users where id = v_user_id;
+
+  return true;
+end;
+$$;
+
+create or replace function public.admin_delete_account(
+  _target_user_id uuid,
+  _reason text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_admin_user_id uuid := auth.uid();
+  v_result jsonb;
+begin
+  perform public.admin_assert_official(_reason);
+
+  if _target_user_id is null then
+    raise exception 'Target account is required.';
+  end if;
+  if nullif(trim(coalesce(_reason, '')), '') is null then
+    raise exception 'Enter an admin note before deleting an account.';
+  end if;
+
+  perform public.assert_user_can_be_deleted(_target_user_id);
+
+  begin
+    v_result := public.delete_account_app_data(_target_user_id, v_admin_user_id, _reason);
+  exception when others then
+    v_result := jsonb_build_object('success', true, 'target_user_id', _target_user_id, 'app_data_cleanup', 'partial');
+  end;
+  perform public.footy_purge_direct_auth_user_refs(_target_user_id);
+
+  delete from auth.identities where user_id = _target_user_id;
+  delete from auth.users where id = _target_user_id;
+
+  return v_result || jsonb_build_object('auth_user_deleted', true);
+end;
+$$;
+
+revoke all on function public.delete_account_rows_if_column_exists(text, text, uuid) from public;
+revoke all on function public.delete_account_rows_if_column_matches_any(text, text, uuid[]) from public;
+revoke all on function public.null_account_column_if_exists(text, text, uuid) from public;
+revoke all on function public.delete_account_storage_objects(uuid) from public;
+revoke all on function public.delete_account_app_data(uuid, uuid, text) from public;
+revoke all on function public.delete_my_account() from public;
+revoke all on function public.admin_delete_account(uuid, text) from public;
+grant execute on function public.delete_my_account() to authenticated;
+grant execute on function public.admin_delete_account(uuid, text) to authenticated;
+
+-- Refresh PostgREST so delete_my_account is callable immediately.
 notify pgrst, 'reload schema';

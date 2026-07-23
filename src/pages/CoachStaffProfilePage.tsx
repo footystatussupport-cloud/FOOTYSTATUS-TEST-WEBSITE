@@ -364,7 +364,7 @@ const CoachStaffProfilePage = () => {
           {!isParent && coachStaffTeamGroups.length ? (
             <section className="mb-6">
               <div className="mb-3 flex items-center justify-between gap-2">
-                <h2 className="text-lg font-semibold text-navy">Current Teams</h2>
+                <h2 className="text-lg font-semibold text-navy">Teams Coached</h2>
                 <InlineProfileAdminControls targetUserId={profile.user_id} targetName={profile.full_name} section="teams" label="Manage team links" />
               </div>
               <div className="space-y-3">

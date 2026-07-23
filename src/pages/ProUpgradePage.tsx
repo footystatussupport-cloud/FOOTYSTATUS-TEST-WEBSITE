@@ -1,27 +1,28 @@
-import { useEffect } from "react";
-import { ArrowLeft, Check, Crown } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ArrowLeft, Check, Crown, RotateCcw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import Header from "@/components/Header";
 import ProBadge from "@/components/ProBadge";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
-import { placeholderPaymentSuccess, ProPlanType, isProEligible } from "@/lib/subscriptions";
+import { ProPlanType, isProEligible } from "@/lib/subscriptions";
+import { purchasePro, restorePurchases } from "@/lib/proPurchases";
 
 const plans: Array<{ type: ProPlanType; name: string; price: string; cadence: string; description: string }> = [
   {
-    type: "annual",
-    name: "Pro Annual",
-    price: "$50",
-    cadence: "per year",
-    description: "Full Pro access for one year, with renewal reminders before it expires.",
+    type: "monthly",
+    name: "Pro Monthly",
+    price: "$5",
+    cadence: "per month",
+    description: "Full Pro access billed monthly. Cancel anytime from your store account.",
   },
   {
-    type: "lifetime",
-    name: "Pro Lifetime",
-    price: "$150",
-    cadence: "one-time",
-    description: "Pay once and keep Pro features permanently on your account.",
+    type: "yearly",
+    name: "Pro Yearly",
+    price: "$50",
+    cadence: "per year",
+    description: "Full Pro access for a year at a lower monthly rate, renewed annually.",
   },
 ];
 
@@ -50,6 +51,8 @@ const ProUpgradePage = () => {
   const navigate = useNavigate();
   const { user, profile, loading } = useAuth();
   const { toast } = useToast();
+  const [busyPlan, setBusyPlan] = useState<ProPlanType | null>(null);
+  const [restoring, setRestoring] = useState(false);
 
   // Footy Status Pro is exclusively for player accounts (boys and girls).
   const eligible = isProEligible(profile);
@@ -66,6 +69,7 @@ const ProUpgradePage = () => {
       return;
     }
 
+    // Server-enforced too, but stop non-players before starting checkout.
     if (!eligible) {
       toast({
         title: "Footy Status Pro is for players only",
@@ -75,12 +79,43 @@ const ProUpgradePage = () => {
       return;
     }
 
+    setBusyPlan(planType);
     try {
-      await placeholderPaymentSuccess(user.id, planType);
-      toast({ title: "Pro enabled", description: "Payment is placeholder-only for now. Your Pro benefits are active." });
-      navigate("/profile");
+      // Launches the native store purchase; only resolves to "activated" after
+      // the charge is confirmed AND the receipt is verified on the backend.
+      const outcome = await purchasePro(planType);
+      if (outcome.status === "activated") {
+        toast({ title: "Pro activated", description: "Your Footy Status Pro benefits are now active." });
+        navigate("/profile");
+      } else if (outcome.status === "cancelled") {
+        toast({ title: "Purchase cancelled", description: "Your account is unchanged." });
+      } else if (outcome.status === "unavailable") {
+        toast({ title: "Not available here", description: outcome.message, variant: "destructive" });
+      } else {
+        toast({ title: "Purchase not completed", description: outcome.message || "You have not been charged.", variant: "destructive" });
+      }
     } catch (error: any) {
-      toast({ title: "Upgrade failed", description: error.message || "Could not enable Pro.", variant: "destructive" });
+      toast({ title: "Purchase failed", description: error.message || "You have not been charged.", variant: "destructive" });
+    } finally {
+      setBusyPlan(null);
+    }
+  };
+
+  const handleRestore = async () => {
+    if (!eligible) return;
+    setRestoring(true);
+    try {
+      const outcome = await restorePurchases();
+      if (outcome.status === "restored") {
+        toast({ title: "Purchases restored", description: "Your active Footy Status Pro subscription is back." });
+        navigate("/profile");
+      } else if (outcome.status === "unavailable") {
+        toast({ title: "Not available here", description: outcome.message, variant: "destructive" });
+      } else {
+        toast({ title: "Nothing to restore", description: outcome.message || "No active subscription was found." });
+      }
+    } finally {
+      setRestoring(false);
     }
   };
 
@@ -130,12 +165,23 @@ const ProUpgradePage = () => {
                   <p className="text-xl font-bold text-foreground">{plan.price}</p>
                   <p className="min-h-12 text-xs leading-relaxed text-muted-foreground">{plan.description}</p>
                 </div>
-                <Button className="mt-4 w-full gap-2" onClick={() => handleUpgrade(plan.type)}>
+                <Button className="mt-4 w-full gap-2" disabled={busyPlan !== null} onClick={() => handleUpgrade(plan.type)}>
                   <Crown className="h-4 w-4" />
-                  Continue
+                  {busyPlan === plan.type ? "Processing…" : "Continue"}
                 </Button>
               </div>
             ))}
+          </div>
+
+          <div className="mb-6 space-y-2 text-center">
+            <Button variant="outline" className="w-full gap-2" disabled={restoring} onClick={handleRestore}>
+              <RotateCcw className="h-4 w-4" />
+              {restoring ? "Restoring…" : "Restore Purchases"}
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              Subscriptions are billed through the App Store or Google Play in the Footy Status mobile app and can be
+              managed or cancelled there at any time.
+            </p>
           </div>
 
           <section>
