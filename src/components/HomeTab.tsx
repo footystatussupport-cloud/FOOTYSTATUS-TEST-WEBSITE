@@ -19,6 +19,8 @@ const HomeTab = () => {
   const navigate = useNavigate();
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [pendingInvites, setPendingInvites] = useState<PendingTeamInviteSummary[]>([]);
+  // Invitation currently being accepted/declined (blocks duplicate submissions).
+  const [respondingInviteId, setRespondingInviteId] = useState<string | null>(null);
   const [newsPosts, setNewsPosts] = useState<ClubNewsPostSummary[]>([]);
   const [locationReady, setLocationReady] = useState(false);
   const [composerOpen, setComposerOpen] = useState(false);
@@ -85,7 +87,13 @@ const HomeTab = () => {
 
   const handleRespondInvite = async (inviteId: string, accept: boolean) => {
     if (!user) return;
+    // Block duplicate submissions while the link is being established.
+    if (respondingInviteId) return;
 
+    const invitedTeamName =
+      pendingInvites.find((invite: any) => invite.id === inviteId)?.team_name || "that team";
+
+    setRespondingInviteId(inviteId);
     const { error } = await (supabase as any).rpc("respond_team_player_invite", {
       _invite_id: inviteId,
       _accept: accept,
@@ -100,11 +108,17 @@ const HomeTab = () => {
           : "We couldn't decline this team invitation. Please try again.",
         variant: "destructive",
       });
+      setRespondingInviteId(null);
       return;
     }
 
-    toast({ title: accept ? "You have joined the team successfully." : "Invite declined" });
+    toast(
+      accept
+        ? { title: "Team Linked", description: `You are now linked to ${invitedTeamName}.` }
+        : { title: "Invite declined" }
+    );
     await Promise.all([loadPendingInvites(), fetchNotifications()]);
+    setRespondingInviteId(null);
   };
 
   const handleCoachStaffRequestNotification = async (notification: AppNotification, approve: boolean) => {
@@ -222,10 +236,21 @@ const HomeTab = () => {
                 <p className="mt-2 font-semibold text-foreground">{formatTeamLeagueLine(invite.team_name, invite.age_group, invite.league_name)}</p>
                 <p className="mt-1 text-sm text-muted-foreground">You can accept or decline this team invite right here.</p>
                 <div className="mt-3 flex gap-2">
-                  <Button size="sm" className="flex-1" onClick={() => handleRespondInvite(invite.id, true)}>
-                    Accept
+                  <Button
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => handleRespondInvite(invite.id, true)}
+                    disabled={respondingInviteId !== null}
+                  >
+                    {respondingInviteId === invite.id ? "Linking..." : "Accept"}
                   </Button>
-                  <Button size="sm" variant="outline" className="flex-1" onClick={() => handleRespondInvite(invite.id, false)}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="flex-1"
+                    onClick={() => handleRespondInvite(invite.id, false)}
+                    disabled={respondingInviteId !== null}
+                  >
                     Decline
                   </Button>
                 </div>

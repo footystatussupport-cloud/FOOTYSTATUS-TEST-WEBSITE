@@ -28,6 +28,8 @@ const NotificationsPage = () => {
   const { toast } = useToast();
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [pendingInvites, setPendingInvites] = useState<PendingTeamInviteSummary[]>([]);
+  // Invitation currently being accepted/declined (blocks duplicate submissions).
+  const [respondingInviteId, setRespondingInviteId] = useState<string | null>(null);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
   const loadNotifications = async () => {
@@ -192,12 +194,20 @@ const NotificationsPage = () => {
       _approve: approve,
     });
     if (error) {
-      toast({ title: "Update failed", description: error.message, variant: "destructive" });
+      // Full database error for debugging only — never surface raw SQL to users.
+      console.error("Footy Status join request review failed", { requestId, approve, error });
+      toast({
+        title: "Update failed",
+        description: approve
+          ? "We couldn't add this player to the team. Please try again."
+          : "We couldn't decline this request. Please try again.",
+        variant: "destructive",
+      });
       return;
     }
 
     await markNotificationRead(notification.id, user.id);
-    toast({ title: approve ? "Player approved" : "Request declined" });
+    toast({ title: approve ? "Player Added" : "Request declined" });
     await Promise.all([loadNotifications(), loadPendingInvites()]);
   };
 
@@ -288,7 +298,13 @@ const NotificationsPage = () => {
 
   const handleRespondInvite = async (inviteId: string, accept: boolean) => {
     if (!user) return;
+    // Block duplicate submissions while the link is being established.
+    if (respondingInviteId) return;
 
+    const invitedTeamName =
+      pendingInvites.find((invite: any) => invite.id === inviteId)?.team_name || "that team";
+
+    setRespondingInviteId(inviteId);
     const { error } = await (supabase as any).rpc("respond_team_player_invite", {
       _invite_id: inviteId,
       _accept: accept,
@@ -303,11 +319,17 @@ const NotificationsPage = () => {
           : "We couldn't decline this team invitation. Please try again.",
         variant: "destructive",
       });
+      setRespondingInviteId(null);
       return;
     }
 
-    toast({ title: accept ? "You have joined the team successfully." : "Invite declined" });
+    toast(
+      accept
+        ? { title: "Team Linked", description: `You are now linked to ${invitedTeamName}.` }
+        : { title: "Invite declined" }
+    );
     await Promise.all([loadPendingInvites(), loadNotifications()]);
+    setRespondingInviteId(null);
   };
 
   const handleMarkAllRead = async () => {
@@ -363,10 +385,21 @@ const NotificationsPage = () => {
               <div key={invite.id} className="rounded-lg border border-primary/20 bg-background px-3 py-3">
                 <p className="font-medium text-foreground">{formatTeamLeagueLine(invite.team_name, invite.age_group, invite.league_name)}</p>
                 <div className="mt-3 flex gap-2">
-                  <Button size="sm" className="flex-1" onClick={() => handleRespondInvite(invite.id, true)}>
-                    Accept
+                  <Button
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => handleRespondInvite(invite.id, true)}
+                    disabled={respondingInviteId !== null}
+                  >
+                    {respondingInviteId === invite.id ? "Linking..." : "Accept"}
                   </Button>
-                  <Button size="sm" variant="outline" className="flex-1" onClick={() => handleRespondInvite(invite.id, false)}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="flex-1"
+                    onClick={() => handleRespondInvite(invite.id, false)}
+                    disabled={respondingInviteId !== null}
+                  >
                     Decline
                   </Button>
                 </div>

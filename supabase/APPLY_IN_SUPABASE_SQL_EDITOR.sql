@@ -3802,3 +3802,791 @@ grant execute on function public.admin_delete_account(uuid, text) to authenticat
 
 -- Refresh PostgREST so delete_my_account is callable immediately.
 notify pgrst, 'reload schema';
+
+-- ############################################################################
+-- 20260723120000_team_code_preview_gender_and_repeat_join
+-- ############################################################################
+-- =============================================================================
+
+create or replace function public.preview_club_team_by_access_code(_access_code text)
+returns table (
+  club_team_id uuid,
+  team_id uuid,
+  team_name text,
+  age_group text,
+  gender text,
+  league_name text,
+  already_member boolean
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  normalized_code text := regexp_replace(coalesce(_access_code, ''), '\D+', '', 'g');
+  player_row public.player_profiles;
+  club_team_row public.club_teams;
+  team_row public.teams;
+begin
+  -- Every failure below returns no rows on purpose: never reveal that a code is
+  -- valid for a team this account is not allowed to see.
+  if auth.uid() is null then
+    return;
+  end if;
+
+  if normalized_code !~ '^[0-9]{5}$' then
+    return;
+  end if;
+
+  -- Gender comes from the authenticated player profile, never from the client.
+  select *
+  into player_row
+  from public.player_profiles
+  where user_id = auth.uid()
+  limit 1;
+
+  if player_row.id is null or player_row.player_gender is null then
+    return;
+  end if;
+
+  select ct.*
+  into club_team_row
+  from public.club_teams ct
+  where ct.status = 'active'
+    and (
+      ct.access_code_value = normalized_code
+      or ct.access_code_hash = encode(extensions.digest(normalized_code, 'sha256'), 'hex')
+    )
+  order by ct.access_code_updated_at desc nulls last, ct.created_at desc
+  limit 1;
+
+  if club_team_row.id is null then
+    return;
+  end if;
+
+  -- Hard gender gate, mirroring assert_player_matches_daughter_team.
+  if club_team_row.gender is null
+     or club_team_row.gender is distinct from player_row.player_gender then
+    return;
+  end if;
+
+  select *
+  into team_row
+  from public.teams
+  where id = coalesce(club_team_row.parent_team_id, club_team_row.team_id)
+  limit 1;
+
+  if team_row.id is null
+     or coalesce(team_row.approval_status, 'approved') <> 'approved' then
+    return;
+  end if;
+
+  return query
+  select
+    club_team_row.id,
+    team_row.id,
+    team_row.name,
+    club_team_row.age_group,
+    club_team_row.gender,
+    coalesce(
+      nullif(trim(coalesce(club_team_row.league_name, '')), ''),
+      (select l.name from public.leagues l where l.id = club_team_row.league_id limit 1)
+    ),
+    exists (
+      select 1
+      from public.player_team_memberships m
+      where m.player_user_id = auth.uid()
+        and m.team_id = team_row.id
+        and m.club_team_id = club_team_row.id
+        and m.status in ('accepted', 'approved')
+    );
+end;
+$$;
+
+revoke all on function public.preview_club_team_by_access_code(text) from public, anon;
+grant execute on function public.preview_club_team_by_access_code(text) to authenticated;
+
+comment on function public.preview_club_team_by_access_code(text) is
+  'Authoritative 5-digit team-code preview (name, age group, gender, league). Returns no rows for any team the caller may not access.';
+
+-- ---------------------------------------------------------------------------
+-- Repeat-join messaging: no duplicate membership, and a clear reason.
+-- Body is the existing function with two changes, marked inline.
+-- ---------------------------------------------------------------------------
+create or replace function public.join_club_team_with_access_code(_access_code text)
+returns public.player_team_memberships
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  normalized_code text := regexp_replace(coalesce(_access_code, ''), '\D+', '', 'g');
+  player_row public.player_profiles;
+  club_team_row public.club_teams;
+  club_row public.clubs;
+  team_row public.teams;
+  request_row public.team_join_requests;
+  membership_row public.player_team_memberships;
+begin
+  if auth.uid() is null then
+    raise exception 'You must be signed in.';
+  end if;
+
+  if normalized_code !~ '^[0-9]{5}$' then
+    raise exception 'Invalid access code. Please check the code and try again.';
+  end if;
+
+  select *
+  into player_row
+  from public.player_profiles
+  where user_id = auth.uid()
+  limit 1;
+
+  if player_row.id is null then
+    raise exception 'Only player accounts can join teams with an access code.';
+  end if;
+
+  select ct.*
+  into club_team_row
+  from public.club_teams ct
+  where ct.status = 'active'
+    and (
+      ct.access_code_value = normalized_code
+      or ct.access_code_hash = encode(extensions.digest(normalized_code, 'sha256'), 'hex')
+    )
+  order by ct.access_code_updated_at desc nulls last, ct.created_at desc
+  limit 1;
+
+  if club_team_row.id is null then
+    raise exception 'Invalid access code. Please check the code and try again.';
+  end if;
+
+  select *
+  into club_row
+  from public.clubs
+  where id = club_team_row.club_id
+  limit 1;
+
+  select *
+  into team_row
+  from public.teams
+  where id = coalesce(club_team_row.parent_team_id, club_team_row.team_id)
+  limit 1;
+
+  if team_row.id is null or coalesce(team_row.approval_status, 'approved') <> 'approved' then
+    raise exception 'Invalid access code. Please check the code and try again.';
+  end if;
+
+  perform public.assert_player_matches_daughter_team(club_team_row.id, player_row.id, auth.uid());
+
+  select *
+  into membership_row
+  from public.player_team_memberships
+  where player_user_id = auth.uid()
+    and team_id = team_row.id
+    and club_team_id = club_team_row.id
+    and status in ('accepted', 'approved')
+  order by approved_at desc nulls last, updated_at desc, created_at desc
+  limit 1;
+
+  -- CHANGE 1: entering the same code again must not look like a fresh join and
+  -- must never create a second membership row.
+  if membership_row.id is not null then
+    raise exception 'You are already linked to this team.';
+  end if;
+
+  update public.team_join_requests
+  set status = 'revoked',
+      reviewed_at = now(),
+      reviewed_by = auth.uid()
+  where player_user_id = auth.uid()
+    and status = 'pending';
+
+  insert into public.team_join_requests (
+    team_id,
+    club_id,
+    club_team_id,
+    player_profile_id,
+    player_user_id,
+    league_id,
+    age_group,
+    access_code_last4,
+    status,
+    reviewed_by,
+    reviewed_at
+  )
+  values (
+    team_row.id,
+    club_row.id,
+    club_team_row.id,
+    player_row.id,
+    auth.uid(),
+    club_team_row.league_id,
+    club_team_row.age_group,
+    right(normalized_code, 4),
+    'approved',
+    auth.uid(),
+    now()
+  )
+  returning * into request_row;
+
+  membership_row := public.sync_club_team_membership(
+    player_row.id,
+    auth.uid(),
+    team_row.id,
+    club_row.id,
+    club_team_row.id,
+    club_team_row.league_id,
+    club_team_row.age_group,
+    'approved',
+    'code_join',
+    auth.uid()
+  );
+
+  update public.team_player_invites
+  set status = 'accepted',
+      responded_at = now()
+  where player_user_id = auth.uid()
+    and team_id = team_row.id
+    and club_team_id = club_team_row.id
+    and status = 'pending';
+
+  -- Unchanged from the existing implementation (existing invitation rules are
+  -- preserved exactly; see the note in the summary about multi-team invites).
+  update public.team_player_invites
+  set status = 'revoked',
+      responded_at = now()
+  where player_user_id = auth.uid()
+    and status = 'pending'
+    and not (team_id = team_row.id and club_team_id = club_team_row.id);
+
+  return membership_row;
+exception
+  when others then
+    -- Pass the "already linked" message through untouched.
+    if sqlerrm ilike '%already linked to this team%' then
+      raise;
+    end if;
+    -- CHANGE 2: collapse eligibility/gender failures into one general message so
+    -- a restricted team is never described to the player.
+    if sqlerrm ilike '%not eligible%' then
+      raise exception 'This team is not available for your account.';
+    end if;
+    raise;
+end;
+$$;
+
+grant execute on function public.join_club_team_with_access_code(text) to authenticated;
+
+notify pgrst, 'reload schema';
+
+-- ############################################################################
+-- 20260723140000_fix_player_team_link_leave_and_invite_accept
+-- ############################################################################
+--   RLS, the enforce_daughter_team_player_gender trigger on
+--   player_team_memberships (boys/girls restrictions still enforced on every
+--   link), approvals, invites, requests, rosters, Current Stats, notifications,
+--   the 5-digit code flow, and admin/coach/parent linking. No new "membership"
+--   concept is introduced -- this repairs the existing linking tables.
+--
+-- Safe to run more than once.
+-- =============================================================================
+
+-- ---------------------------------------------------------------------------
+-- A. Legacy mirror columns must be nullable.
+-- ---------------------------------------------------------------------------
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'players' and column_name = 'club'
+  ) then
+    execute 'alter table public.players alter column club drop not null';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'players' and column_name = 'league'
+  ) then
+    execute 'alter table public.players alter column league drop not null';
+  end if;
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- B. Linking a player to a daughter team no longer unlinks their other teams.
+-- ---------------------------------------------------------------------------
+create or replace function public.sync_club_team_membership(
+  _player_profile_id uuid,
+  _player_user_id uuid,
+  _team_id uuid,
+  _club_id uuid,
+  _club_team_id uuid,
+  _league_id uuid,
+  _age_group text,
+  _status text,
+  _joined_via text,
+  _approved_by uuid
+)
+returns public.player_team_memberships
+language plpgsql
+security definer
+set search_path = public
+as $sync_club_team_membership$
+declare
+  membership_row public.player_team_memberships;
+  team_name_value text;
+  league_name_value text;
+begin
+  -- NOTE: the previous implementation revoked every OTHER active link here.
+  -- That is removed: a player may be linked to multiple eligible daughter
+  -- teams, and linking to one must never unlink them from another.
+
+  -- Update the existing link for exactly this team + daughter team, if any.
+  update public.player_team_memberships
+  set player_profile_id = coalesce(_player_profile_id, player_profile_id),
+      club_id = coalesce(_club_id, club_id),
+      club_team_id = _club_team_id,
+      league_id = coalesce(_league_id, league_id),
+      age_group = coalesce(_age_group, age_group),
+      status = _status,
+      joined_via = _joined_via,
+      approved_at = case when _status in ('accepted', 'approved') then now() else player_team_memberships.approved_at end,
+      approved_by = case when _status in ('accepted', 'approved') then _approved_by else player_team_memberships.approved_by end,
+      updated_at = now()
+  where public.player_team_memberships.player_user_id = _player_user_id
+    and public.player_team_memberships.team_id = _team_id
+    and coalesce(public.player_team_memberships.club_team_id, '00000000-0000-0000-0000-000000000000'::uuid)
+        = coalesce(_club_team_id, '00000000-0000-0000-0000-000000000000'::uuid);
+
+  -- No existing row for this exact daughter team -> create the link. This is
+  -- what prevents duplicate links: one row per (player, team, daughter team).
+  if not found then
+    insert into public.player_team_memberships (
+      player_profile_id,
+      player_user_id,
+      team_id,
+      club_id,
+      club_team_id,
+      league_id,
+      age_group,
+      status,
+      joined_via,
+      approved_at,
+      approved_by
+    )
+    values (
+      _player_profile_id,
+      _player_user_id,
+      _team_id,
+      _club_id,
+      _club_team_id,
+      _league_id,
+      _age_group,
+      _status,
+      _joined_via,
+      case when _status in ('accepted', 'approved') then now() else null end,
+      case when _status in ('accepted', 'approved') then _approved_by else null end
+    );
+  end if;
+
+  -- Authoritative display values for the legacy mirror fields. The league is
+  -- resolved from the daughter team's own league_name text first, because most
+  -- daughter teams store a league/conference name without a public.leagues row.
+  select
+    t.name,
+    coalesce(
+      nullif(trim(coalesce(ct.league_name, '')), ''),
+      l.name
+    )
+  into team_name_value, league_name_value
+  from public.teams t
+  left join public.club_teams ct on ct.id = _club_team_id
+  left join public.leagues l on l.id = coalesce(_league_id, ct.league_id, t.league_id)
+  where t.id = _team_id;
+
+  -- Legacy mirrors only -- never the source of truth for linked teams.
+  update public.player_profiles
+  set team = coalesce(team_name_value, team),
+      updated_at = now()
+  where id = _player_profile_id;
+
+  update public.profiles
+  set team_name = coalesce(team_name_value, team_name),
+      updated_at = now()
+  where user_id = _player_user_id;
+
+  update public.players
+  set team_id = _team_id,
+      club = coalesce(team_name_value, club),
+      league = coalesce(league_name_value, league)
+  where user_id = _player_user_id;
+
+  select *
+  into membership_row
+  from public.player_team_memberships
+  where player_user_id = _player_user_id
+    and team_id = _team_id
+    and coalesce(club_team_id, '00000000-0000-0000-0000-000000000000'::uuid)
+        = coalesce(_club_team_id, '00000000-0000-0000-0000-000000000000'::uuid)
+  order by approved_at desc nulls last, updated_at desc, created_at desc
+  limit 1;
+
+  return membership_row;
+end;
+$sync_club_team_membership$;
+
+grant execute on function public.sync_club_team_membership(uuid, uuid, uuid, uuid, uuid, uuid, text, text, text, uuid) to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- C. Leaving a daughter team unlinks ONLY that team, is safe to repeat, and
+--    reports what the player is still linked to.
+--    Return type changes from void -> jsonb, so the old signature is dropped.
+-- ---------------------------------------------------------------------------
+drop function if exists public.leave_team_membership(uuid);
+
+create or replace function public.leave_team_membership(_membership_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $leave_team_membership$
+declare
+  v_user_id uuid := auth.uid();
+  v_membership public.player_team_memberships;
+  v_team_name text;
+  v_next_membership public.player_team_memberships;
+  v_next_team_name text;
+  v_next_league_name text;
+  v_remaining jsonb;
+begin
+  if v_user_id is null then
+    raise exception 'You must be signed in.';
+  end if;
+
+  -- Only the owner of the link may remove it (never trust a client-sent id).
+  select *
+  into v_membership
+  from public.player_team_memberships
+  where id = _membership_id
+    and player_user_id = v_user_id;
+
+  if v_membership.id is null then
+    -- The link does not belong to this account, or never existed. Do not leak
+    -- whether the id exists; report the same safe already-unlinked state.
+    return jsonb_build_object(
+      'success', true,
+      'already_unlinked', true,
+      'team_name', null,
+      'remaining_teams', coalesce((
+        select jsonb_agg(jsonb_build_object(
+          'membership_id', m.id,
+          'team_id', m.team_id,
+          'club_team_id', m.club_team_id
+        ))
+        from public.player_team_memberships m
+        where m.player_user_id = v_user_id
+          and m.status in ('accepted', 'approved')
+      ), '[]'::jsonb)
+    );
+  end if;
+
+  select t.name into v_team_name
+  from public.teams t
+  where t.id = v_membership.team_id;
+
+  -- Already unlinked -> safe no-op, never a destructive error.
+  if v_membership.status not in ('accepted', 'approved') then
+    return jsonb_build_object(
+      'success', true,
+      'already_unlinked', true,
+      'team_name', v_team_name,
+      'remaining_teams', coalesce((
+        select jsonb_agg(jsonb_build_object(
+          'membership_id', m.id,
+          'team_id', m.team_id,
+          'club_team_id', m.club_team_id
+        ))
+        from public.player_team_memberships m
+        where m.player_user_id = v_user_id
+          and m.status in ('accepted', 'approved')
+      ), '[]'::jsonb)
+    );
+  end if;
+
+  -- Unlink ONLY this daughter team. Every other link is untouched.
+  update public.player_team_memberships
+  set status = 'revoked',
+      updated_at = now()
+  where id = v_membership.id;
+
+  -- Clear any approved/pending join request for this exact daughter team so the
+  -- link cannot be resurrected, leaving other teams' requests alone.
+  update public.team_join_requests
+  set status = 'revoked',
+      reviewed_at = now()
+  where player_user_id = v_user_id
+    and team_id = v_membership.team_id
+    and coalesce(club_team_id, '00000000-0000-0000-0000-000000000000'::uuid) =
+        coalesce(v_membership.club_team_id, '00000000-0000-0000-0000-000000000000'::uuid)
+    and status in ('approved', 'pending');
+
+  -- Refresh the legacy mirror fields from whatever link remains (if any).
+  select *
+  into v_next_membership
+  from public.player_team_memberships
+  where player_user_id = v_user_id
+    and status in ('accepted', 'approved')
+  order by approved_at desc nulls last, updated_at desc, created_at desc
+  limit 1;
+
+  if v_next_membership.id is null then
+    update public.profiles
+    set team_name = null, updated_at = now()
+    where user_id = v_user_id;
+
+    update public.player_profiles
+    set team = null, updated_at = now()
+    where user_id = v_user_id;
+
+    -- Nullable now (see section A): a player with no linked team has no club.
+    update public.players
+    set team_id = null, club = null, league = null
+    where user_id = v_user_id;
+  else
+    select
+      t.name,
+      coalesce(nullif(trim(coalesce(ct.league_name, '')), ''), l.name)
+    into v_next_team_name, v_next_league_name
+    from public.teams t
+    left join public.club_teams ct on ct.id = v_next_membership.club_team_id
+    left join public.leagues l on l.id = coalesce(v_next_membership.league_id, ct.league_id, t.league_id)
+    where t.id = v_next_membership.team_id;
+
+    update public.profiles
+    set team_name = v_next_team_name, updated_at = now()
+    where user_id = v_user_id;
+
+    update public.player_profiles
+    set team = v_next_team_name, updated_at = now()
+    where user_id = v_user_id;
+
+    update public.players
+    set team_id = v_next_membership.team_id,
+        club = v_next_team_name,
+        league = v_next_league_name
+    where user_id = v_user_id;
+  end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'membership_id', m.id,
+    'team_id', m.team_id,
+    'club_team_id', m.club_team_id
+  )), '[]'::jsonb)
+  into v_remaining
+  from public.player_team_memberships m
+  where m.player_user_id = v_user_id
+    and m.status in ('accepted', 'approved');
+
+  return jsonb_build_object(
+    'success', true,
+    'already_unlinked', false,
+    'team_name', v_team_name,
+    'remaining_teams', v_remaining
+  );
+end;
+$leave_team_membership$;
+
+revoke all on function public.leave_team_membership(uuid) from public, anon;
+grant execute on function public.leave_team_membership(uuid) to authenticated;
+
+comment on function public.leave_team_membership(uuid) is
+  'Unlinks the signed-in player from exactly one daughter team. Safe to repeat; never touches other linked teams.';
+
+notify pgrst, 'reload schema';
+
+-- ############################################################################
+-- 20260723160000_join_request_accept_authoritative_daughter_team_data
+-- ############################################################################
+--   Multi-team linking is preserved (no other link is revoked).
+--
+-- Safe to run more than once.
+-- =============================================================================
+
+-- Legacy mirror columns must be able to represent "no team at all" (repeated
+-- here so this migration is self-sufficient; idempotent).
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'players' and column_name = 'club'
+  ) then
+    execute 'alter table public.players alter column club drop not null';
+  end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'players' and column_name = 'league'
+  ) then
+    execute 'alter table public.players alter column league drop not null';
+  end if;
+end $$;
+
+create or replace function public.sync_club_team_membership(
+  _player_profile_id uuid,
+  _player_user_id uuid,
+  _team_id uuid,
+  _club_id uuid,
+  _club_team_id uuid,
+  _league_id uuid,
+  _age_group text,
+  _status text,
+  _joined_via text,
+  _approved_by uuid
+)
+returns public.player_team_memberships
+language plpgsql
+security definer
+set search_path = public
+as $sync_club_team_membership$
+declare
+  membership_row public.player_team_memberships;
+  club_team_row public.club_teams;
+  team_row public.teams;
+  resolved_league_id uuid;
+  resolved_age_group text;
+  resolved_club_id uuid;
+  team_name_value text;
+  league_name_value text;
+begin
+  -- ---- Authoritative daughter-team + mother-team records --------------------
+  if _club_team_id is not null then
+    select * into club_team_row
+    from public.club_teams
+    where id = _club_team_id
+    limit 1;
+  end if;
+
+  select * into team_row
+  from public.teams
+  where id = _team_id
+  limit 1;
+
+  -- Resolve from the daughter team first; the caller's values are only a hint.
+  resolved_league_id := coalesce(_league_id, club_team_row.league_id, team_row.league_id);
+  resolved_age_group := coalesce(nullif(trim(coalesce(_age_group, '')), ''), club_team_row.age_group);
+  resolved_club_id   := coalesce(_club_id, club_team_row.club_id);
+
+  team_name_value := team_row.name;
+
+  -- League: the daughter team's own free-text competition name is authoritative
+  -- (most daughter teams have no public.leagues row), then the leagues table.
+  league_name_value := coalesce(
+    nullif(trim(coalesce(club_team_row.league_name, '')), ''),
+    (select l.name from public.leagues l where l.id = resolved_league_id limit 1)
+  );
+
+  -- ---- The link itself (one row per player + team + daughter team) ----------
+  -- NOTE: other active links are deliberately NOT revoked; a player may be
+  -- linked to several eligible daughter teams.
+  update public.player_team_memberships
+  set player_profile_id = coalesce(_player_profile_id, player_profile_id),
+      club_id = coalesce(resolved_club_id, club_id),
+      club_team_id = _club_team_id,
+      league_id = coalesce(resolved_league_id, league_id),
+      age_group = coalesce(resolved_age_group, age_group),
+      status = _status,
+      joined_via = _joined_via,
+      approved_at = case when _status in ('accepted', 'approved') then now() else player_team_memberships.approved_at end,
+      approved_by = case when _status in ('accepted', 'approved') then _approved_by else player_team_memberships.approved_by end,
+      updated_at = now()
+  where public.player_team_memberships.player_user_id = _player_user_id
+    and public.player_team_memberships.team_id = _team_id
+    and coalesce(public.player_team_memberships.club_team_id, '00000000-0000-0000-0000-000000000000'::uuid)
+        = coalesce(_club_team_id, '00000000-0000-0000-0000-000000000000'::uuid);
+
+  -- Already linked -> the update above reactivates/refreshes it (safe, no
+  -- duplicate). Otherwise create the link.
+  if not found then
+    insert into public.player_team_memberships (
+      player_profile_id,
+      player_user_id,
+      team_id,
+      club_id,
+      club_team_id,
+      league_id,
+      age_group,
+      status,
+      joined_via,
+      approved_at,
+      approved_by
+    )
+    values (
+      _player_profile_id,
+      _player_user_id,
+      _team_id,
+      resolved_club_id,
+      _club_team_id,
+      resolved_league_id,
+      resolved_age_group,
+      _status,
+      _joined_via,
+      case when _status in ('accepted', 'approved') then now() else null end,
+      case when _status in ('accepted', 'approved') then _approved_by else null end
+    );
+  end if;
+
+  -- ---- Legacy denormalized mirrors (display only, never the link) ----------
+  -- coalesce() guarantees a join/accept can never null these columns.
+  update public.player_profiles
+  set team = coalesce(team_name_value, team),
+      updated_at = now()
+  where id = _player_profile_id;
+
+  update public.profiles
+  set team_name = coalesce(team_name_value, team_name),
+      updated_at = now()
+  where user_id = _player_user_id;
+
+  update public.players
+  set team_id = _team_id,
+      club = coalesce(team_name_value, club),
+      league = coalesce(league_name_value, league)
+  where user_id = _player_user_id;
+
+  select *
+  into membership_row
+  from public.player_team_memberships
+  where player_user_id = _player_user_id
+    and team_id = _team_id
+    and coalesce(club_team_id, '00000000-0000-0000-0000-000000000000'::uuid)
+        = coalesce(_club_team_id, '00000000-0000-0000-0000-000000000000'::uuid)
+  order by approved_at desc nulls last, updated_at desc, created_at desc
+  limit 1;
+
+  return membership_row;
+end;
+$sync_club_team_membership$;
+
+grant execute on function public.sync_club_team_membership(uuid, uuid, uuid, uuid, uuid, uuid, text, text, text, uuid) to authenticated;
+
+comment on function public.sync_club_team_membership(uuid, uuid, uuid, uuid, uuid, uuid, text, text, text, uuid) is
+  'Links a player to one daughter team using authoritative club_teams data. Never revokes other links; never nulls the legacy players mirror columns.';
+
+notify pgrst, 'reload schema';
+
+-- ############################################################################
+-- 20260723180000_deploy_club_teams_head_coach_user_id_column
+-- ############################################################################
+-- =============================================================================
+
+alter table public.club_teams
+  add column if not exists head_coach_user_id uuid references auth.users(id) on delete set null;
+
+create index if not exists club_teams_head_coach_user_id_idx
+  on public.club_teams (head_coach_user_id);
+
+comment on column public.club_teams.head_coach_user_id is
+  'Optional linked Coach account acting as this daughter team''s head coach. Complements club_teams.coach_name (free text). Not a replacement for coach_staff_team_memberships.';
+
+notify pgrst, 'reload schema';

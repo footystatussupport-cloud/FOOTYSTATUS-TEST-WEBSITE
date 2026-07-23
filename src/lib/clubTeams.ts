@@ -171,6 +171,38 @@ export const fetchClubTeamOptionsForParentTeam = async (teamId: string) => {
 
 export const sanitizeClubTeamAccessCode = (value: string) => value.replace(/\D/g, "").slice(0, 5);
 
+/** Authoritative team details behind a 5-digit code. */
+export interface TeamAccessCodePreview {
+  club_team_id: string;
+  team_id: string;
+  team_name: string;
+  age_group: string | null;
+  gender: string | null;
+  league_name: string | null;
+  already_member: boolean;
+}
+
+/**
+ * Look up the team behind a 5-digit code. Every field comes from the database
+ * record, never the client. Returns null for any team the signed-in player is
+ * not permitted to access (wrong gender, inactive, unapproved, bad code) so the
+ * caller can show one general message without leaking restricted team details.
+ */
+export const previewTeamByAccessCode = async (
+  accessCode: string
+): Promise<TeamAccessCodePreview | null> => {
+  const normalized = sanitizeClubTeamAccessCode(accessCode);
+  if (normalized.length !== 5) return null;
+
+  const { data, error } = await (supabase as any).rpc("preview_club_team_by_access_code", {
+    _access_code: normalized,
+  });
+  if (error) throw error;
+
+  const row = Array.isArray(data) ? data[0] : data;
+  return row ? (row as TeamAccessCodePreview) : null;
+};
+
 export const updateClubTeamAccessCode = async (clubTeamId: string, accessCode: string) =>
   (supabase as any).rpc("update_club_team_access_code", {
     _club_team_id: clubTeamId,

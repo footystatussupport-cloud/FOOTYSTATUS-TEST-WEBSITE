@@ -20,7 +20,7 @@ import { ActiveMembership, LiveStandingSummary, TeamRosterPlayer, fetchActiveMem
 import { OfferedClubTeam } from "@/components/club/ClubTeamsManager";
 import DaughterTeamEditDialog from "@/components/club/DaughterTeamEditDialog";
 import ProfilePhotoCropUploader, { type ProfilePhotoCropUploaderHandle } from "@/components/ProfilePhotoCropUploader";
-import { ClubTeamRecord, archiveClubTeam, createDaughterTeam, fetchClubByTeamId, fetchClubTeamOptionsForParentTeam, fetchClubTeams, fetchRosterForClubTeam, formatTeamGender, getAgeGroupSortValue, getOfferedTeamDuplicate, normalizeTeamGender, sanitizeClubTeamAccessCode, setDaughterTeamGender, updateClubTeamAccessCode } from "@/lib/clubTeams";
+import { ClubTeamRecord, TeamAccessCodePreview, archiveClubTeam, createDaughterTeam, fetchClubByTeamId, fetchClubTeamOptionsForParentTeam, fetchClubTeams, fetchRosterForClubTeam, formatTeamGender, getAgeGroupSortValue, getOfferedTeamDuplicate, normalizeTeamGender, previewTeamByAccessCode, sanitizeClubTeamAccessCode, setDaughterTeamGender, updateClubTeamAccessCode } from "@/lib/clubTeams";
 import ClubNewsSection from "@/components/club-news/ClubNewsSection";
 import { Badge } from "@/components/ui/badge";
 import ProBadge from "@/components/ProBadge";
@@ -306,6 +306,7 @@ interface TeamSearchResult {
   logo_url?: string | null;
   age_groups_offered?: string[] | null;
   result_type?: "mother" | "daughter";
+  gender?: string | null;
   search_label?: string | null;
 }
 
@@ -670,6 +671,11 @@ const ProfilePage = () => {
   const [teamAccessCode, setTeamAccessCode] = useState("");
   const [directTeamAccessCode, setDirectTeamAccessCode] = useState("");
   const [joiningByDirectCode, setJoiningByDirectCode] = useState(false);
+  // Authoritative preview of the team behind the typed 5-digit code.
+  const [directCodePreview, setDirectCodePreview] = useState<TeamAccessCodePreview | null>(null);
+  const [directCodeLookupState, setDirectCodeLookupState] = useState<"idle" | "checking" | "unavailable">("idle");
+  // Invitation currently being accepted/declined (blocks duplicate submissions).
+  const [respondingInviteId, setRespondingInviteId] = useState<string | null>(null);
   const [activeInviteClubTeamId, setActiveInviteClubTeamId] = useState<string | null>(null);
   const [clubTeamInviteSearch, setClubTeamInviteSearch] = useState("");
   const [clubTeamInviteResults, setClubTeamInviteResults] = useState<ClubInvitePlayerResult[]>([]);
@@ -1375,7 +1381,7 @@ const ProfilePage = () => {
         teamIds.length
           ? (supabase as any)
               .from("club_teams")
-              .select("id, team_id, league_id, league_name, age_group, status")
+              .select("id, team_id, league_id, league_name, age_group, gender, status")
               .in("team_id", teamIds)
               .eq("status", "active")
               .order("league_name", { ascending: true })
@@ -1387,7 +1393,7 @@ const ProfilePage = () => {
       const { data: daughterMatchesByDetails } = trimmedQuery
         ? await (supabase as any)
             .from("club_teams")
-            .select("id, team_id, league_id, league_name, age_group, status")
+            .select("id, team_id, league_id, league_name, age_group, gender, status")
             .eq("status", "active")
             .or(`age_group.ilike.%${trimmedQuery}%,league_name.ilike.%${trimmedQuery}%`)
             .order("league_name", { ascending: true })
@@ -1433,16 +1439,70 @@ const ProfilePage = () => {
             logo_url: parentTeam.logo_url || null,
             age_groups_offered: profileByTeamId.get(parentTeam.id)?.age_groups_offered || null,
             result_type: "daughter" as const,
+            gender: clubTeam.gender || null,
             search_label: formatTeamLeagueLine(parentTeam.name, clubTeam.age_group || null, clubTeam.league_name || null),
           };
         })
         .filter(Boolean) as TeamSearchResult[];
 
-      setTeamSearchResults([...motherResults, ...daughterResults].slice(0, 12));
+      // Surface teams matching the player's own gender first. The gender comes
+      // from the authenticated player profile (server-loaded), never from
+      // editable client state, and this is ordering only -- the database still
+      // enforces which teams a player may actually see or join.
+      const viewerGender = normalizeTeamGender(authProfile?.player_gender);
+      const genderRank = (team: TeamSearchResult) => {
+        if (!viewerGender) return 0;
+        const teamGender = normalizeTeamGender((team as any).gender);
+        if (!teamGender) return 1;
+        return teamGender === viewerGender ? 0 : 2;
+      };
+
+      const ordered = [...motherResults, ...daughterResults].sort((a, b) => genderRank(a) - genderRank(b));
+      setTeamSearchResults(ordered.slice(0, 12));
     };
 
     searchTeams();
-  }, [teamSearchQuery, isPlayerAccount, isTeamStaffAccount]);
+  }, [teamSearchQuery, isPlayerAccount, isTeamStaffAccount, authProfile?.player_gender]);
+
+  // Look up the team behind a complete 5-digit code so the player sees the
+  // name, age group, gender and league before joining. The server returns
+  // nothing for any team this account may not access, which surfaces as one
+  // general "not available" message with no restricted details.
+  useEffect(() => {
+    if (!isPlayerAccount) {
+      setDirectCodePreview(null);
+      setDirectCodeLookupState("idle");
+      return;
+    }
+
+    const normalizedCode = sanitizeClubTeamAccessCode(directTeamAccessCode);
+    if (normalizedCode.length !== 5) {
+      setDirectCodePreview(null);
+      setDirectCodeLookupState("idle");
+      return;
+    }
+
+    let cancelled = false;
+    setDirectCodeLookupState("checking");
+    const timer = window.setTimeout(async () => {
+      try {
+        const preview = await previewTeamByAccessCode(normalizedCode);
+        if (cancelled) return;
+        setDirectCodePreview(preview);
+        setDirectCodeLookupState(preview ? "idle" : "unavailable");
+      } catch (error) {
+        if (cancelled) return;
+        console.warn("Could not look up team code", error);
+        setDirectCodePreview(null);
+        setDirectCodeLookupState("unavailable");
+      }
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [directTeamAccessCode, isPlayerAccount]);
 
   useEffect(() => {
     const searchClubHistoryTeams = async () => {
@@ -4135,6 +4195,9 @@ const ProfilePage = () => {
       return;
     }
 
+    // Name the team in the success message using the authoritative preview.
+    const joiningTeamName = directCodePreview?.team_name || "that team";
+
     setJoiningByDirectCode(true);
     const { error } = await (supabase as any).rpc("join_club_team_with_access_code", {
       _access_code: normalizedCode,
@@ -4142,8 +4205,17 @@ const ProfilePage = () => {
 
     if (error) {
       const lowerMessage = (error.message || "").toLowerCase();
-      const description = lowerMessage.includes("eligible")
-        ? "You are not eligible to join this team."
+      if (lowerMessage.includes("already linked")) {
+        toast({ title: "Already on this team", description: "You are already linked to this team." });
+        // Clear so the player can immediately try a different code.
+        setDirectTeamAccessCode("");
+        setDirectCodePreview(null);
+        setDirectCodeLookupState("idle");
+        setJoiningByDirectCode(false);
+        return;
+      }
+      const description = lowerMessage.includes("not available for your account") || lowerMessage.includes("eligible")
+        ? "This team is not available for your account."
         : lowerMessage.includes("invalid access code")
           ? "Invalid access code. Please check the code and try again."
           : error.message;
@@ -4152,8 +4224,11 @@ const ProfilePage = () => {
       return;
     }
 
-    toast({ title: "Joined team", description: "You were linked to that daughter team roster." });
+    toast({ title: "Joined team", description: `You were linked to ${joiningTeamName}.` });
+    // Reset the field and result card so another code can be entered right away.
     setDirectTeamAccessCode("");
+    setDirectCodePreview(null);
+    setDirectCodeLookupState("idle");
     await Promise.all([fetchProfile(), fetchTeamConnectionData()]);
     setJoiningByDirectCode(false);
   };
@@ -4266,11 +4341,19 @@ const ProfilePage = () => {
   };
 
   const handleRespondInvite = async (inviteId: string, accept: boolean) => {
+    // Guard against duplicate submissions while the link is being established.
+    if (respondingInviteId) return;
+
     if (!accept) {
       const shouldDecline = window.confirm("Are you sure you want to decline this invite?");
       if (!shouldDecline) return;
     }
 
+    // Name the exact daughter team from the invitation itself.
+    const invitedTeamName =
+      pendingInvites.find((invite) => invite.id === inviteId)?.team_name || "that team";
+
+    setRespondingInviteId(inviteId);
     const { error } = await (supabase as any).rpc("respond_team_player_invite", {
       _invite_id: inviteId,
       _accept: accept,
@@ -4287,11 +4370,17 @@ const ProfilePage = () => {
           : "We couldn't decline this team invitation. Please try again.",
         variant: "destructive",
       });
+      setRespondingInviteId(null);
       return;
     }
 
-    toast({ title: accept ? "You have joined the team successfully." : "Invite declined" });
+    toast(
+      accept
+        ? { title: "Team Linked", description: `You are now linked to ${invitedTeamName}.` }
+        : { title: "Invite declined" }
+    );
     await Promise.all([fetchProfile(), fetchTeamConnectionData()]);
+    setRespondingInviteId(null);
   };
 
   const handleLeaveTeam = async (membershipId?: string) => {
@@ -4302,7 +4391,7 @@ const ProfilePage = () => {
 
     setSaving(true);
 
-    const { error: rpcError } = membershipId
+    const { data: leaveResult, error: rpcError } = membershipId
       ? await (supabase as any).rpc("leave_team_membership", { _membership_id: membershipId })
       : await (supabase as any).rpc("leave_current_team");
     setSaving(false);
@@ -4323,11 +4412,19 @@ const ProfilePage = () => {
       return;
     }
 
-    toast({ title: "You have left the team successfully." });
-      setActiveMembership(null);
-      setActiveMemberships([]);
-      setTeamStanding(null);
-      setActiveMembershipLogoUrls({});
+    const leftTeamName = leaveResult?.team_name || "that team";
+    toast({
+      title: "Team Left",
+      description: leaveResult?.already_unlinked
+        ? "You are no longer linked to this team."
+        : `You are no longer linked to ${leftTeamName}.`,
+    });
+    // Clear only the derived display state; the refetch below rebuilds the
+    // player's remaining linked teams from the authoritative link table.
+    setActiveMembership(null);
+    setActiveMemberships([]);
+    setTeamStanding(null);
+    setActiveMembershipLogoUrls({});
     await Promise.all([fetchProfile(), fetchTeamConnectionData()]);
   };
 
@@ -4668,7 +4765,13 @@ const ProfilePage = () => {
     await Promise.all([fetchProfile(), fetchTeamConnectionData()]);
   };
 
-  const handleReviewManagedClubTeamRequest = async (requestId: string, approve: boolean) => {
+  const handleReviewManagedClubTeamRequest = async (
+    requestId: string,
+    approve: boolean,
+    playerName?: string | null,
+    daughterTeamName?: string | null
+  ) => {
+    if (reviewingClubTeamRequestId) return; // block duplicate taps
     setReviewingClubTeamRequestId(requestId);
     const { error } = await (supabase as any).rpc("review_team_join_request", {
       _request_id: requestId,
@@ -4676,12 +4779,27 @@ const ProfilePage = () => {
     });
 
     if (error) {
-      toast({ title: "Could not update request", description: error.message, variant: "destructive" });
+      // Full database error for debugging only — never surface raw SQL to users.
+      console.error("Footy Status join request review failed", { requestId, approve, error });
+      toast({
+        title: "Could not update request",
+        description: approve
+          ? "We couldn't add this player to the team. Please try again."
+          : "We couldn't reject this request. Please try again.",
+        variant: "destructive",
+      });
       setReviewingClubTeamRequestId(null);
       return;
     }
 
-    toast({ title: approve ? "Player approved" : "Request rejected" });
+    toast(
+      approve
+        ? {
+            title: "Player Added",
+            description: `${playerName || "The player"} has been added to ${daughterTeamName || "the team"}.`,
+          }
+        : { title: "Request rejected" }
+    );
     await Promise.all([fetchProfile(), fetchTeamConnectionData()]);
     setReviewingClubTeamRequestId(null);
   };
@@ -4695,9 +4813,16 @@ const ProfilePage = () => {
     });
 
     if (error) {
-      toast({ title: "Could not update request", description: error.message, variant: "destructive" });
+      console.error("Footy Status join request review failed", { requestId, approve, error });
+      toast({
+        title: "Could not update request",
+        description: approve
+          ? "We couldn't add this player to the team. Please try again."
+          : "We couldn't reject this request. Please try again.",
+        variant: "destructive",
+      });
     } else {
-      toast({ title: approve ? "Player approved" : "Request rejected" });
+      toast({ title: approve ? "Player Added" : "Request rejected" });
       if (resolvedTeamId) await fetchTeamOwnerPlayerRequests(resolvedTeamId);
       await fetchProfile();
     }
@@ -6081,35 +6206,79 @@ const ProfilePage = () => {
           </div>
         ) : null}
 
-        {isPlayerAccount && (linkedMembershipsForDisplay.length === 0 || pendingInvites.length > 0 || pendingJoinRequests.length > 0) && (
+        {isPlayerAccount && (
           <section className="mb-6">
             <h3 className="text-lg font-semibold text-navy mb-3">Team Requests</h3>
             <div className="bg-card border border-border rounded-xl p-4 space-y-4">
+              {/* Always available: a player can join another eligible team at any
+                  time, so this stays visible after a successful join. */}
+              <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 space-y-3">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">Join with a 5-digit daughter team code</p>
+                  <p className="text-xs text-muted-foreground">Enter the code from your team to join that exact roster.</p>
+                </div>
+                <div className="grid grid-cols-[1fr_auto] gap-2">
+                  <Input
+                    value={directTeamAccessCode}
+                    onChange={(e) => setDirectTeamAccessCode(sanitizeClubTeamAccessCode(e.target.value))}
+                    inputMode="numeric"
+                    maxLength={5}
+                    placeholder="12345"
+                    className="text-center"
+                  />
+                  <Button
+                    type="button"
+                    onClick={handleJoinTeamByDirectCode}
+                    disabled={
+                      joiningByDirectCode ||
+                      sanitizeClubTeamAccessCode(directTeamAccessCode).length !== 5 ||
+                      !directCodePreview ||
+                      directCodePreview.already_member
+                    }
+                  >
+                    {joiningByDirectCode ? "Joining..." : "Join"}
+                  </Button>
+                </div>
+
+                {directCodeLookupState === "checking" ? (
+                  <p className="text-xs text-muted-foreground">Checking code...</p>
+                ) : null}
+
+                {directCodeLookupState === "unavailable" ? (
+                  <p className="text-xs text-destructive">This team is not available for your account.</p>
+                ) : null}
+
+                {/* Authoritative team details for the entered code. */}
+                {directCodePreview ? (
+                  <div className="rounded-lg border border-border bg-card p-3">
+                    <p className="break-words text-sm font-semibold text-foreground">{directCodePreview.team_name}</p>
+                    <dl className="mt-1.5 space-y-1 text-xs text-muted-foreground">
+                      {directCodePreview.age_group ? (
+                        <div className="flex flex-wrap gap-x-1">
+                          <dt className="font-medium">Age Group:</dt>
+                          <dd className="min-w-0 break-words">{directCodePreview.age_group}</dd>
+                        </div>
+                      ) : null}
+                      <div className="flex flex-wrap gap-x-1">
+                        <dt className="font-medium">Gender:</dt>
+                        <dd className="min-w-0 break-words">{formatTeamGender(directCodePreview.gender)}</dd>
+                      </div>
+                      {directCodePreview.league_name ? (
+                        <div className="flex flex-wrap gap-x-1">
+                          <dt className="font-medium">League:</dt>
+                          <dd className="min-w-0 break-words">{directCodePreview.league_name}</dd>
+                        </div>
+                      ) : null}
+                    </dl>
+                    {directCodePreview.already_member ? (
+                      <p className="mt-2 text-xs font-medium text-foreground">You are already linked to this team.</p>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+
               {linkedMembershipsForDisplay.length > 0 ? null : (
                 <div className="space-y-3">
-                  <div className="rounded-xl border border-primary/20 bg-primary/5 p-3 space-y-3">
-                    <div>
-                      <p className="text-sm font-semibold text-foreground">Join with a 5-digit daughter team code</p>
-                      <p className="text-xs text-muted-foreground">Enter the code from your team to join that exact roster.</p>
-                    </div>
-                    <div className="grid grid-cols-[1fr_auto] gap-2">
-                      <Input
-                        value={directTeamAccessCode}
-                        onChange={(e) => setDirectTeamAccessCode(sanitizeClubTeamAccessCode(e.target.value))}
-                        inputMode="numeric"
-                        maxLength={5}
-                        placeholder="12345"
-                        className="text-center"
-                      />
-                      <Button
-                        type="button"
-                        onClick={handleJoinTeamByDirectCode}
-                        disabled={joiningByDirectCode || sanitizeClubTeamAccessCode(directTeamAccessCode).length !== 5}
-                      >
-                        {joiningByDirectCode ? "Joining..." : "Join"}
-                      </Button>
-                    </div>
-                  </div>
                   <p className="text-sm text-muted-foreground">Start by searching for the approved team you want to apply to.</p>
                   <div className="relative">
                     <Input
@@ -6254,10 +6423,21 @@ const ProfilePage = () => {
                       <p className="font-medium">{formatTeamLeagueLine(invite.team_name, invite.age_group, invite.league_name)}</p>
                       <p className="text-xs text-muted-foreground">This team invited you to join this exact squad.</p>
                       <div className="flex gap-2">
-                        <Button size="sm" className="flex-1" onClick={() => handleRespondInvite(invite.id, true)}>
-                          Accept
+                        <Button
+                          size="sm"
+                          className="flex-1"
+                          onClick={() => handleRespondInvite(invite.id, true)}
+                          disabled={respondingInviteId !== null}
+                        >
+                          {respondingInviteId === invite.id ? "Linking..." : "Accept"}
                         </Button>
-                        <Button size="sm" variant="outline" className="flex-1" onClick={() => handleRespondInvite(invite.id, false)}>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="flex-1"
+                          onClick={() => handleRespondInvite(invite.id, false)}
+                          disabled={respondingInviteId !== null}
+                        >
                           Decline
                         </Button>
                       </div>
@@ -7774,19 +7954,26 @@ const ProfilePage = () => {
                                     <Button
                                       size="sm"
                                       className="flex-1"
-                                      disabled={reviewingClubTeamRequestId === request.id}
+                                      disabled={reviewingClubTeamRequestId !== null}
                                       onClick={(e) => {
                                         e.stopPropagation();
-                                        handleReviewManagedClubTeamRequest(request.id, true);
+                                        handleReviewManagedClubTeamRequest(
+                                          request.id,
+                                          true,
+                                          request.player_name,
+                                          [team.age_group, formatTeamGender(team.gender), team.league_name]
+                                            .filter(Boolean)
+                                            .join(" ") || "the team"
+                                        );
                                       }}
                                     >
-                                      Accept
+                                      {reviewingClubTeamRequestId === request.id ? "Adding..." : "Accept"}
                                     </Button>
                                     <Button
                                       size="sm"
                                       variant="outline"
                                       className="flex-1"
-                                      disabled={reviewingClubTeamRequestId === request.id}
+                                      disabled={reviewingClubTeamRequestId !== null}
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         handleReviewManagedClubTeamRequest(request.id, false);

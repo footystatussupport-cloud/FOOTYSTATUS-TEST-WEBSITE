@@ -103,6 +103,7 @@ const DaughterTeamEditDialog = ({ open, onOpenChange, team, isSchool, parentTeam
   const update = (patch: Partial<TeamFormState>) => setForm((current) => ({ ...current, ...patch }));
 
   const handleSave = async () => {
+    if (saving || deleting) return; // block duplicate submissions
     if (!form.age_group.trim() || !form.league_name.trim()) {
       toast({
         title: "Missing information",
@@ -156,13 +157,28 @@ const DaughterTeamEditDialog = ({ open, onOpenChange, team, isSchool, parentTeam
       }
 
       toast({
-        title: isCreating ? "Team created" : "Team updated",
-        description: isCreating ? "The new team was added." : "Only this team was changed.",
+        title: isCreating ? "Team Created" : "Team Updated",
+        description: isCreating
+          ? "The new team was added."
+          : "Your daughter team changes have been saved.",
       });
       onOpenChange(false);
       await onSaved();
     } catch (error: any) {
-      toast({ title: "Could not save team", description: error.message, variant: "destructive" });
+      // Full database error for debugging only — never surface raw SQL/column
+      // details to the user.
+      console.error("Footy Status daughter team save failed", {
+        clubTeamId: team?.id ?? null,
+        isCreating,
+        error,
+      });
+      toast({
+        title: "Could not save team",
+        description: isCreating
+          ? "We couldn't add this team. Please try again."
+          : "We couldn't save your changes. Please try again.",
+        variant: "destructive",
+      });
     }
     setSaving(false);
   };

@@ -722,9 +722,17 @@ const TeamProfile = () => {
     });
 
     if (error) {
-      toast({ title: "Update failed", description: error.message, variant: "destructive" });
+      // Full database error for debugging only — never surface raw SQL to users.
+      console.error("Footy Status join request review failed", { requestId, approve, error });
+      toast({
+        title: "Update failed",
+        description: approve
+          ? "We couldn't add this player to the team. Please try again."
+          : "We couldn't reject this request. Please try again.",
+        variant: "destructive",
+      });
     } else {
-      toast({ title: approve ? "Player approved" : "Request rejected" });
+      toast({ title: approve ? "Player Added" : "Request rejected" });
       await fetchTeamData();
     }
     setActionLoading(false);

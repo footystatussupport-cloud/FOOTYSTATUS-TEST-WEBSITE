@@ -446,6 +446,7 @@ const ClubTeamProfile = () => {
   };
 
   const handleReviewJoinRequest = async (requestId: string, approve: boolean) => {
+    if (reviewingRequestId) return; // block duplicate taps
     setReviewingRequestId(requestId);
     const { error } = await (supabase as any).rpc("review_team_join_request", {
       _request_id: requestId,
@@ -453,12 +454,20 @@ const ClubTeamProfile = () => {
     });
 
     if (error) {
-      toast({ title: "Could not update request", description: error.message, variant: "destructive" });
+      // Full database error for debugging only — never surface raw SQL to users.
+      console.error("Footy Status join request review failed", { requestId, approve, error });
+      toast({
+        title: "Could not update request",
+        description: approve
+          ? "We couldn't add this player to the team. Please try again."
+          : "We couldn't reject this request. Please try again.",
+        variant: "destructive",
+      });
       setReviewingRequestId(null);
       return;
     }
 
-    toast({ title: approve ? "Player approved" : "Request rejected" });
+    toast({ title: approve ? "Player Added" : "Request rejected" });
     await reloadClubTeamPage();
     setReviewingRequestId(null);
   };
