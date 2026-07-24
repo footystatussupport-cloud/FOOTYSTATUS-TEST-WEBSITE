@@ -774,6 +774,20 @@ const ProfilePage = () => {
       ),
     [linkedTeamClubStaff]
   );
+  // The actual coaches (head_coach / assistant_coach / coaching_staff / scout)
+  // linked to this team. linkedTeamClubStaff is loaded from the same
+  // fetchCoachStaffForTeam source the public /team/:id page uses, but on the
+  // team owner's OWN profile only the academy_director "Club Staff" slice above
+  // was ever rendered — so a team viewing itself never saw its linked coaches
+  // even though every other account could. This slice restores that list.
+  const linkedTeamCoachingStaff = useMemo(
+    () =>
+      linkedTeamClubStaff.filter((staff) => {
+        const staffProfile = staff.profile || staff.profiles || {};
+        return staffProfile.account_role !== "academy_director";
+      }),
+    [linkedTeamClubStaff]
+  );
 
   useEffect(() => {
     setClubTeamAccessCodes((prev) => {
@@ -1155,7 +1169,14 @@ const ProfilePage = () => {
     }
     fetchTeamConnectionData();
     fetchCoachStaffConnectionData();
-  }, [user, authLoading, isPlayerAccount, isTeamAccount]);
+    // isTeamStaffAccount must be a dependency: on first mount `profile` is still
+    // null, so it resolves false and fetchCoachStaffConnectionData() hits its
+    // `!isTeamStaffAccount` guard and clears the coach's linked teams. Once the
+    // async profile load flips it to true, this effect must re-run so the coach
+    // actually sees the teams they're linked to on their OWN profile (they load
+    // from the same coach_staff_team_memberships source other viewers use).
+    // Without this dep the fetch never re-ran and the team silently disappeared.
+  }, [user, authLoading, isPlayerAccount, isTeamAccount, isTeamStaffAccount]);
 
   useRegisterRefresh(async () => {
     if (!user) return;
@@ -1339,7 +1360,13 @@ const ProfilePage = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user, isPlayerAccount, isTeamAccount]);
+    // isTeamStaffAccount is a dependency so the channel re-subscribes with fresh
+    // closures once the async profile load resolves the account category. Without
+    // it, the realtime handlers keep the first-render closures (isTeamStaffAccount
+    // = false) and a coach_staff_team_memberships event would run the guarded
+    // fetch that clears the coach's linked teams — the "appears then disappears"
+    // flash the coach saw on their own profile.
+  }, [user, isPlayerAccount, isTeamAccount, isTeamStaffAccount]);
 
   useEffect(() => {
     if (!isTeamAccount || !teamAccountData?.team_id) {
@@ -4387,6 +4414,33 @@ const ProfilePage = () => {
     setSaving(false);
   };
 
+  // Team owner removing a coach from THEIR OWN team's coaching staff. Mirrors the
+  // public /team/:id page's remove action: unlink every membership for that coach
+  // at this club, then reload the role-specific data so linkedTeamClubStaff (the
+  // source for both the Club Staff and Coaching Staff lists) refreshes. Uses the
+  // existing unlinkCoachStaffFromClub RPC — no change to the linking flow itself.
+  const handleTeamRemoveCoachStaff = async (staff: any) => {
+    if (!teamAccountData?.team_id || !staff?.coach_user_id) return;
+
+    const confirmed = await confirm({
+      title: "Remove Coach?",
+      description: `Are you sure you want to remove ${staff?.profile?.full_name || staff?.profiles?.full_name || staff?.full_name || "this coach"} from this coaching staff?`,
+      confirmText: "Remove Coach",
+      destructive: true,
+    });
+    if (!confirmed) return;
+
+    setSaving(true);
+    const { error } = await unlinkCoachStaffFromClub(teamAccountData.team_id, staff.coach_user_id);
+    if (error) {
+      toast({ title: "Could not remove staff member", description: error.message, variant: "destructive" });
+    } else {
+      toast({ title: "Coach/staff removed" });
+      await fetchProfile();
+    }
+    setSaving(false);
+  };
+
   const handleCoachStaffLeaveClub = async (link: CoachStaffTeamLink) => {
     const confirmed = await confirm({
       title: "Leave Club?",
@@ -7300,6 +7354,54 @@ const ProfilePage = () => {
             )}
           </div>
         </section>
+
+        {isTeamAccount && !isOfficialFootyStatusAccount && (
+          <section className="mb-6">
+            <h3 className="text-lg font-semibold text-navy mb-3">Coaching Staff</h3>
+            <div className="bg-card border border-border rounded-xl p-4 space-y-3">
+              {linkedTeamCoachingStaff.length > 0 ? (
+                linkedTeamCoachingStaff.map((staff) => {
+                  const staffProfile = staff.profile || staff.profiles || {};
+                  return (
+                    <div key={staff.id} className="rounded-lg border border-border p-3 space-y-3">
+                      <button
+                        type="button"
+                        onClick={() => navigate(staff.coach_user_id === user?.id ? "/profile" : `/coach/${staff.coach_user_id}`)}
+                        className="w-full flex items-center gap-3 text-left"
+                      >
+                        <div className="w-10 h-10 rounded-full bg-muted overflow-hidden flex items-center justify-center shrink-0">
+                          {staffProfile.avatar_url ? (
+                            <img src={staffProfile.avatar_url} alt={staffProfile.full_name || "Coach"} className="w-full h-full object-cover" />
+                          ) : (
+                            <Briefcase className="h-5 w-5 text-muted-foreground" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-medium truncate">{staffProfile.full_name || "Coach / Staff"}</p>
+                          <p className="text-sm text-muted-foreground truncate">{formatRoleDisplayLabel(staff.staff_role || staffProfile.coaching_role_type, "Coaching Staff")}</p>
+                          {(staff.assignments || []).length > 0 ? (
+                            <div className="mt-1 space-y-0.5">
+                              {(staff.assignments || []).map((assignment: any) => (
+                                <p key={assignment.id} className="text-xs text-muted-foreground truncate">
+                                  {assignment.team_name} {assignment.staff_role ? `— ${assignment.staff_role}` : ""}
+                                </p>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      </button>
+                      <Button size="sm" variant="outline" onClick={() => handleTeamRemoveCoachStaff(staff)} disabled={saving}>
+                        Remove
+                      </Button>
+                    </div>
+                  );
+                })
+              ) : (
+                <p className="text-sm text-muted-foreground">No linked coaches or staff yet.</p>
+              )}
+            </div>
+          </section>
+        )}
 
         {isTeamAccount && !isOfficialFootyStatusAccount && (
           <section className="mb-6">
