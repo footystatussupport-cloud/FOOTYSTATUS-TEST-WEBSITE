@@ -29,6 +29,7 @@ const TYPE_DEFS: TypeDef[] = [
   { value: "penalty_scored", label: "Penalty Scored", needs: ["team", "player", "minute"] },
   { value: "penalty_missed", label: "Penalty Missed", needs: ["team", "player", "minute"] },
   { value: "penalty_awarded", label: "Penalty Awarded", needs: ["team", "minute", "description"] },
+  { value: "save", label: "Save", needs: ["team", "player", "minute"] },
   { value: "yellow_card", label: "Yellow Card", needs: ["team", "player", "minute"] },
   { value: "second_yellow", label: "Second Yellow → Red", needs: ["team", "player", "minute"] },
   { value: "red_card", label: "Red Card", needs: ["team", "player", "minute"] },

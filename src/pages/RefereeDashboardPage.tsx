@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
@@ -45,6 +46,7 @@ const statusIcon = {
 };
 
 const RefereeDashboardPage = () => {
+  const confirm = useConfirm();
   const navigate = useNavigate();
   const { user, profile } = useAuth();
   const { toast } = useToast();
@@ -140,9 +142,12 @@ const RefereeDashboardPage = () => {
   };
 
   const handleLeaveMatch = async (claim: RefereeMatchClaim) => {
-    const confirmed = window.confirm(
-      "Are you sure you want to leave this match? You will no longer be listed as a referee for this fixture."
-    );
+    const confirmed = await confirm({
+      title: "Leave Match?",
+      description: "Are you sure you want to leave this match? You will no longer be listed as a referee for this fixture.",
+      confirmText: "Leave Match",
+      destructive: true,
+    });
     if (!confirmed) return;
 
     setLeavingClaimId(claim.id);

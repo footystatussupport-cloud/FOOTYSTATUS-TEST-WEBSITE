@@ -6,7 +6,7 @@ import { ArrowLeft, User, Users, Mail, Phone, Trophy, Star, Shield, Link as Link
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/hooks/useAuth";
 import Header from "@/components/Header";
-import { fetchActiveMembershipForUser, formatTeamLeagueLine, ActiveMembership, LiveStandingSummary, getMembershipTeamDestination } from "@/lib/teamMemberships";
+import { fetchActiveMembershipsForUser, formatTeamLeagueLine, ActiveMembership, LiveStandingSummary, getMembershipTeamDestination } from "@/lib/teamMemberships";
 import ProBadge from "@/components/ProBadge";
 import CurrentStatsSection, { CurrentStats } from "@/components/CurrentStatsSection";
 import ClubHistorySection, { ClubHistoryEntry } from "@/components/ClubHistorySection";
@@ -155,6 +155,9 @@ const PlayerProfile = () => {
   const [activeMembership, setActiveMembership] = useState<ActiveMembership | null>(null);
   const [teamStanding] = useState<LiveStandingSummary | null>(null);
   const [linkedTeamLogoUrl, setLinkedTeamLogoUrl] = useState<string | null>(null);
+  // Every team this player is actively linked to (a player may be on several).
+  const [activeMemberships, setActiveMemberships] = useState<ActiveMembership[]>([]);
+  const [membershipLogoUrls, setMembershipLogoUrls] = useState<Record<string, string | null>>({});
   const [clips, setClips] = useState<PlayerClip[]>([]);
   const [loading, setLoading] = useState(true);
   const [reloadToken, setReloadToken] = useState(0);
@@ -198,7 +201,7 @@ const PlayerProfile = () => {
         supabase.from("players").select("*").eq("id", id).maybeSingle(),
         (supabase as any)
           .from("current_player_statistics")
-          .select("team_id, team_name, team_logo_url, league_id, league_name, season, goals, assists, appearances, substitute_ins, starts, minutes_played, clean_sheets, chances_created, yellow_cards, red_cards")
+          .select("team_id, team_name, team_logo_url, league_id, league_name, season, goals, assists, appearances, substitute_ins, starts, clean_sheets, saves, chances_created, yellow_cards, red_cards")
           .eq("player_profile_id", id)
           .order("team_name", { ascending: true }),
         (supabase as any)
@@ -211,15 +214,20 @@ const PlayerProfile = () => {
 
       let viewedUserId: string | null = null;
       let resolvedMembership: ActiveMembership | null = null;
+      let resolvedMemberships: ActiveMembership[] = [];
       let resolvedTeamLogoUrl: string | null = null;
+      let resolvedMembershipLogoUrls: Record<string, string | null> = {};
       let resolvedStats = (statsRes.data || []) as PlayerStats[];
       let resolvedClubHistory = (historyRes.data || []) as ClubHistory[];
 
       if (publicProfileRes.data) {
         viewedUserId = publicProfileRes.data.user_id;
-        resolvedMembership = publicProfileRes.data.user_id
-          ? await fetchActiveMembershipForUser(publicProfileRes.data.user_id)
-          : null;
+        const publicMemberships = publicProfileRes.data.user_id
+          ? await fetchActiveMembershipsForUser(publicProfileRes.data.user_id)
+          : [];
+        resolvedMemberships = publicMemberships;
+        resolvedMembership = publicMemberships[0] || null;
+        setActiveMemberships(publicMemberships);
         setActiveMembership(resolvedMembership);
         setPlayer({
           id: publicProfileRes.data.id,
@@ -244,9 +252,12 @@ const PlayerProfile = () => {
         });
       } else if (playerRes.data) {
         viewedUserId = playerRes.data.user_id || null;
-        resolvedMembership = playerRes.data.user_id
-          ? await fetchActiveMembershipForUser(playerRes.data.user_id)
-          : null;
+        const legacyMemberships = playerRes.data.user_id
+          ? await fetchActiveMembershipsForUser(playerRes.data.user_id)
+          : [];
+        resolvedMemberships = legacyMemberships;
+        resolvedMembership = legacyMemberships[0] || null;
+        setActiveMemberships(legacyMemberships);
         setActiveMembership(resolvedMembership);
         setPlayer({ ...playerRes.data, user_id: null });
 
@@ -287,27 +298,37 @@ const PlayerProfile = () => {
           .eq("user_id", viewedUserId)
           .maybeSingle();
 
-        if (resolvedMembership?.team?.id) {
-          const [{ data: teamProfile }, { data: teamRow }] = await Promise.all([
-            (supabase as any)
-              .from("team_profiles")
-              .select("logo_url")
-              .eq("team_id", resolvedMembership.team.id)
-              .maybeSingle(),
-            (supabase as any)
-              .from("teams")
-              .select("logo_url")
-              .eq("id", resolvedMembership.team.id)
-              .maybeSingle(),
-          ]);
-          resolvedTeamLogoUrl = teamProfile?.logo_url || teamRow?.logo_url || null;
+        // Resolve a logo for every linked team so each tile shows its own crest.
+        const membershipsNeedingLogos = resolvedMemberships.filter((membership) => membership.team?.id);
+        if (membershipsNeedingLogos.length > 0) {
+          const logoEntries = await Promise.all(
+            membershipsNeedingLogos.map(async (membership) => {
+              const [{ data: teamProfile }, { data: teamRow }] = await Promise.all([
+                (supabase as any)
+                  .from("team_profiles")
+                  .select("logo_url")
+                  .eq("team_id", membership.team!.id)
+                  .maybeSingle(),
+                (supabase as any)
+                  .from("teams")
+                  .select("logo_url")
+                  .eq("id", membership.team!.id)
+                  .maybeSingle(),
+              ]);
+              return [membership.id, teamProfile?.logo_url || teamRow?.logo_url || null] as const;
+            })
+          );
+          resolvedMembershipLogoUrls = Object.fromEntries(logoEntries);
+          resolvedTeamLogoUrl = resolvedMembership?.id
+            ? resolvedMembershipLogoUrls[resolvedMembership.id] ?? null
+            : null;
         }
 
         if (playerRecord?.id) {
           const [{ data: statRows }, { data: historyRows }] = await Promise.all([
             (supabase as any)
               .from("current_player_statistics")
-              .select("team_id, team_name, team_logo_url, league_id, league_name, season, goals, assists, appearances, substitute_ins, starts, minutes_played, clean_sheets, chances_created, yellow_cards, red_cards")
+              .select("team_id, team_name, team_logo_url, league_id, league_name, season, goals, assists, appearances, substitute_ins, starts, clean_sheets, saves, chances_created, yellow_cards, red_cards")
               .eq("player_id", playerRecord.id)
               .order("team_name", { ascending: true }),
             (supabase as any)
@@ -324,6 +345,7 @@ const PlayerProfile = () => {
       }
 
       setLinkedTeamLogoUrl(resolvedTeamLogoUrl);
+      setMembershipLogoUrls(resolvedMembershipLogoUrls);
       setStats(resolvedStats);
       setClubHistory(resolvedClubHistory);
       if (viewedUserId) {
@@ -520,31 +542,48 @@ const PlayerProfile = () => {
         <section className="mb-6">
           <div className="mb-3 flex items-center justify-between gap-2"><h2 className="text-lg font-semibold text-navy">Details</h2><InlineProfileAdminControls targetUserId={player.user_id} targetName={player.name} section="profile" label="Edit player details" onChanged={() => setReloadToken((value) => value + 1)} /></div>
           <div className="bg-card border border-border rounded-xl overflow-hidden">
-            {activeMembership?.team ? (
+            {activeMemberships.length > 0 ? (
               <div className="p-4 space-y-2">
                 <div className="flex items-center gap-2">
                   <Trophy className="h-5 w-5 text-muted-foreground" />
-                  <p className="text-sm text-muted-foreground">Team</p>
+                  <p className="text-sm text-muted-foreground">{activeMemberships.length > 1 ? "Teams" : "Team"}</p>
                 </div>
-                <button
-                  onClick={() => {
-                    const destination = getMembershipTeamDestination(activeMembership);
-                    if (destination) navigate(destination);
-                  }}
-                  className="w-full bg-card border-2 border-border rounded-xl p-4 flex items-center gap-3 hover:border-accent hover:shadow-md transition-all text-left"
-                >
-                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-accent to-red-light flex items-center justify-center shadow-md overflow-hidden">
-                    {linkedTeamLogoUrl ? (
-                      <img src={linkedTeamLogoUrl} alt={activeMembership.team.name} className="w-full h-full object-cover" />
-                    ) : (
-                      <Shield className="h-6 w-6 text-white" />
-                    )}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="font-semibold text-foreground">{activeMembership.team.name}</p>
-                    {activeTeamSubtitle ? <p className="text-sm text-muted-foreground truncate">{activeTeamSubtitle}</p> : null}
-                  </div>
-                </button>
+                {/* One tile per actively linked team, stacked vertically. */}
+                <div className="space-y-3">
+                  {activeMemberships.map((membership) => {
+                    const membershipSubtitle = membership.team
+                      ? [membership.league?.name, membership.age_group || membership.team.age_group]
+                          .filter(Boolean)
+                          .join(" - ")
+                      : "";
+                    const destination = getMembershipTeamDestination(membership);
+                    const logoUrl = membershipLogoUrls[membership.id] || null;
+
+                    return (
+                      <button
+                        key={membership.id}
+                        onClick={() => {
+                          if (destination) navigate(destination);
+                        }}
+                        className="w-full bg-card border-2 border-border rounded-xl p-4 flex items-center gap-3 hover:border-accent hover:shadow-md transition-all text-left"
+                      >
+                        <div className="w-12 h-12 shrink-0 rounded-full bg-gradient-to-br from-accent to-red-light flex items-center justify-center shadow-md overflow-hidden">
+                          {logoUrl ? (
+                            <img src={logoUrl} alt={membership.team?.name || "Team"} className="w-full h-full object-cover" />
+                          ) : (
+                            <Shield className="h-6 w-6 text-white" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-semibold text-foreground">{membership.team?.name || "Team"}</p>
+                          {membershipSubtitle ? (
+                            <p className="text-sm text-muted-foreground truncate">{membershipSubtitle}</p>
+                          ) : null}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             ) : player.club ? (
               <div className="flex items-center gap-3 px-4 py-3">

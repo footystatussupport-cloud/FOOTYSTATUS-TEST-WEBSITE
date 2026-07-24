@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useRegisterRefresh } from "@/hooks/usePullToRefresh";
 import { ArrowLeft, CalendarDays, Camera, Pencil, Plus, Search, Shield, Trophy, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -55,6 +56,7 @@ const initialLeagueEditForm = {
 };
 
 const LeaguePage = () => {
+  const confirm = useConfirm();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -287,6 +289,16 @@ const LeaguePage = () => {
 
   const handleRemoveTeam = async (row: any) => {
     if (!id) return;
+    const teamName = row?.teams?.name || "this team";
+    const leagueName = league?.name || "this league";
+    const confirmed = await confirm({
+      title: "Remove Team From League?",
+      description: `Are you sure you want to remove ${teamName} from ${leagueName}?`,
+      confirmText: "Remove Team",
+      destructive: true,
+    });
+    if (!confirmed) return;
+
     const { error } = row?.club_team_id
       ? await removeClubTeamFromLeague(id, row.club_team_id)
       : await removeTeamFromLeague(id, row.team_id);

@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { useConfirm } from "@/components/ConfirmDialog";
 import {
   RefereeVerificationApplication,
   fetchRefereeVerificationQueue,
@@ -13,6 +14,7 @@ import {
 } from "@/lib/referees";
 
 const RefereeVerificationQueue = () => {
+  const confirm = useConfirm();
   const { toast } = useToast();
   const [applications, setApplications] = useState<RefereeVerificationApplication[]>([]);
   const [loading, setLoading] = useState(true);
@@ -62,8 +64,23 @@ const RefereeVerificationQueue = () => {
       return;
     }
 
-    if (action === "verify" && !window.confirm(`Accept ${application.full_name || "this referee"} as a Footy Status Verified Referee?`)) return;
-    if (action === "reject" && !window.confirm(`Decline the application from ${application.full_name || "this referee"}? They will be sent your reason and can resubmit.`)) return;
+    if (action === "verify") {
+      const confirmed = await confirm({
+        title: "Verify Referee?",
+        description: `Accept ${application.full_name || "this referee"} as a Footy Status Verified Referee?`,
+        confirmText: "Verify Referee",
+      });
+      if (!confirmed) return;
+    }
+    if (action === "reject") {
+      const confirmed = await confirm({
+        title: "Decline Application?",
+        description: `Decline the application from ${application.full_name || "this referee"}? They will be sent your reason and can resubmit.`,
+        confirmText: "Decline Application",
+        destructive: true,
+      });
+      if (!confirmed) return;
+    }
 
     setActingUserId(application.user_id);
     const { error } = await reviewRefereeVerification({

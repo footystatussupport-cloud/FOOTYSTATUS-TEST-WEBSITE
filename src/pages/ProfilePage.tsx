@@ -7,6 +7,7 @@ import ProfileHeader from "@/components/ProfileHeader";
 import LinkedParentTile from "@/components/LinkedParentTile";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { useSettings } from "@/hooks/useSettings";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,6 +41,7 @@ import {
   CoachStaffTeamLink,
   acceptCoachStaffInvite,
   fetchCoachStaffForTeam,
+  logCoachLinkReadFailure,
   fetchCoachStaffProfiles,
   fetchCoachStaffTeamLinksForUser,
   formatRoleDisplayLabel,
@@ -599,6 +601,7 @@ const isMissingAgeGroupColumnError = (error: any) =>
   error.message.includes("Could not find the 'age_group' column of 'teams' in the schema cache");
 
 const ProfilePage = () => {
+  const confirm = useConfirm();
   const { user, profile: authProfile, loading: authLoading } = useAuth();
   const { settings, updateSetting } = useSettings();
   const [profile, setProfile] = useState<ProfileData | null>(null);
@@ -1566,8 +1569,35 @@ const ProfilePage = () => {
         .ilike("full_name", `%${query}%`)
         .limit(6);
 
+      const matchedPlayers = ((data || []) as ClubInvitePlayerResult[]).filter(
+        (player) => !currentRosterIds.has(player.id)
+      );
+
+      // A player's picture may live on player_profiles.profile_image_url OR on
+      // profiles.avatar_url, so fall back to the account avatar exactly like the
+      // roster does (fetchRosterForClubTeam). Without this, players who set
+      // their picture through the account avatar showed the default icon.
+      const avatarUserIds = matchedPlayers
+        .filter((player) => !player.profile_image_url && player.user_id)
+        .map((player) => player.user_id);
+
+      let avatarByUserId = new Map<string, string | null>();
+      if (avatarUserIds.length > 0) {
+        const { data: avatarRows } = await (supabase as any)
+          .from("profiles")
+          .select("user_id, avatar_url")
+          .in("user_id", avatarUserIds);
+        avatarByUserId = new Map(
+          (avatarRows || []).map((row: any) => [row.user_id, row.avatar_url || null])
+        );
+      }
+
       setClubTeamInviteResults(
-        ((data || []) as ClubInvitePlayerResult[]).filter((player) => !currentRosterIds.has(player.id))
+        matchedPlayers.map((player) => ({
+          ...player,
+          profile_image_url:
+            player.profile_image_url || avatarByUserId.get(player.user_id) || null,
+        }))
       );
       setClubTeamInviteSearchLoading(false);
     };
@@ -1971,7 +2001,9 @@ const ProfilePage = () => {
 
           const roster = await fetchRosterForTeam(resolvedTeamId);
           setTeamRoster(roster);
-          const linkedStaff = await fetchCoachStaffForTeam(resolvedTeamId).catch(() => []);
+          const linkedStaff = await fetchCoachStaffForTeam(resolvedTeamId).catch((error) =>
+            logCoachLinkReadFailure("own team coaching staff", error)
+          );
           setLinkedTeamClubStaff(linkedStaff);
           const club = data.club_id ? { id: data.club_id } : await fetchClubByTeamId(resolvedTeamId);
           if (club?.id) {
@@ -2248,7 +2280,7 @@ const ProfilePage = () => {
 
     const { data: statRows } = await (supabase as any)
       .from("current_player_statistics")
-      .select("team_id, team_name, team_logo_url, league_id, league_name, season, goals, assists, appearances, substitute_ins, starts, minutes_played, clean_sheets, chances_created, yellow_cards, red_cards")
+      .select("team_id, team_name, team_logo_url, league_id, league_name, season, goals, assists, appearances, substitute_ins, starts, clean_sheets, saves, chances_created, yellow_cards, red_cards")
       .eq("player_user_id", user.id)
       .order("team_name", { ascending: true });
 
@@ -2587,7 +2619,9 @@ const ProfilePage = () => {
     }
 
     const [links, invitesRes, requestsRes] = await Promise.all([
-      fetchCoachStaffTeamLinksForUser(user.id).catch(() => []),
+      fetchCoachStaffTeamLinksForUser(user.id).catch((error) =>
+        logCoachLinkReadFailure("own coach profile linked teams", error)
+      ),
       (supabase as any)
         .from("coach_staff_team_invites")
         .select("id, team_id, club_team_id, league_id, age_group, coach_user_id, staff_role, status, created_at, teams(name, logo_url)")
@@ -3575,7 +3609,12 @@ const ProfilePage = () => {
   };
 
   const handleRemoveParentLink = async (linkId: string) => {
-    const confirmed = window.confirm("Remove yourself from this child account? The child cannot undo this action.");
+    const confirmed = await confirm({
+      title: "Unlink Child Account?",
+      description: "Remove yourself from this child account? The child cannot undo this action.",
+      confirmText: "Unlink",
+      destructive: true,
+    });
     if (!confirmed) return;
 
     setReviewingParentLinkId(linkId);
@@ -4297,7 +4336,12 @@ const ProfilePage = () => {
   };
 
   const handleCoachStaffLeaveTeam = async (membershipId: string) => {
-    const confirmed = window.confirm("Leave this team?");
+    const confirmed = await confirm({
+      title: "Leave Team?",
+      description: "Are you sure you want to leave this team? You will be removed from its coaching staff.",
+      confirmText: "Leave Team",
+      destructive: true,
+    });
     if (!confirmed) return;
 
     setSaving(true);
@@ -4312,7 +4356,12 @@ const ProfilePage = () => {
   };
 
   const handleCoachStaffLeaveClub = async (link: CoachStaffTeamLink) => {
-    const confirmed = window.confirm("Leave this club and every daughter team you coach?");
+    const confirmed = await confirm({
+      title: "Leave Club?",
+      description: `Are you sure you want to leave ${link.team_name || "this club"} and every daughter team you coach there?`,
+      confirmText: "Leave Club",
+      destructive: true,
+    });
     if (!confirmed) return;
 
     setSaving(true);
@@ -4345,7 +4394,12 @@ const ProfilePage = () => {
     if (respondingInviteId) return;
 
     if (!accept) {
-      const shouldDecline = window.confirm("Are you sure you want to decline this invite?");
+      const shouldDecline = await confirm({
+        title: "Decline Invite?",
+        description: "Are you sure you want to decline this team invitation?",
+        confirmText: "Decline Invite",
+        destructive: true,
+      });
       if (!shouldDecline) return;
     }
 
@@ -4386,7 +4440,16 @@ const ProfilePage = () => {
   const handleLeaveTeam = async (membershipId?: string) => {
     if (!user || (!activeMembership && !membershipId)) return;
 
-    const confirmed = window.confirm("Are you sure you want to leave this team?");
+    const leavingTeamName =
+      (membershipId
+        ? activeMemberships.find((membership) => membership.id === membershipId)?.team?.name
+        : activeMembership?.team?.name) || "this team";
+    const confirmed = await confirm({
+      title: "Leave Team?",
+      description: `Are you sure you want to leave ${leavingTeamName}? You will no longer appear on this team's roster.`,
+      confirmText: "Leave Team",
+      destructive: true,
+    });
     if (!confirmed) return;
 
     setSaving(true);
@@ -4419,12 +4482,26 @@ const ProfilePage = () => {
         ? "You are no longer linked to this team."
         : `You are no longer linked to ${leftTeamName}.`,
     });
-    // Clear only the derived display state; the refetch below rebuilds the
-    // player's remaining linked teams from the authoritative link table.
-    setActiveMembership(null);
-    setActiveMemberships([]);
+    // Remove ONLY the tile that was left. Every other linked team stays on
+    // screen untouched (no full clear, so remaining tiles never flash away).
+    if (membershipId) {
+      setActiveMemberships((previous) => {
+        const remaining = previous.filter((membership) => membership.id !== membershipId);
+        setActiveMembership(remaining[0] || null);
+        return remaining;
+      });
+      setActiveMembershipLogoUrls((previous) => {
+        const next = { ...previous };
+        delete next[membershipId];
+        return next;
+      });
+    } else {
+      setActiveMembership(null);
+      setActiveMemberships([]);
+      setActiveMembershipLogoUrls({});
+    }
     setTeamStanding(null);
-    setActiveMembershipLogoUrls({});
+    // Re-read the authoritative link table so the remaining teams are exact.
     await Promise.all([fetchProfile(), fetchTeamConnectionData()]);
   };
 
@@ -4511,7 +4588,13 @@ const ProfilePage = () => {
     const resolvedTeamId = teamAccountData?.team_id;
     if (!resolvedTeamId) return;
 
-    const confirmed = window.confirm("Cancel this pending invitation?");
+    const confirmed = await confirm({
+      title: "Cancel Invitation?",
+      description: "Are you sure you want to cancel this pending invitation?",
+      confirmText: "Cancel Invitation",
+      cancelText: "Keep Invitation",
+      destructive: true,
+    });
     if (!confirmed) return;
 
     const table = inviteType === "player" ? "team_player_invites" : "coach_staff_team_invites";
@@ -4748,7 +4831,12 @@ const ProfilePage = () => {
   };
 
   const handleRemovePlayerFromClubTeam = async (player: TeamRosterPlayer) => {
-    const confirmed = window.confirm("Are you sure you want to remove this player from this team?");
+    const confirmed = await confirm({
+      title: "Remove Player?",
+      description: `Are you sure you want to remove ${player.player_name || "this player"} from this team?`,
+      confirmText: "Remove Player",
+      destructive: true,
+    });
     if (!confirmed) return;
 
     const { error } = await removeTeamRosterPlayer(supabase, player, {

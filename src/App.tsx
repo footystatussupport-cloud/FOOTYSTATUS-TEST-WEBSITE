@@ -37,6 +37,7 @@ import ClipSharePage from "./pages/ClipSharePage";
 import AdminDesktopDisplayMode from "@/components/AdminDesktopDisplayMode";
 import { PullToRefreshProvider } from "@/hooks/usePullToRefresh";
 import RefreshBoundary from "@/components/RefreshBoundary";
+import { ConfirmProvider } from "@/components/ConfirmDialog";
 
 const queryClient = new QueryClient();
 
@@ -45,6 +46,7 @@ const App = () => (
     <AuthProvider>
       <SettingsProvider>
         <TooltipProvider>
+          <ConfirmProvider>
           <Toaster />
           <Sonner />
           <PlayerGenderCompletionGate />
@@ -90,6 +92,7 @@ const App = () => (
             </RefreshBoundary>
             </PullToRefreshProvider>
           </BrowserRouter>
+          </ConfirmProvider>
         </TooltipProvider>
       </SettingsProvider>
     </AuthProvider>

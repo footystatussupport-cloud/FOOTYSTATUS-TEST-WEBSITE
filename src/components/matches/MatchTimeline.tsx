@@ -23,6 +23,8 @@ const EVENT_META: Record<string, { icon: string; label: string; tone: Tone }> = 
   goal: { icon: "⚽", label: "Goal", tone: "goal" },
   own_goal: { icon: "⚽", label: "Own Goal", tone: "danger" },
   assist: { icon: "🅰️", label: "Assist", tone: "muted" },
+  save: { icon: "🧤", label: "Save", tone: "info" },
+  penalty_saved: { icon: "🧤", label: "Penalty Saved", tone: "info" },
   yellow_card: { icon: "🟨", label: "Yellow Card", tone: "warning" },
   red_card: { icon: "🟥", label: "Red Card", tone: "danger" },
   second_yellow: { icon: "🟨", label: "Second Yellow", tone: "danger" },

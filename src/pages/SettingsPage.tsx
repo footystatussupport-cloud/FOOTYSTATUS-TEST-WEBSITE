@@ -11,6 +11,7 @@ import NotificationSettingsSection from "@/components/notifications/Notification
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
+import { useConfirm } from "@/components/ConfirmDialog";
 import {
   assertUserCanBeDeleted,
   isCurrentUserDeletionProtected,
@@ -42,6 +43,7 @@ const getDeleteAccountErrorMessage = (error: unknown): string => {
 };
 
 const SettingsPage = () => {
+  const confirm = useConfirm();
   const navigate = useNavigate();
   const { toast } = useToast();
   const { settings, updateSetting, loading } = useSettings();
@@ -93,9 +95,14 @@ const SettingsPage = () => {
   };
 
   const handleDeleteAccount = async () => {
-    const confirmed = window.confirm(
-      "Delete Account?\n\nThis action is permanent and cannot be undone. This will permanently delete your Footy Status account, profile, videos, and associated data."
-    );
+    const confirmed = await confirm({
+      title: "Delete Account?",
+      description:
+        "Are you sure you want to delete this account? This action cannot be undone. This will permanently delete your Footy Status account, profile, videos, and associated data.",
+      confirmText: "Delete Account",
+      destructive: true,
+      warning: "This action is permanent and cannot be undone.",
+    });
 
     if (!confirmed) {
       return;

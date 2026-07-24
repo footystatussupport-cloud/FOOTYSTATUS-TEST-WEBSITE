@@ -256,14 +256,57 @@ export const fetchCoachProfiles = async (query?: string) => {
   return (data || []) as CoachStaffProfile[];
 };
 
-export const fetchCoachStaffTeamLinksForUser = async (userId: string) => {
-  const { data, error } = await (supabase as any)
-    .from("coach_staff_team_memberships")
-    .select("id, team_id, club_team_id, league_id, age_group, coach_user_id, staff_role, status, teams(name, logo_url)")
-    .eq("coach_user_id", userId)
-    .in("status", ["approved", "accepted"]);
+/**
+ * Shared error handler for coach <-> team relationship reads. These lookups were
+ * all wrapped in `.catch(() => [])`, which turned any failure into "no linked
+ * teams"/"no coaching staff" with nothing logged — so a persisted relationship
+ * silently vanished from the owner's own profile. Failures are now logged.
+ */
+export const logCoachLinkReadFailure = (context: string, error: unknown) => {
+  console.error(`Footy Status coach/team link read failed (${context})`, error);
+  return [] as never[];
+};
 
-  if (error) throw error;
+export const fetchCoachStaffTeamLinksForUser = async (userId: string) => {
+  // Layered read so a single unavailable column or a PostgREST relationship
+  // hiccup can never wipe out a coach's linked teams. The team-side lookup
+  // (fetchCoachStaffForTeam) already degrades this way; without it, this query
+  // threw and every caller's `.catch(() => [])` silently showed "no teams" even
+  // though the relationship existed — which is why the coach's own profile lost
+  // the team while other accounts still saw it.
+  const selectAttempts = [
+    "id, team_id, club_team_id, league_id, age_group, coach_user_id, staff_role, status",
+    "id, team_id, club_team_id, coach_user_id, staff_role, status",
+    "id, team_id, coach_user_id, staff_role, status",
+  ];
+
+  let data: any[] | null = null;
+  let lastError: any = null;
+
+  for (const columns of selectAttempts) {
+    const attempt = await (supabase as any)
+      .from("coach_staff_team_memberships")
+      .select(columns)
+      .eq("coach_user_id", userId)
+      .in("status", ["approved", "accepted"]);
+
+    if (!attempt.error) {
+      data = attempt.data || [];
+      lastError = null;
+      break;
+    }
+    lastError = attempt.error;
+  }
+
+  if (lastError) throw lastError;
+
+  // Team name/logo are resolved separately instead of via an embedded join, so
+  // the links still load even if the embed cannot be resolved.
+  const teamIds = [...new Set(((data || []) as any[]).map((link) => link.team_id).filter(Boolean))];
+  const { data: teamRows } = teamIds.length
+    ? await (supabase as any).from("teams").select("id, name, logo_url").in("id", teamIds)
+    : { data: [] };
+  const teamsById = new Map<string, any>((teamRows || []).map((team: any) => [team.id, team]));
 
   const clubTeamIds = [...new Set(((data || []) as any[]).map((link) => link.club_team_id).filter(Boolean))];
   const { data: clubTeams } = clubTeamIds.length
@@ -283,8 +326,8 @@ export const fetchCoachStaffTeamLinksForUser = async (userId: string) => {
     coach_user_id: link.coach_user_id,
     staff_role: link.staff_role,
     status: link.status,
-    team_name: link.teams?.name || "Team",
-    team_logo_url: link.teams?.logo_url || null,
+    team_name: teamsById.get(link.team_id)?.name || link.teams?.name || "Team",
+    team_logo_url: teamsById.get(link.team_id)?.logo_url || link.teams?.logo_url || null,
     club_team_name: link.club_team_id
       ? [
           clubTeamsById.get(link.club_team_id)?.age_group,
@@ -352,11 +395,21 @@ export const fetchCoachStaffForTeam = async (teamId: string) => {
     .in("status", ["approved", "accepted"]);
 
   if (error) {
-    const fallback = await (supabase as any)
+    // Degrade in stages: drop the embed first, then drop optional columns, so
+    // the Coaching Staff list survives a single unavailable column.
+    let fallback = await (supabase as any)
       .from("coach_staff_team_memberships")
       .select("id, team_id, club_team_id, coach_user_id, staff_role, status")
       .eq("team_id", teamId)
       .in("status", ["approved", "accepted"]);
+
+    if (fallback.error) {
+      fallback = await (supabase as any)
+        .from("coach_staff_team_memberships")
+        .select("id, team_id, coach_user_id, staff_role, status")
+        .eq("team_id", teamId)
+        .in("status", ["approved", "accepted"]);
+    }
     if (fallback.error) throw fallback.error;
 
     const userIds = [...new Set(((fallback.data || []) as any[]).map((row) => row.coach_user_id))];

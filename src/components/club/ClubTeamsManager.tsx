@@ -3,6 +3,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import CoachSelector from "@/components/club/CoachSelector";
+import { useConfirm } from "@/components/ConfirmDialog";
 
 export interface OfferedClubTeam {
   id?: string;
@@ -45,6 +46,7 @@ const buildCombinationKey = (team: OfferedClubTeam) =>
     .join("|");
 
 const ClubTeamsManager = ({ value, onChange, disabled, onRemoveSavedTeam }: ClubTeamsManagerProps) => {
+  const confirm = useConfirm();
   const teams = value.length ? value : [emptyTeam()];
   const duplicateKeys = teams.reduce<Record<string, number>>((acc, team) => {
     const key = buildCombinationKey(team);
@@ -66,7 +68,12 @@ const ClubTeamsManager = ({ value, onChange, disabled, onRemoveSavedTeam }: Club
   const removeTeam = async (index: number) => {
     const team = teams[index];
     if (team?.id) {
-      const confirmed = window.confirm("Delete this daughter team? It will be removed from your teams list and Explore, but linked history will stay safe.");
+      const confirmed = await confirm({
+        title: "Delete Team?",
+        description: "Are you sure you want to delete this daughter team? It will be removed from your teams list and Explore, but linked history will stay safe.",
+        confirmText: "Delete Team",
+        destructive: true,
+      });
       if (!confirmed) return;
       const removed = onRemoveSavedTeam ? await onRemoveSavedTeam(team) : true;
       if (!removed) return;

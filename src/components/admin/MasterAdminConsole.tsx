@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Crown, Search, ShieldCheck, Trash2, UserRoundCog } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,6 +26,7 @@ type AccountBundle = Record<string, any>;
 const editableRecords = ["profile", "player_profile", "staff_profile", "parent_profile", "team_profile"] as const;
 
 const MasterAdminConsole = () => {
+  const confirm = useConfirm();
   const { toast } = useToast();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<AccountResult[]>([]);
@@ -112,7 +114,14 @@ const MasterAdminConsole = () => {
   };
 
   const deleteClip = async (clipId: string) => {
-    if (!requireReason() || !window.confirm("Delete this Next Up clip? This cannot be undone.")) return;
+    if (!requireReason()) return;
+    const confirmed = await confirm({
+      title: "Delete Video?",
+      description: "Are you sure you want to permanently delete this Next Up clip? This cannot be undone.",
+      confirmText: "Delete Video",
+      destructive: true,
+    });
+    if (!confirmed) return;
     const { error } = await (supabase as any).rpc("admin_delete_clip", { _clip_id: clipId, _reason: reason });
     if (error) return toast({ title: "Clip deletion failed", description: error.message, variant: "destructive" });
     toast({ title: "Clip deleted" });
@@ -120,7 +129,14 @@ const MasterAdminConsole = () => {
   };
 
   const addStrike = async () => {
-    if (!selected || !requireReason() || !window.confirm("Add a strike to this account?")) return;
+    if (!selected || !requireReason()) return;
+    const confirmed = await confirm({
+      title: "Add Strike?",
+      description: "Are you sure you want to add a strike to this account?",
+      confirmText: "Add Strike",
+      destructive: true,
+    });
+    if (!confirmed) return;
     const { error } = await (supabase as any).rpc("admin_add_strike", { _target_user_id: selected.user_id, _reason: reason });
     if (error) return toast({ title: "Strike could not be added", description: error.message, variant: "destructive" });
     toast({ title: "Strike added" });

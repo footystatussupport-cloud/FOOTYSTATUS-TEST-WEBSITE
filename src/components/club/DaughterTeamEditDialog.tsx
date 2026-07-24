@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -68,6 +69,7 @@ const emptyForm = (): TeamFormState => ({
  * the school/club account or any sibling team.
  */
 const DaughterTeamEditDialog = ({ open, onOpenChange, team, isSchool, parentTeamId, onSaved, onDelete }: DaughterTeamEditDialogProps) => {
+  const confirm = useConfirm();
   const { toast } = useToast();
   const [form, setForm] = useState<TeamFormState>(emptyForm());
   const [saving, setSaving] = useState(false);
@@ -76,9 +78,12 @@ const DaughterTeamEditDialog = ({ open, onOpenChange, team, isSchool, parentTeam
 
   const handleDelete = async () => {
     if (!team?.id || !onDelete) return;
-    const confirmed = window.confirm(
-      `Delete ${daughterTeamDisplayLabel(team, isSchool)}? It will be removed from your teams list and Explore, but linked history will stay safe.`
-    );
+    const confirmed = await confirm({
+      title: "Delete Team?",
+      description: `Are you sure you want to delete ${daughterTeamDisplayLabel(team, isSchool)}? It will be removed from your teams list and Explore, but linked history will stay safe.`,
+      confirmText: "Delete Team",
+      destructive: true,
+    });
     if (!confirmed) return;
     setDeleting(true);
     const removed = await onDelete(team);

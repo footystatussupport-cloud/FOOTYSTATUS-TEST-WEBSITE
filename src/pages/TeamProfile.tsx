@@ -6,6 +6,7 @@ import { ArrowLeft, Briefcase, Shield, Mail, Phone, Users, Trophy, Search, KeyRo
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -19,6 +20,7 @@ import {
   CLUB_COACH_REQUEST_ROLE_OPTIONS,
   CoachStaffProfile,
   fetchCoachStaffForTeam,
+  logCoachLinkReadFailure,
   fetchCoachStaffProfiles,
   inviteCoachStaffToTeam,
   reviewCoachStaffJoinRequest,
@@ -127,6 +129,7 @@ interface TeamStaffMember {
 }
 
 const TeamProfile = () => {
+  const confirm = useConfirm();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user, profile } = useAuth();
@@ -328,7 +331,9 @@ const TeamProfile = () => {
         : Promise.resolve({ data: null }),
     ]);
     const [linkedStaffRows, staffRequestsInitialRes, staffInvitesInitialRes] = await Promise.all([
-      fetchCoachStaffForTeam(teamData.id).catch(() => []),
+      fetchCoachStaffForTeam(teamData.id).catch((error) =>
+        logCoachLinkReadFailure("team profile coaching staff", error)
+      ),
       (supabase as any)
         .from("coach_staff_join_requests")
         .select("id, team_id, club_team_id, league_id, age_group, coach_user_id, staff_role, status, requested_at, requested_assignments, general_club_role, request_kind, profiles!coach_staff_join_requests_coach_user_id_fkey(user_id, full_name, avatar_url, username, coaching_role_type)")
@@ -672,7 +677,13 @@ const TeamProfile = () => {
   const handleCancelInvite = async (invite: any, inviteType: "player" | "staff") => {
     if (!team) return;
 
-    const confirmed = window.confirm("Cancel this pending invitation?");
+    const confirmed = await confirm({
+      title: "Cancel Invitation?",
+      description: "Are you sure you want to cancel this pending invitation?",
+      confirmText: "Cancel Invitation",
+      cancelText: "Keep Invitation",
+      destructive: true,
+    });
     if (!confirmed) return;
 
     setActionLoading(true);
@@ -821,7 +832,12 @@ const TeamProfile = () => {
   const handleRemovePlayerFromTeam = async (player: TeamRosterPlayer) => {
     if (!team || !canManageTeam) return;
 
-    const confirmed = window.confirm("Are you sure you want to remove this player from this team?");
+    const confirmed = await confirm({
+      title: "Remove Player?",
+      description: `Are you sure you want to remove ${player.player_name || "this player"} from ${team.name || "this team"}?`,
+      confirmText: "Remove Player",
+      destructive: true,
+    });
     if (!confirmed) return;
 
     setActionLoading(true);
@@ -843,7 +859,12 @@ const TeamProfile = () => {
   const handleRemoveCoachStaffFromTeam = async (staff: any) => {
     if (!team || !canManageTeam) return;
 
-    const confirmed = window.confirm("Remove this coach/staff member from this team?");
+    const confirmed = await confirm({
+      title: "Remove Coach?",
+      description: `Are you sure you want to remove ${staff?.profile?.full_name || staff?.full_name || "this coach"} from this coaching staff?`,
+      confirmText: "Remove Coach",
+      destructive: true,
+    });
     if (!confirmed) return;
 
     setActionLoading(true);

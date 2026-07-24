@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Pencil, Trash2 } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { useToast } from "@/hooks/use-toast";
 import { ensureFootyStatusAdminSession, isFootyStatusSuperAdminEmail } from "@/lib/superAdmin";
 import { supabase } from "@/integrations/supabase/client";
@@ -31,10 +32,10 @@ type Props = {
     appearances?: number | null;
     starts?: number | null;
     substitute_ins?: number | null;
-    minutes_played?: number | null;
     goals?: number | null;
     assists?: number | null;
     clean_sheets?: number | null;
+    saves?: number | null;
     chances_created?: number | null;
     yellow_cards?: number | null;
     red_cards?: number | null;
@@ -50,10 +51,10 @@ type PlayerStatsState = {
   appearances: number;
   starts: number;
   substitute_ins: number;
-  minutes_played: number;
   goals: number;
   assists: number;
   clean_sheets: number;
+  saves: number;
   chances_created: number;
   yellow_cards: number;
   red_cards: number;
@@ -63,10 +64,10 @@ const DEFAULT_PLAYER_STATS: PlayerStatsState = {
   appearances: 0,
   starts: 0,
   substitute_ins: 0,
-  minutes_played: 0,
   goals: 0,
   assists: 0,
   clean_sheets: 0,
+  saves: 0,
   chances_created: 0,
   yellow_cards: 0,
   red_cards: 0,
@@ -150,6 +151,7 @@ const Field = ({ label, value, onChange, type = "text", placeholder }: { label: 
 );
 
 const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, statsContext, onChanged }: Props) => {
+  const confirm = useConfirm();
   const { user } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -296,10 +298,10 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
         appearances: toNumber(firstStats.appearances),
         starts: toNumber(firstStats.starts),
         substitute_ins: toNumber(firstStats.substitute_ins),
-        minutes_played: toNumber(firstStats.minutes_played),
         goals: toNumber(firstStats.goals),
         assists: toNumber(firstStats.assists),
         clean_sheets: toNumber(firstStats.clean_sheets),
+        saves: toNumber((firstStats as any).saves),
         chances_created: toNumber(firstStats.chances_created),
         yellow_cards: toNumber(firstStats.yellow_cards),
         red_cards: toNumber(firstStats.red_cards),
@@ -388,10 +390,13 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
     if (!targetUserId) return;
     if (!requireReason()) return;
 
-    const confirmed = window.confirm(
-      `Delete ${targetName || "this account"} permanently?\n\n` +
-      "This will remove the Auth user, profile, videos, team links, requests, notifications, search/explore presence, and connected app data. This cannot be undone."
-    );
+    const confirmed = await confirm({
+      title: "Delete Account?",
+      description: `Are you sure you want to permanently delete ${targetName || "this account"}? This removes the Auth user, profile, videos, team links, requests, notifications, search/explore presence, and connected app data.`,
+      confirmText: "Delete Account",
+      destructive: true,
+      warning: "This action cannot be undone.",
+    });
     if (!confirmed) return;
 
     const typed = window.prompt("Type DELETE to permanently delete this account.");
@@ -914,10 +919,9 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
                     ["appearances", "Appearances"],
                     ["starts", "Starts"],
                     ["substitute_ins", "Substitute Ins"],
-                    // Minutes Played is auto-calculated from the match timeline
-                    // (lineup, subs, red cards, injuries, duration) and is never
-                    // a manual input. See the auto-minutes migration.
+                    // Minutes is no longer part of Current Stats.
                     ["clean_sheets", "Clean Sheets"],
+                    ["saves", "Saves"],
                     ["chances_created", "Chances Created"],
                     ["yellow_cards", "Yellow Cards"],
                     ["red_cards", "Red Cards"],
@@ -937,7 +941,7 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
                 <div className="space-y-4">
                   <div className="rounded-xl border border-border p-3"><p className="font-medium">Footy Status Pro</p><p className="text-sm text-muted-foreground">Current plan: {normalizeAdminPlan(bundle.profile?.account_tier) === "free" ? "Free" : normalizeAdminPlan(bundle.profile?.account_tier) === "pro_annual" ? "Yearly" : "One-Time"}</p><div className="mt-2 flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => saveProStatus("free")}>Free</Button><Button size="sm" variant="outline" onClick={() => saveProStatus("pro_annual")}>Yearly</Button><Button size="sm" onClick={() => saveProStatus("pro_lifetime")}>One-Time</Button></div></div>
                   <div className="rounded-xl border border-border p-3"><div className="flex items-center justify-between gap-2"><div><p className="font-medium">Strike History</p><p className="text-sm text-muted-foreground">{(bundle.strikes || []).filter((strike: any) => !strike.removed_at).length} active strikes</p></div><Button size="sm" variant="destructive" onClick={() => rpc("admin_add_strike", { _target_user_id: targetUserId, _reason: reason }, "Strike added", { requireNote: true })}>Add Strike</Button></div>{(bundle.strikes || []).map((strike: any) => <div key={strike.id} className="mt-2 flex items-center justify-between gap-2 rounded-lg bg-muted p-2 text-sm"><span>{strike.reason} <Badge variant={strike.removed_at ? "outline" : "destructive"}>{strike.removed_at ? "Removed" : "Active"}</Badge></span>{!strike.removed_at ? <Button size="sm" variant="ghost" onClick={() => rpc("remove_account_strike", { _strike_id: strike.id, _reason: reason }, "Strike removed", { requireNote: true })}>Remove Strike</Button> : null}</div>)}</div>
-                  <div className="grid gap-3 sm:grid-cols-2">{(bundle.clips || []).length ? bundle.clips.map((clip: any) => <div key={clip.id} className="overflow-hidden rounded-xl border border-border"><video src={clip.video_url} controls className="aspect-video w-full bg-black object-contain" /><div className="space-y-2 p-3"><p className="truncate text-sm font-medium">{clip.caption || clip.title || "Untitled Video"}</p><Button className="w-full" size="sm" variant="outline" onClick={() => { if (window.confirm("Delete this video permanently?")) rpc("admin_delete_clip", { _clip_id: clip.id, _reason: reason }, "Video deleted", { requireNote: true }); }}><Trash2 className="mr-2 h-4 w-4" />Delete Video</Button><Button className="w-full" size="sm" variant="destructive" onClick={() => { if (window.confirm("Delete this video and add one strike to the player?")) rpc("admin_delete_clip_and_add_strike", { _clip_id: clip.id, _reason: reason }, "Video deleted and strike added", { requireNote: true }); }}><Trash2 className="mr-2 h-4 w-4" />Delete + Strike</Button></div></div>) : <p className="text-sm text-muted-foreground">No Next Up videos.</p>}</div>
+                  <div className="grid gap-3 sm:grid-cols-2">{(bundle.clips || []).length ? bundle.clips.map((clip: any) => <div key={clip.id} className="overflow-hidden rounded-xl border border-border"><video src={clip.video_url} controls className="aspect-video w-full bg-black object-contain" /><div className="space-y-2 p-3"><p className="truncate text-sm font-medium">{clip.caption || clip.title || "Untitled Video"}</p><Button className="w-full" size="sm" variant="outline" onClick={async () => { if (await confirm({ title: "Delete Video?", description: "Are you sure you want to permanently delete this video?", confirmText: "Delete Video", destructive: true })) rpc("admin_delete_clip", { _clip_id: clip.id, _reason: reason }, "Video deleted", { requireNote: true }); }}><Trash2 className="mr-2 h-4 w-4" />Delete Video</Button><Button className="w-full" size="sm" variant="destructive" onClick={async () => { if (await confirm({ title: "Delete Video & Add Strike?", description: "Are you sure you want to delete this video and add one strike to the player?", confirmText: "Delete + Strike", destructive: true })) rpc("admin_delete_clip_and_add_strike", { _clip_id: clip.id, _reason: reason }, "Video deleted and strike added", { requireNote: true }); }}><Trash2 className="mr-2 h-4 w-4" />Delete + Strike</Button></div></div>) : <p className="text-sm text-muted-foreground">No Next Up videos.</p>}</div>
                 </div>
               ) : null}
 

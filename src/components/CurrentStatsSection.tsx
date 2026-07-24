@@ -13,8 +13,8 @@ export interface CurrentStats {
   appearances?: number | null;
   substitute_ins?: number | null;
   starts?: number | null;
-  minutes_played?: number | null;
   clean_sheets?: number | null;
+  saves?: number | null;
   chances_created?: number | null;
   yellow_cards?: number | null;
   red_cards?: number | null;
@@ -97,7 +97,6 @@ const CurrentStatsSection = ({ stats, headingLevel = "h3", action }: CurrentStat
               <StatLine label="Appearances" value={statValue(stats?.appearances)} />
               <StatLine label="Substitute Ins" value={statValue(stats?.substitute_ins)} />
               <StatLine label="Starts" value={statValue(stats?.starts)} />
-              <StatLine label="Minutes Played" value={statValue(stats?.minutes_played)} />
             </div>
           </div>
         </div>
@@ -110,6 +109,7 @@ const CurrentStatsSection = ({ stats, headingLevel = "h3", action }: CurrentStat
             </div>
             <div className="space-y-2">
               <StatLine label="Clean Sheets" value={statValue(stats?.clean_sheets)} />
+              <StatLine label="Saves" value={statValue(stats?.saves)} />
             </div>
           </div>
 

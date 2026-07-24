@@ -5,7 +5,7 @@ import { ArrowLeft, Briefcase, Link as LinkIcon, Mail, MapPin, Phone, Shield, St
 import Header from "@/components/Header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { supabase } from "@/integrations/supabase/client";
-import { CoachStaffProfile, CoachStaffTeamLink, fetchCoachStaffTeamLinksForUser, formatRoleDisplayLabel, groupCoachStaffTeamLinksByMotherTeam } from "@/lib/coachStaffTeams";
+import { CoachStaffProfile, CoachStaffTeamLink, fetchCoachStaffTeamLinksForUser, formatRoleDisplayLabel, groupCoachStaffTeamLinksByMotherTeam, logCoachLinkReadFailure } from "@/lib/coachStaffTeams";
 import InlineProfileAdminControls from "@/components/admin/InlineProfileAdminControls";
 import ProfileHeader from "@/components/ProfileHeader";
 import { useAuth } from "@/hooks/useAuth";
@@ -71,7 +71,9 @@ const CoachStaffProfilePage = () => {
           .select("user_id, full_name, avatar_url, username, account_category, account_role, coaching_role_type, teams_currently_coaching, past_coaching_experience, coaching_licenses, coaching_accolades, coaching_location, scout_role_title, scout_organization, scouting_licenses, scouting_experience, scouting_regions, scouting_age_groups, scouting_positions, scouting_accolades, bio")
           .eq("user_id", userId)
           .maybeSingle(),
-        fetchCoachStaffTeamLinksForUser(userId).catch(() => []),
+        fetchCoachStaffTeamLinksForUser(userId).catch((error) =>
+          logCoachLinkReadFailure("coach profile linked teams", error)
+        ),
         // Contact information lives only in the Contact Information section and
         // is enforced server-side by the account's contact privacy setting.
         (supabase as any).rpc("get_profile_contact_info", { _target_user_id: userId }),

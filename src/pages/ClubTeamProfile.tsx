@@ -12,6 +12,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
 import ProBadge from "@/components/ProBadge";
@@ -29,6 +30,7 @@ import {
 } from "@/lib/coachStaffTeams";
 
 const ClubTeamProfile = () => {
+  const confirm = useConfirm();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user, profile } = useAuth();
@@ -391,7 +393,12 @@ const ClubTeamProfile = () => {
   const handleRemovePlayer = async (player: TeamRosterPlayer) => {
     if (!canManageClubTeam) return;
 
-    const confirmed = window.confirm("Are you sure you want to remove this player from this daughter team?");
+    const confirmed = await confirm({
+      title: "Remove Player?",
+      description: `Are you sure you want to remove ${player.player_name || "this player"} from this daughter team?`,
+      confirmText: "Remove Player",
+      destructive: true,
+    });
     if (!confirmed) return;
 
     setActionLoading(true);
@@ -540,7 +547,12 @@ const ClubTeamProfile = () => {
   const handleRemoveCoach = async (membershipId: string) => {
     if (!canManageClubTeam) return;
 
-    const confirmed = window.confirm("Remove this coach from this daughter team?");
+    const confirmed = await confirm({
+      title: "Remove Coach?",
+      description: "Are you sure you want to remove this coach from this daughter team?",
+      confirmText: "Remove Coach",
+      destructive: true,
+    });
     if (!confirmed) return;
 
     setCoachActionLoading(membershipId);

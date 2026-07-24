@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useRegisterRefresh } from "@/hooks/usePullToRefresh";
 import { ArrowLeft, Check, Clock3, Link2, MapPin, MessageSquare, Trash2, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -74,6 +75,7 @@ const initialEventForm = {
 };
 
 const MatchDetails = () => {
+  const confirm = useConfirm();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user, profile } = useAuth();
@@ -378,10 +380,20 @@ const MatchDetails = () => {
 
   const handleRemoveRefereeAssignment = async (claim: RefereeMatchClaim, mode: "self" | "admin") => {
     if (!id) return;
-    const confirmed = window.confirm(
+    const confirmed = await confirm(
       mode === "self"
-        ? "Are you sure you want to leave this match? You will no longer be listed as a referee for this fixture."
-        : "Are you sure you want to remove this referee from this match? They will no longer be linked to this fixture."
+        ? {
+            title: "Leave Match?",
+            description: "Are you sure you want to leave this match? You will no longer be listed as a referee for this fixture.",
+            confirmText: "Leave Match",
+            destructive: true,
+          }
+        : {
+            title: "Remove Referee?",
+            description: "Are you sure you want to remove this referee from this match? They will no longer be linked to this fixture.",
+            confirmText: "Remove Referee",
+            destructive: true,
+          }
     );
     if (!confirmed) return;
 
@@ -513,9 +525,13 @@ const MatchDetails = () => {
 
   const handleDeleteEvent = async (eventId: string) => {
     if (!canManageMatch) return;
-    if (!window.confirm("Delete this match event? This cannot be undone and will update the score and player stats.")) {
-      return;
-    }
+    const confirmed = await confirm({
+      title: "Delete Match Event?",
+      description: "This cannot be undone and will update the score and player stats.",
+      confirmText: "Delete Event",
+      destructive: true,
+    });
+    if (!confirmed) return;
     if (editingEvent?.id === eventId) setEditingEvent(null);
     const { error } = await deleteMatchEvent(eventId);
     if (error) {
