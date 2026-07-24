@@ -565,27 +565,15 @@ export const assignCoachStaffToClubTeam = async (
     { onConflict: "team_id,club_team_id,coach_user_id" }
   );
 
-export const acceptCoachStaffInvite = async (invite: { id: string; team_id: string; coach_user_id: string; staff_role?: string | null }) => {
-  const membership = await (supabase as any).from("coach_staff_team_memberships").upsert(
-    {
-      team_id: invite.team_id,
-      club_team_id: (invite as any).club_team_id || null,
-      league_id: (invite as any).league_id || null,
-      age_group: (invite as any).age_group || null,
-      coach_user_id: invite.coach_user_id,
-      staff_role: invite.staff_role || null,
-      status: "accepted",
-      approved_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "team_id,club_team_id,coach_user_id" }
-  );
-  if (membership.error) return membership;
-  return (supabase as any)
-    .from("coach_staff_team_invites")
-    .update({ status: "accepted", reviewed_at: new Date().toISOString() })
-    .eq("id", invite.id);
-};
+// Accept/decline run through one authoritative server RPC so the canonical
+// coach_staff_team_memberships relationship, the invite status, and the
+// team-side notification all update atomically from the invite's real data
+// (team, daughter team, league, role) -- never client-side state.
+export const acceptCoachStaffInvite = async (invite: { id: string }) =>
+  (supabase as any).rpc("respond_coach_staff_invite", { _invite_id: invite.id, _accept: true });
+
+export const declineCoachStaffInvite = async (invite: { id: string }) =>
+  (supabase as any).rpc("respond_coach_staff_invite", { _invite_id: invite.id, _accept: false });
 
 export const reviewCoachStaffJoinRequest = async (request: { id: string }, approve: boolean) =>
   (supabase as any).rpc("review_coach_staff_join_request", {

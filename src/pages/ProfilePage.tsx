@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, ChangeEvent, useMemo } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams, useLocation } from "react-router-dom";
 import { useRegisterRefresh } from "@/hooks/usePullToRefresh";
 import { ArrowLeft, Camera, User, Calendar, Trophy, Edit, Save, X, Upload, Video, Crown, Lock, Link as LinkIcon, Phone, Mail, Shield, Star, Building2, Briefcase, MapPin, Users, Heart, Eye, Check, BadgeCheck, Info } from "lucide-react";
 import Header from "@/components/Header";
@@ -40,6 +40,7 @@ import {
   CoachClubTeamAssignment,
   CoachStaffTeamLink,
   acceptCoachStaffInvite,
+  declineCoachStaffInvite,
   fetchCoachStaffForTeam,
   logCoachLinkReadFailure,
   fetchCoachStaffProfiles,
@@ -808,7 +809,21 @@ const ProfilePage = () => {
   const clipInputRef = useRef<HTMLInputElement>(null);
   const clipPreviewVideoRef = useRef<HTMLVideoElement>(null);
   const navigate = useNavigate();
+  const location = useLocation();
   const { toast } = useToast();
+
+  // Back returns to wherever the profile was opened from (Next Up, Explore,
+  // Notifications, Other, a team/league page, ...) via real navigation history,
+  // never a hardcoded tab. location.key === "default" means this profile was the
+  // first in-app entry (deep link / direct load) with no history to pop, so we
+  // fall back to Home rather than exiting the app.
+  const handleProfileBack = () => {
+    if (location.key && location.key !== "default") {
+      navigate(-1);
+    } else {
+      navigate("/", { replace: true });
+    }
+  };
   const stopTileEvent = (event: { stopPropagation: () => void }) => {
     event.stopPropagation();
   };
@@ -4318,18 +4333,35 @@ const ProfilePage = () => {
   };
 
   const handleCoachStaffInviteReview = async (invite: any, accept: boolean) => {
+    if (!accept) {
+      const confirmed = await confirm({
+        title: "Decline Invite?",
+        description: "Are you sure you want to decline this team invitation?",
+        confirmText: "Decline Invite",
+        destructive: true,
+      });
+      if (!confirmed) return;
+    }
+
     setSaving(true);
     const result = accept
       ? await acceptCoachStaffInvite(invite)
-      : await (supabase as any)
-          .from("coach_staff_team_invites")
-          .update({ status: "declined", reviewed_at: new Date().toISOString() })
-          .eq("id", invite.id);
+      : await declineCoachStaffInvite(invite);
 
     if (result.error) {
-      toast({ title: "Update failed", description: result.error.message, variant: "destructive" });
+      console.error("Footy Status coach/staff invite response failed", { inviteId: invite?.id, accept, error: result.error });
+      toast({
+        title: "Update failed",
+        description: accept
+          ? "We couldn't accept this team invitation. Please try again."
+          : "We couldn't decline this team invitation. Please try again.",
+        variant: "destructive",
+      });
     } else {
-      toast({ title: accept ? "Invite accepted" : "Invite declined" });
+      toast({
+        title: accept ? "Team Linked" : "Invite declined",
+        description: accept ? "You are now linked to this team." : undefined,
+      });
       await fetchCoachStaffConnectionData();
     }
     setSaving(false);
@@ -5055,10 +5087,10 @@ const ProfilePage = () => {
         <Header />
         
         <div className="px-4 py-6 w-full min-w-0">
-          <Link to="/other" className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground mb-4">
+          <button type="button" onClick={handleProfileBack} className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground mb-4">
             <ArrowLeft className="h-4 w-4 mr-2" />
             Back
-          </Link>
+          </button>
         
         <div className="flex justify-between items-start mb-6">
           <h1 className="text-2xl font-bold">My Profile</h1>
