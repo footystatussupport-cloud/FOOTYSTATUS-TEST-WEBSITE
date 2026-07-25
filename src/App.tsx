@@ -18,6 +18,9 @@ import NotFound from "./pages/NotFound";
 import SettingsPage from "./pages/SettingsPage";
 import NotificationsPage from "./pages/NotificationsPage";
 import PrivacyPage from "./pages/PrivacyPage";
+import PrivacyPolicyPage from "./pages/PrivacyPolicyPage";
+import TermsOfServicePage from "./pages/TermsOfServicePage";
+import CommunityGuidelinesPage from "./pages/CommunityGuidelinesPage";
 import SupportPage from "./pages/SupportPage";
 import AboutPage from "./pages/AboutPage";
 import ProfilePage from "./pages/ProfilePage";
@@ -61,6 +64,10 @@ const App = () => (
               <Route path="/other" element={<OtherPage />} />
               <Route path="/auth" element={<AuthPage />} />
               <Route path="/clip/:clipId" element={<ClipSharePage />} />
+              {/* Public so the policy is reachable by every account type and pre-login (App Store requirement). */}
+              <Route path="/privacy-policy" element={<PrivacyPolicyPage />} />
+              <Route path="/terms-of-service" element={<TermsOfServicePage />} />
+              <Route path="/community-guidelines" element={<CommunityGuidelinesPage />} />
               <Route path="/reset-password" element={<ResetPasswordPage />} />
               <Route path="/player/:id" element={<ProtectedRoute><PlayerProfile /></ProtectedRoute>} />
               <Route path="/coach/:userId" element={<ProtectedRoute><CoachStaffProfilePage /></ProtectedRoute>} />

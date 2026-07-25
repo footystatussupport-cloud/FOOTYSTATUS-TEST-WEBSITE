@@ -19,7 +19,6 @@ export interface UserSettings {
   profilePublic: boolean;
   showOnlineStatus: boolean;
   showLastSeen: boolean;
-  allowTagging: boolean;
   showInSearch: boolean;
   // Content & Playback
   autoplayVideos: boolean;
@@ -46,7 +45,6 @@ export interface UserSettings {
   profileVisibility: string;
   showContactInfo: string;
   showActivityStatus: boolean;
-  allowDirectMessages: string;
   allowProfileViews: boolean;
   showProfileViewers: boolean;
   // Notification preferences (granular)
@@ -70,7 +68,6 @@ const defaultSettings: UserSettings = {
   profilePublic: true,
   showOnlineStatus: true,
   showLastSeen: true,
-  allowTagging: true,
   showInSearch: true,
   autoplayVideos: true,
   hdVideoWifi: true,
@@ -91,7 +88,6 @@ const defaultSettings: UserSettings = {
   profileVisibility: "public",
   showContactInfo: "staff_only",
   showActivityStatus: true,
-  allowDirectMessages: "everyone",
   allowProfileViews: true,
   showProfileViewers: true,
   inAppNotifications: true,

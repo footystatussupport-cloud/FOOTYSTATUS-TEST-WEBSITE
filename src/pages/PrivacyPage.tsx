@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { ArrowLeft, Shield, Eye, Users, MessageSquare, AtSign, UserX } from "lucide-react";
+import { ArrowLeft, Shield, Eye, Users, UserX } from "lucide-react";
 import Header from "@/components/Header";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -74,55 +74,6 @@ const PrivacyPage = () => {
                   <SelectItem value="everyone">Everyone</SelectItem>
                   <SelectItem value="staff_only">Teams / Coaches / Staff Only</SelectItem>
                   <SelectItem value="private">Only Me</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        </section>
-
-        {/* Interactions */}
-        <section className="mb-8">
-          <h2 className="text-lg font-semibold text-navy mb-2">Interactions</h2>
-          <div className="bg-card border border-border rounded-xl px-4">
-            <div className="flex items-center justify-between py-4">
-              <div className="flex items-center gap-3 flex-1">
-                <AtSign className="h-5 w-5 text-muted-foreground" />
-                <div className="flex-1">
-                  <Label htmlFor="tagging" className="text-base font-medium cursor-pointer">
-                    Allow Tagging
-                  </Label>
-                  <p className="text-sm text-muted-foreground">Let others tag you in posts and clips</p>
-                </div>
-              </div>
-              <Switch
-                id="tagging"
-                checked={settings.allowTagging}
-                onCheckedChange={(checked) => updateSetting('allowTagging', checked)}
-                disabled={loading}
-              />
-            </div>
-            <Separator />
-            <div className="flex items-center justify-between py-4">
-              <div className="flex items-center gap-3 flex-1">
-                <MessageSquare className="h-5 w-5 text-muted-foreground" />
-                <div className="flex-1">
-                  <Label className="text-base font-medium">Who can message me</Label>
-                  <p className="text-sm text-muted-foreground">Control who can send you messages</p>
-                </div>
-              </div>
-              <Select
-                value={settings.allowDirectMessages}
-                onValueChange={(value) => updateSetting('allowDirectMessages', value)}
-                disabled={loading}
-              >
-                <SelectTrigger className="w-32">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="everyone">Everyone</SelectItem>
-                  <SelectItem value="staff">Staff Only</SelectItem>
-                  <SelectItem value="connections">Connections</SelectItem>
-                  <SelectItem value="nobody">Nobody</SelectItem>
                 </SelectContent>
               </Select>
             </div>

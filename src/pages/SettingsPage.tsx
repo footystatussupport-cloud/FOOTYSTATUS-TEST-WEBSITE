@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ArrowLeft, Moon, Globe, Smartphone, Volume2, Download, Trash2, ChevronRight } from "lucide-react";
+import { ArrowLeft, Moon, Globe, Smartphone, Volume2, Download, Trash2, ChevronRight, Shield, FileText } from "lucide-react";
 import Header from "@/components/Header";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -159,10 +159,6 @@ const SettingsPage = () => {
     { id: 'showAnimations', label: 'Show Animations', description: 'Enable smooth animations throughout the app', type: 'toggle' },
   ];
 
-  const privacySettings: SettingItem[] = [
-    { id: 'allowTagging', label: 'Allow Tagging', description: 'Let others tag you in posts and clips', type: 'toggle' },
-  ];
-
   const contentSettings: SettingItem[] = [
     { id: 'autoplayVideos', label: 'Autoplay Videos', description: 'Automatically play clips as you scroll', type: 'toggle', icon: <Smartphone className="h-5 w-5" /> },
     { id: 'hdVideoWifi', label: 'HD Video on WiFi', description: 'Play high quality video when on WiFi', type: 'toggle' },
@@ -293,7 +289,6 @@ const SettingsPage = () => {
 
         {renderSection('Appearance', appearanceSettings)}
         <NotificationSettingsSection />
-        {renderSection('Privacy', privacySettings)}
         {renderSection('Content & Playback', contentSettings)}
         {canUseNextUpGenderPreference ? (
           <section className="mb-8">
@@ -399,6 +394,54 @@ const SettingsPage = () => {
                 </SelectContent>
               </Select>
             </div>
+          </div>
+        </section>
+
+        {/* Legal */}
+        <section className="mb-8">
+          <h2 className="text-lg font-semibold text-navy mb-2">Legal</h2>
+          <div className="bg-card border border-border rounded-xl px-4">
+            <Link
+              to="/privacy-policy"
+              className="flex items-center justify-between py-4 hover:bg-muted/50 -mx-4 px-4 rounded-lg transition-colors"
+            >
+              <div className="flex items-center gap-3 flex-1">
+                <Shield className="h-5 w-5 text-muted-foreground" />
+                <div className="flex-1">
+                  <p className="text-base font-medium">Privacy Policy</p>
+                  <p className="text-sm text-muted-foreground">How Footy Status collects, uses, and protects your information</p>
+                </div>
+              </div>
+              <ChevronRight className="h-5 w-5 text-muted-foreground" />
+            </Link>
+            <Separator />
+            <Link
+              to="/terms-of-service"
+              className="flex items-center justify-between py-4 hover:bg-muted/50 -mx-4 px-4 rounded-lg transition-colors"
+            >
+              <div className="flex items-center gap-3 flex-1">
+                <FileText className="h-5 w-5 text-muted-foreground" />
+                <div className="flex-1">
+                  <p className="text-base font-medium">Terms of Service</p>
+                  <p className="text-sm text-muted-foreground">The rules and agreement for using Footy Status</p>
+                </div>
+              </div>
+              <ChevronRight className="h-5 w-5 text-muted-foreground" />
+            </Link>
+            <Separator />
+            <Link
+              to="/community-guidelines"
+              className="flex items-center justify-between py-4 hover:bg-muted/50 -mx-4 px-4 rounded-lg transition-colors"
+            >
+              <div className="flex items-center gap-3 flex-1">
+                <Shield className="h-5 w-5 text-muted-foreground" />
+                <div className="flex-1">
+                  <p className="text-base font-medium">Community Guidelines</p>
+                  <p className="text-sm text-muted-foreground">The safety and conduct rules for the Footy Status community</p>
+                </div>
+              </div>
+              <ChevronRight className="h-5 w-5 text-muted-foreground" />
+            </Link>
           </div>
         </section>
 

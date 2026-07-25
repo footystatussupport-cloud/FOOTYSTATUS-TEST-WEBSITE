@@ -19,21 +19,26 @@ declare
   v_admin uuid;
   v_team_owner uuid := gen_random_uuid();
   v_coach uuid := gen_random_uuid();
+  v_staff uuid := gen_random_uuid();
   v_other_coach uuid := gen_random_uuid();
   v_player uuid := gen_random_uuid();
   v_other_user uuid := gen_random_uuid();
   v_parent uuid := gen_random_uuid();
+  v_child uuid := gen_random_uuid();
   v_scout uuid := gen_random_uuid();
   v_referee uuid := gen_random_uuid();
 
   v_team_profile uuid;
   v_player_profile uuid;
+  v_child_player_profile uuid;
+  v_parent_profile uuid;
   v_team_one uuid;
   v_team_two uuid;
   v_club uuid;
   v_daughter_one uuid;
   v_daughter_two uuid;
   v_clip uuid;
+  v_keep_clip uuid;
   v_result jsonb;
   v_count integer;
   v_fk_delete_type "char";
@@ -61,10 +66,12 @@ begin
   values
     (v_team_owner, 'delete-team-' || v_team_owner || '@example.test', now()),
     (v_coach, 'delete-coach-' || v_coach || '@example.test', now()),
+    (v_staff, 'delete-staff-' || v_staff || '@example.test', now()),
     (v_other_coach, 'keep-coach-' || v_other_coach || '@example.test', now()),
     (v_player, 'delete-player-' || v_player || '@example.test', now()),
     (v_other_user, 'keep-user-' || v_other_user || '@example.test', now()),
     (v_parent, 'delete-parent-' || v_parent || '@example.test', now()),
+    (v_child, 'keep-child-' || v_child || '@example.test', now()),
     (v_scout, 'delete-scout-' || v_scout || '@example.test', now()),
     (v_referee, 'delete-referee-' || v_referee || '@example.test', now());
 
@@ -72,6 +79,7 @@ begin
   set account_role = case
         when user_id = v_team_owner then 'team_club'
         when user_id in (v_coach, v_other_coach) then 'coach'
+        when user_id = v_staff then 'team_staff'
         when user_id = v_parent then 'parent'
         when user_id = v_scout then 'scout'
         when user_id = v_referee then 'referee'
@@ -80,6 +88,7 @@ begin
       account_category = case
         when user_id = v_team_owner then 'team_club'
         when user_id in (v_coach, v_other_coach) then 'coach'
+        when user_id = v_staff then 'team_staff'
         when user_id = v_parent then 'parent'
         when user_id = v_scout then 'scout'
         when user_id = v_referee then 'referee'
@@ -88,8 +97,8 @@ begin
       is_active = true,
       deleted_at = null
   where user_id in (
-    v_team_owner, v_coach, v_other_coach, v_player, v_other_user,
-    v_parent, v_scout, v_referee
+    v_team_owner, v_coach, v_staff, v_other_coach, v_player, v_other_user,
+    v_parent, v_child, v_scout, v_referee
   );
 
   insert into public.teams (name, owner_user_id, approval_status)
@@ -178,6 +187,7 @@ begin
     (v_team_one, null, v_coach, 'Head Coach', 'approved'),
     (v_team_one, v_daughter_one, v_coach, 'Head Coach', 'approved'),
     (v_team_one, v_daughter_two, v_coach, 'Head Coach', 'approved'),
+    (v_team_one, v_daughter_one, v_staff, 'Team Staff', 'approved'),
     (v_team_one, v_daughter_one, v_other_coach, 'Assistant Coach', 'approved');
 
   -- ==========================================================================
@@ -244,6 +254,28 @@ begin
   end if;
 
   -- ==========================================================================
+  -- Test 1b: Team Staff linked to a daughter team.
+  -- ==========================================================================
+  insert into public.staff_profiles (user_id, full_name, role)
+  values (v_staff, 'Delete Test Team Staff', 'team_staff');
+
+  perform public.admin_delete_account(v_staff, 'Regression test Team Staff deletion');
+
+  if exists (select 1 from auth.users where id = v_staff)
+     or exists (select 1 from public.profiles where user_id = v_staff)
+     or exists (select 1 from public.staff_profiles where user_id = v_staff)
+     or exists (
+       select 1 from public.coach_staff_team_memberships
+       where coach_user_id = v_staff
+     ) then
+    raise exception 'TEST FAILED (Team Staff): account/profile/membership remains';
+  end if;
+
+  if not exists (select 1 from public.teams where id = v_team_one) then
+    raise exception 'TEST FAILED (Team Staff): linked team was deleted';
+  end if;
+
+  -- ==========================================================================
   -- Tests 2 and 3: player with clips and memberships on multiple teams.
   -- ==========================================================================
   insert into public.player_profiles (user_id, full_name, player_gender)
@@ -280,11 +312,50 @@ begin
   )
   returning id into v_clip;
 
+  insert into public.clips (
+    user_id,
+    title,
+    video_url,
+    visibility,
+    review_status,
+    reviewed_at
+  )
+  values (
+    v_other_user,
+    'Keep test clip',
+    'https://cdn.example.test/keep-test.mp4',
+    'public',
+    'approved',
+    now()
+  )
+  returning id into v_keep_clip;
+
   insert into public.clip_likes (clip_id, user_id)
-  values (v_clip, v_other_user);
+  values
+    (v_clip, v_other_user),
+    (v_keep_clip, v_player);
 
   insert into public.clip_comments (clip_id, user_id, user_name, content)
-  values (v_clip, v_other_user, 'Keep User', 'Delete with owned clip');
+  values
+    (v_clip, v_other_user, 'Keep User', 'Delete with owned clip'),
+    (v_keep_clip, v_player, 'Delete Player', 'Delete outgoing comment');
+
+  insert into public.notifications (
+    user_id,
+    actor_user_id,
+    type,
+    title,
+    body,
+    metadata
+  )
+  values (
+    v_player,
+    v_other_user,
+    'account_deletion_regression',
+    'Delete test notification',
+    'This notification must be removed with the player.',
+    '{}'::jsonb
+  );
 
   perform public.admin_delete_account(v_player, 'Regression test player deletion');
 
@@ -294,20 +365,48 @@ begin
      or exists (select 1 from public.player_team_memberships where player_user_id = v_player)
      or exists (select 1 from public.clips where id = v_clip)
      or exists (select 1 from public.clip_likes where clip_id = v_clip)
-     or exists (select 1 from public.clip_comments where clip_id = v_clip) then
+     or exists (select 1 from public.clip_comments where clip_id = v_clip)
+     or exists (select 1 from public.clip_likes where user_id = v_player)
+     or exists (select 1 from public.clip_comments where user_id = v_player)
+     or exists (select 1 from public.notifications where user_id = v_player) then
     raise exception 'TEST FAILED (player): owned profile/content/relationships remain';
   end if;
 
   if not exists (select 1 from public.teams where id in (v_team_one, v_team_two))
-     or not exists (select 1 from auth.users where id = v_other_user) then
-    raise exception 'TEST FAILED (player): teams or unrelated account were deleted';
+     or not exists (select 1 from auth.users where id = v_other_user)
+     or not exists (select 1 from public.clips where id = v_keep_clip) then
+    raise exception 'TEST FAILED (player): teams, unrelated account, or unrelated clip were deleted';
   end if;
 
   -- ==========================================================================
   -- Test 5: parent, scout, and referee profile/Auth removal.
   -- ==========================================================================
   insert into public.parent_profiles (user_id, full_name)
-  values (v_parent, 'Delete Test Parent');
+  values (v_parent, 'Delete Test Parent')
+  returning id into v_parent_profile;
+
+  insert into public.player_profiles (user_id, full_name, player_gender)
+  values (v_child, 'Keep Test Child', 'girl')
+  returning id into v_child_player_profile;
+
+  insert into public.parent_player_links (
+    parent_profile_id,
+    player_profile_id,
+    status,
+    requested_by_user_id,
+    approved_by_user_id,
+    approved_at,
+    relationship_to_player
+  )
+  values (
+    v_parent_profile,
+    v_child_player_profile,
+    'approved',
+    v_parent,
+    v_admin,
+    now(),
+    'Parent / Guardian'
+  );
 
   insert into public.staff_profiles (user_id, full_name, role)
   values (v_scout, 'Delete Test Scout', 'scout');
@@ -328,8 +427,15 @@ begin
     select 1 from public.parent_profiles where user_id = v_parent
   ) or exists (
     select 1 from public.staff_profiles where user_id = v_scout
+  ) or exists (
+    select 1 from public.parent_player_links where parent_profile_id = v_parent_profile
   ) then
     raise exception 'TEST FAILED (parent/scout/referee): account data remains';
+  end if;
+
+  if not exists (select 1 from auth.users where id = v_child)
+     or not exists (select 1 from public.player_profiles where id = v_child_player_profile) then
+    raise exception 'TEST FAILED (parent): linked child account was deleted';
   end if;
 
   -- ==========================================================================

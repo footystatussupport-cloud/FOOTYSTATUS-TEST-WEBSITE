@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { ArrowLeft, Star, Users, Trophy, Globe } from "lucide-react";
 import Header from "@/components/Header";
 import logo from "@/assets/footystatus-logo.png";
+import { FOOTY_STATUS_CONTACT_EMAIL, FOOTY_STATUS_CONTACT_MAILTO } from "@/lib/contact";
 
 const AboutPage = () => {
   const stats = [
@@ -78,9 +79,18 @@ const AboutPage = () => {
         <section className="mb-8">
           <h2 className="text-lg font-semibold text-navy mb-3">Contact</h2>
           <div className="bg-card border border-border rounded-xl p-4 space-y-2">
-            <p className="text-sm"><span className="text-muted-foreground">Email:</span> footystatussupport@gmail.com</p>
-            <p className="text-sm"><span className="text-muted-foreground">Support:</span> footystatussupport@gmail.com</p>
-            <p className="text-sm"><span className="text-muted-foreground">Press:</span> footystatussupport@gmail.com</p>
+            <p className="text-sm">
+              <span className="text-muted-foreground">Email:</span>{" "}
+              <a className="text-primary underline" href={FOOTY_STATUS_CONTACT_MAILTO}>{FOOTY_STATUS_CONTACT_EMAIL}</a>
+            </p>
+            <p className="text-sm">
+              <span className="text-muted-foreground">Support:</span>{" "}
+              <a className="text-primary underline" href={FOOTY_STATUS_CONTACT_MAILTO}>{FOOTY_STATUS_CONTACT_EMAIL}</a>
+            </p>
+            <p className="text-sm">
+              <span className="text-muted-foreground">Press:</span>{" "}
+              <a className="text-primary underline" href={FOOTY_STATUS_CONTACT_MAILTO}>{FOOTY_STATUS_CONTACT_EMAIL}</a>
+            </p>
           </div>
         </section>
 

@@ -91,6 +91,14 @@ assert.ok(
   frontend.includes('supabase.functions.invoke("admin-delete-account"'),
   "Admin deletion must run through the trusted Storage API orchestrator",
 );
+assert.ok(
+  frontend.includes("Authorization: `Bearer ${accessToken}`"),
+  "Admin deletion must explicitly forward the current admin access token",
+);
+assert.ok(
+  frontend.includes('title: "Account permanently deleted"'),
+  "Admin deletion must show the required success message only after confirmation",
+);
 for (const confirmation of [
   "data?.success",
   "data?.auth_user_deleted",
@@ -146,6 +154,9 @@ for (const edgeRequirement of [
   'authed.rpc(\n    "admin_delete_account"',
   ".storage.from(bucketId).remove(pathBatch)",
   "SUPABASE_SERVICE_ROLE_KEY",
+  "admin_self_delete_rejected",
+  "database_or_auth_deletion_failed",
+  "storage_cleanup_batch_failed",
 ]) {
   assert.ok(
     edgeFunction.includes(edgeRequirement),
@@ -159,6 +170,7 @@ const behavioralSuite = read(
 for (const scenario of [
   "existing error",
   "test 1: coach",
+  "test 1b: team staff",
   "tests 2 and 3: player",
   "test 4: team account",
   "test 5: parent, scout, and referee",

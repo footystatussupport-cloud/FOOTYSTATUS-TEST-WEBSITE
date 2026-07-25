@@ -31,6 +31,9 @@ interface StorageObjectManifestRow {
   object_name: string;
 }
 
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 const chunk = <T>(items: T[], size: number): T[][] => {
   const chunks: T[][] = [];
   for (let index = 0; index < items.length; index += size) {
@@ -40,24 +43,59 @@ const chunk = <T>(items: T[], size: number): T[][] => {
 };
 
 Deno.serve(async (request) => {
+  const requestId = crypto.randomUUID();
+  const log = (
+    level: "info" | "warn" | "error",
+    event: string,
+    details: Record<string, unknown> = {},
+  ) => {
+    console[level](
+      JSON.stringify({ request_id: requestId, event, ...details }),
+    );
+  };
+
   if (request.method === "OPTIONS") {
+    log("info", "cors_preflight_ok", {
+      origin: request.headers.get("origin") || "unknown",
+    });
     return new Response("ok", { headers: corsHeaders });
   }
   if (request.method !== "POST") {
-    return json(405, { success: false, message: "Method not allowed." });
+    log("warn", "method_not_allowed", { method: request.method });
+    return json(405, {
+      success: false,
+      error_code: "method_not_allowed",
+      message: "Method not allowed.",
+    });
   }
 
+  try {
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if (!supabaseUrl || !anonKey || !serviceRoleKey) {
+    log("error", "missing_server_configuration", {
+      has_supabase_url: Boolean(supabaseUrl),
+      has_anon_key: Boolean(anonKey),
+      has_service_role_key: Boolean(serviceRoleKey),
+    });
     return json(500, {
       success: false,
+      error_code: "server_not_configured",
       message: "Permanent account deletion is not configured on the server.",
     });
   }
 
   const authorization = request.headers.get("Authorization") || "";
+  if (!authorization.startsWith("Bearer ")) {
+    log("warn", "missing_admin_session");
+    return json(401, {
+      success: false,
+      error_code: "missing_admin_session",
+      message: "Your admin session is missing. Sign in again and retry.",
+    });
+  }
+
   const authed = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: authorization } },
     auth: { persistSession: false, autoRefreshToken: false },
@@ -68,15 +106,35 @@ Deno.serve(async (request) => {
     error: authError,
   } = await authed.auth.getUser();
   if (authError || !user) {
-    return json(401, { success: false, message: "You must be signed in." });
+    log("warn", "admin_session_rejected", {
+      auth_error: authError?.message || null,
+    });
+    return json(401, {
+      success: false,
+      error_code: "invalid_admin_session",
+      message: "Your admin session has expired. Sign in again and retry.",
+    });
   }
 
   const { data: isAdmin, error: adminError } = await authed.rpc(
     "is_footy_status_global_admin",
   );
-  if (adminError || !isAdmin) {
+  if (adminError) {
+    log("error", "admin_verification_failed", {
+      caller_user_id: user.id,
+      database_error: adminError.message,
+    });
+    return json(500, {
+      success: false,
+      error_code: "admin_verification_failed",
+      message: "Footy Status could not verify admin access. Please try again.",
+    });
+  }
+  if (!isAdmin) {
+    log("warn", "non_admin_delete_rejected", { caller_user_id: user.id });
     return json(403, {
       success: false,
+      error_code: "admin_required",
       message: "Only the Footy Status Official account can permanently delete accounts.",
     });
   }
@@ -85,18 +143,46 @@ Deno.serve(async (request) => {
   try {
     body = await request.json();
   } catch {
-    return json(400, { success: false, message: "Invalid request body." });
+    log("warn", "invalid_request_body", { caller_user_id: user.id });
+    return json(400, {
+      success: false,
+      error_code: "invalid_request_body",
+      message: "The deletion request was invalid.",
+    });
   }
 
   const targetUserId = String(body.target_user_id || "").trim();
   const reason = String(body.reason || "").trim();
-  if (!targetUserId) {
-    return json(400, { success: false, message: "Target account is required." });
-  }
-  if (!reason) {
+  if (!targetUserId || !uuidPattern.test(targetUserId)) {
+    log("warn", "invalid_target_user_id", {
+      caller_user_id: user.id,
+      has_target: Boolean(targetUserId),
+    });
     return json(400, {
       success: false,
+      error_code: "invalid_target_user_id",
+      message: "Select a valid account to delete.",
+    });
+  }
+  if (!reason) {
+    log("warn", "missing_deletion_reason", {
+      caller_user_id: user.id,
+      target_user_id: targetUserId,
+    });
+    return json(400, {
+      success: false,
+      error_code: "missing_deletion_reason",
       message: "Enter an admin note before deleting an account.",
+    });
+  }
+  if (targetUserId === user.id) {
+    log("warn", "admin_self_delete_rejected", {
+      caller_user_id: user.id,
+    });
+    return json(403, {
+      success: false,
+      error_code: "admin_self_delete_forbidden",
+      message: "The active Footy Status Admin account cannot delete itself.",
     });
   }
 
@@ -110,9 +196,15 @@ Deno.serve(async (request) => {
     },
   );
   if (manifestError) {
-    return json(400, {
+    log("error", "storage_manifest_failed", {
+      caller_user_id: user.id,
+      target_user_id: targetUserId,
+      database_error: manifestError.message,
+    });
+    return json(500, {
       success: false,
-      message: manifestError.message || "Could not prepare storage cleanup.",
+      error_code: "storage_manifest_failed",
+      message: "Footy Status could not prepare this account for deletion.",
     });
   }
 
@@ -128,9 +220,18 @@ Deno.serve(async (request) => {
     },
   );
   if (deletionError) {
-    return json(400, {
+    log("error", "database_or_auth_deletion_failed", {
+      caller_user_id: user.id,
+      target_user_id: targetUserId,
+      database_error: deletionError.message,
+      database_code: deletionError.code || null,
+      database_details: deletionError.details || null,
+      database_hint: deletionError.hint || null,
+    });
+    return json(500, {
       success: false,
-      message: deletionError.message || "Could not delete account.",
+      error_code: "account_deletion_failed",
+      message: "The account could not be permanently deleted. No success was reported.",
     });
   }
 
@@ -139,8 +240,14 @@ Deno.serve(async (request) => {
     !deletionData?.auth_user_deleted ||
     !deletionData?.cleanup_atomic
   ) {
+    log("error", "incomplete_database_confirmation", {
+      caller_user_id: user.id,
+      target_user_id: targetUserId,
+      deletion_result: deletionData || null,
+    });
     return json(500, {
       success: false,
+      error_code: "incomplete_database_confirmation",
       message: "The database did not confirm complete account deletion.",
     });
   }
@@ -176,6 +283,12 @@ Deno.serve(async (request) => {
       }
 
       if (!removed) {
+        log("error", "storage_cleanup_batch_failed", {
+          target_user_id: targetUserId,
+          bucket_id: bucketId,
+          path_count: pathBatch.length,
+          storage_error: lastMessage || "Storage API removal failed.",
+        });
         failedBatches.push({
           bucket: bucketId,
           paths: pathBatch,
@@ -186,6 +299,13 @@ Deno.serve(async (request) => {
   }
 
   const storageCleanupComplete = failedBatches.length === 0;
+  log(storageCleanupComplete ? "info" : "error", "account_deletion_completed", {
+    caller_user_id: user.id,
+    target_user_id: targetUserId,
+    storage_cleanup_complete: storageCleanupComplete,
+    storage_objects_found: manifest.length,
+    storage_objects_removed: removedCount,
+  });
   return json(200, {
     ...deletionData,
     success: storageCleanupComplete,
@@ -193,9 +313,19 @@ Deno.serve(async (request) => {
     storage_cleanup_complete: storageCleanupComplete,
     storage_objects_found: manifest.length,
     storage_objects_removed: removedCount,
-    storage_cleanup_failures: failedBatches,
+    storage_cleanup_failure_count: failedBatches.length,
     message: storageCleanupComplete
       ? "The account, Auth user, application data, and owned files were permanently removed."
       : "The account was deleted, but some owned files could not be removed after three attempts.",
   });
+  } catch (error) {
+    log("error", "unhandled_function_error", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return json(500, {
+      success: false,
+      error_code: "unexpected_server_error",
+      message: "Permanent account deletion encountered an unexpected server error.",
+    });
+  }
 });

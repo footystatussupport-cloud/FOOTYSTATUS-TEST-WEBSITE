@@ -1,7 +1,8 @@
 import { Link } from "react-router-dom";
-import { ArrowLeft, HelpCircle, MessageCircle, FileText, Mail, ExternalLink, ChevronRight } from "lucide-react";
+import { ArrowLeft, FileText, Mail, ExternalLink, ChevronRight } from "lucide-react";
 import Header from "@/components/Header";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import { FOOTY_STATUS_CONTACT_EMAIL, FOOTY_STATUS_CONTACT_MAILTO } from "@/lib/contact";
 
 const SupportPage = () => {
   const faqs = [
@@ -32,8 +33,7 @@ const SupportPage = () => {
   ];
 
   const supportLinks = [
-    { icon: MessageCircle, label: "Live Chat", description: "Chat with our support team", action: "Start Chat" },
-    { icon: Mail, label: "Email Support", description: "footystatussupport@gmail.com", action: "Send Email" },
+    { icon: Mail, label: "Email Support", description: FOOTY_STATUS_CONTACT_EMAIL, action: "Send Email", href: FOOTY_STATUS_CONTACT_MAILTO },
     { icon: FileText, label: "Documentation", description: "Read our help guides", action: "View Docs" },
   ];
 
@@ -56,11 +56,9 @@ const SupportPage = () => {
         <section className="mb-8">
           <h2 className="text-lg font-semibold text-navy mb-2">Contact Us</h2>
           <div className="space-y-2">
-            {supportLinks.map((link) => (
-              <button 
-                key={link.label}
-                className="flex items-center justify-between w-full p-4 bg-card border border-border rounded-xl hover:bg-muted/50 transition-colors"
-              >
+            {supportLinks.map((link) => {
+              const content = (
+                <>
                 <div className="flex items-center gap-4">
                   <div className="w-10 h-10 bg-primary/10 rounded-full flex items-center justify-center">
                     <link.icon className="h-5 w-5 text-primary" />
@@ -74,8 +72,20 @@ const SupportPage = () => {
                   {link.action}
                   <ExternalLink className="h-4 w-4" />
                 </span>
-              </button>
-            ))}
+                </>
+              );
+              const className = "flex items-center justify-between w-full p-4 bg-card border border-border rounded-xl hover:bg-muted/50 transition-colors";
+
+              return link.href ? (
+                <a key={link.label} className={className} href={link.href}>
+                  {content}
+                </a>
+              ) : (
+                <button key={link.label} className={className} type="button">
+                  {content}
+                </button>
+              );
+            })}
           </div>
         </section>
 

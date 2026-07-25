@@ -223,7 +223,11 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
       avatar_url: kind === "team"
         ? text(record.logo_url || profile.avatar_url)
         : text(profile.avatar_url || record.profile_image_url || record.logo_url),
-      account_role: text(profile.account_role),
+      // Load the account's REAL role. account_role can be null on legacy player
+      // rows, so fall back to account_type/role — never initialise this field to
+      // "" (an empty value here is what got saved into the account_type enum and
+      // produced `invalid input value for enum account_type: ""`).
+      account_role: text(profile.account_role || profile.account_type || profile.role),
       position: text(record.position || profile.position),
       height: text(record.height),
       weight: text(record.weight),
@@ -409,7 +413,23 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
     }
 
     setSaving(true);
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+    const accessToken = sessionData.session?.access_token;
+    if (sessionError || !accessToken) {
+      setSaving(false);
+      console.error("[Admin account deletion] Missing admin session", sessionError);
+      toast({
+        title: "Could not delete account",
+        description: "Your admin session has expired. Sign in again and retry.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     const { data, error } = await supabase.functions.invoke("admin-delete-account", {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
       body: {
         target_user_id: targetUserId,
         reason: reason.trim(),
@@ -418,9 +438,26 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
     setSaving(false);
 
     if (error) {
+      const status =
+        "context" in error && error.context instanceof Response
+          ? error.context.status
+          : undefined;
+      console.error("[Admin account deletion] Edge Function failed", {
+        status,
+        message: error.message,
+        response: data,
+      });
+      const description =
+        status === 401
+          ? "Your admin session has expired. Sign in again and retry."
+          : status === 403
+            ? "This account is not authorized to permanently delete users."
+            : status === 404
+              ? "The account deletion service is unavailable. Please contact Footy Status support."
+              : data?.message || "The account could not be permanently deleted. Please try again.";
       toast({
         title: "Could not delete account",
-        description: data?.message || error.message,
+        description,
         variant: "destructive",
       });
       return;
@@ -455,7 +492,7 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
     }
 
     toast({
-      title: "Account deleted",
+      title: "Account permanently deleted",
       description: "The account and its connected Footy Status data were permanently removed.",
     });
     setOpen(false);
@@ -500,12 +537,17 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
           return;
         }
       }
+      // Only send account_role when it actually holds a value. A blank field
+      // must preserve the account's existing role — never overwrite it with ""
+      // (which the account_type enum correctly rejects). Changing a plan or a
+      // profile header must never blank out the account type.
+      const trimmedRole = form.account_role?.trim();
       ok = await patch("profiles", {
         full_name: form.full_name,
         ...(nextUsername ? { username: nextUsername } : {}),
         bio: form.bio || null,
         avatar_url: form.avatar_url || null,
-        account_role: form.account_role,
+        ...(trimmedRole ? { account_role: trimmedRole } : {}),
       });
       if (ok !== false) setOpen(false);
       return;

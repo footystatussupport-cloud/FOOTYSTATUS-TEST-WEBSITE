@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useRef, useCallback } from "react";
+﻿import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -152,6 +152,16 @@ const NextUpTab = () => {
   const clipsRef = useRef<FeedEntry[]>(clips);
   clipsRef.current = clips;
   const holdPausedRef = useRef(false);
+  // A stable signature of the CURRENT feed items (their per-occurrence feedKeys).
+  // It changes whenever the feed is structurally rebuilt/appended/trimmed — e.g.
+  // the Reload button replaces the list, even when the new list has the SAME
+  // length — but NOT when only a clip's like/view count changes (feedKeys are
+  // preserved). The observer and playback effects key off this so a reload always
+  // re-attaches the observer to the NEW <section>/<video> nodes instead of the
+  // old, unmounted ones. Watching old nodes was why every clip under the first
+  // one stayed inactive after a reload: frozen on its first frame, scaled to 96%
+  // and dimmed, never playing.
+  const feedSignature = useMemo(() => clips.map((entry) => entry.feedKey).join("|"), [clips]);
   const pointerDownRef = useRef(false);
   const countedPlaybackRef = useRef<Record<string, boolean>>({});
   const loadingMoreRef = useRef(false);
@@ -462,7 +472,9 @@ const NextUpTab = () => {
         resetPlaybackCounter(clip.feedKey);
       }
     });
-  }, [currentIndex, clips.length, isMuted]);
+    // feedSignature (not clips.length) so a same-length reload re-runs this and
+    // plays the newly mounted active clip instead of leaving it frozen.
+  }, [currentIndex, feedSignature, isMuted]);
 
   // Keep the observer's dedupe guard in sync no matter who moved the index
   // (the observer itself, a deep link, "Not interested", or an action button).
@@ -508,7 +520,10 @@ const NextUpTab = () => {
     );
     sections.forEach((section) => observer.observe(section));
     return () => observer.disconnect();
-  }, [clips.length]);
+    // feedSignature (not clips.length): a reload that returns the same number of
+    // clips still swaps every <section> node, so the observer must be rebuilt to
+    // watch the new nodes. Keying on length alone left it observing dead nodes.
+  }, [feedSignature]);
 
   // Deep link: position on the requested clip exactly once, when it first
   // appears. It must never re-fire on later clips/count changes, or it would
