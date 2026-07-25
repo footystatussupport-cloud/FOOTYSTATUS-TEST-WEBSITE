@@ -39,7 +39,7 @@ const Header = () => {
       style={{ paddingTop: "max(0.5rem, env(safe-area-inset-top))" }}
     >
       <div className="flex min-w-0 flex-1 items-center overflow-hidden">
-        <img src={logo} alt="FootyStatus" className="block h-12 w-auto max-w-full object-contain sm:h-14" />
+        <img src={logo} alt="FootyStatus" className="block h-12 w-auto max-w-full origin-left scale-150 object-contain max-[340px]:scale-[1.35] sm:h-14" />
       </div>
       <div className="flex shrink-0 items-center justify-end gap-2">
         {user ? (
