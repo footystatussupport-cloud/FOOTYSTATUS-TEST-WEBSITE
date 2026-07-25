@@ -3068,6 +3068,497 @@ for each row execute function public.enforce_club_news_profanity();
 -- Refresh PostgREST schema cache so new functions are found immediately
 notify pgrst, 'reload schema';
 
+-- =============================================================================
+-- 20260724180000_fix_atomic_admin_account_deletion.sql
+-- Fix the coach/staff daughter-team FK collision and make permanent deletion
+-- strict, transactional, single-pass, and Auth-complete.
+-- =============================================================================
+
+do $$
+declare
+  v_table text;
+  v_constraint text;
+begin
+  foreach v_table in array array[
+    'coach_staff_team_memberships',
+    'coach_staff_team_invites',
+    'coach_staff_join_requests',
+    'player_team_memberships',
+    'team_player_invites',
+    'team_join_requests'
+  ]
+  loop
+    if to_regclass('public.' || quote_ident(v_table)) is null
+       or not exists (
+         select 1
+         from information_schema.columns
+         where table_schema = 'public'
+           and table_name = v_table
+           and column_name = 'club_team_id'
+       ) then
+      continue;
+    end if;
+
+    for v_constraint in
+      select con.conname
+      from pg_constraint con
+      join pg_class rel on rel.oid = con.conrelid
+      join pg_namespace ns on ns.oid = rel.relnamespace
+      join pg_attribute att
+        on att.attrelid = con.conrelid
+       and att.attnum = con.conkey[1]
+      where con.contype = 'f'
+        and ns.nspname = 'public'
+        and rel.relname = v_table
+        and att.attname = 'club_team_id'
+        and array_length(con.conkey, 1) = 1
+        and con.confrelid = 'public.club_teams'::regclass
+    loop
+      execute format(
+        'alter table public.%I drop constraint %I',
+        v_table,
+        v_constraint
+      );
+    end loop;
+
+    execute format(
+      'alter table public.%I add constraint %I foreign key (club_team_id) references public.club_teams(id) on delete cascade',
+      v_table,
+      v_table || '_club_team_id_fkey'
+    );
+  end loop;
+end $$;
+
+create or replace function public.delete_account_storage_objects(
+  _target_user_id uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = public, storage
+as $$
+begin
+  if _target_user_id is null or to_regclass('storage.objects') is null then
+    return;
+  end if;
+
+  delete from storage.objects
+  where owner::text = _target_user_id::text
+     or name like _target_user_id::text || '/%'
+     or name like '%/' || _target_user_id::text || '/%'
+     or name like '%/' || _target_user_id::text || '-%'
+     or name like '%/' || _target_user_id::text || '_%';
+end;
+$$;
+
+revoke all on function public.delete_account_storage_objects(uuid)
+  from public, anon, authenticated;
+revoke all on function public.footy_purge_direct_auth_user_refs(uuid)
+  from public, anon, authenticated;
+
+-- Schema-correct replacement: teams is owned by owner_user_id; club_teams is
+-- owned through club_id/team_id. The historical user_id/owner_user_id/
+-- team_profile_id references on those tables do not exist.
+create or replace function public.delete_account_app_data(
+  _target_user_id uuid,
+  _deleted_by_user_id uuid default null,
+  _reason text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_player_profile_ids uuid[] := '{}'::uuid[];
+  v_legacy_player_ids uuid[] := '{}'::uuid[];
+  v_clip_ids uuid[] := '{}'::uuid[];
+  v_parent_profile_ids uuid[] := '{}'::uuid[];
+  v_team_profile_ids uuid[] := '{}'::uuid[];
+  v_team_ids uuid[] := '{}'::uuid[];
+  v_club_ids uuid[] := '{}'::uuid[];
+  v_club_team_ids uuid[] := '{}'::uuid[];
+begin
+  if _target_user_id is null then
+    raise exception 'Target account is required.';
+  end if;
+
+  perform public.assert_user_can_be_deleted(_target_user_id);
+
+  select coalesce(array_agg(id), '{}'::uuid[])
+  into v_player_profile_ids
+  from public.player_profiles
+  where user_id = _target_user_id;
+
+  select coalesce(array_agg(id), '{}'::uuid[])
+  into v_legacy_player_ids
+  from public.players
+  where user_id = _target_user_id;
+
+  select coalesce(array_agg(id), '{}'::uuid[])
+  into v_parent_profile_ids
+  from public.parent_profiles
+  where user_id = _target_user_id;
+
+  select
+    coalesce(array_agg(id), '{}'::uuid[]),
+    coalesce(array_agg(team_id) filter (where team_id is not null), '{}'::uuid[]),
+    coalesce(array_agg(club_id) filter (where club_id is not null), '{}'::uuid[])
+  into v_team_profile_ids, v_team_ids, v_club_ids
+  from public.team_profiles
+  where user_id = _target_user_id;
+
+  select coalesce(array_agg(id), '{}'::uuid[])
+  into v_team_ids
+  from (
+    select unnest(v_team_ids) as id
+    union
+    select id from public.teams where owner_user_id = _target_user_id
+  ) owned_teams
+  where id is not null;
+
+  select coalesce(array_agg(id), '{}'::uuid[])
+  into v_club_ids
+  from (
+    select unnest(v_club_ids) as id
+    union
+    select id from public.clubs where owner_user_id = _target_user_id
+  ) owned_clubs
+  where id is not null;
+
+  select coalesce(array_agg(id), '{}'::uuid[])
+  into v_club_team_ids
+  from public.club_teams
+  where club_id = any(v_club_ids)
+     or team_id = any(v_team_ids);
+
+  select coalesce(array_agg(id), '{}'::uuid[])
+  into v_clip_ids
+  from public.clips
+  where user_id = _target_user_id
+     or player_id = any(v_player_profile_ids)
+     or player_id = any(v_legacy_player_ids);
+
+  perform public.delete_account_rows_if_column_matches_any('clip_likes', 'clip_id', v_clip_ids);
+  perform public.delete_account_rows_if_column_matches_any('clip_comments', 'clip_id', v_clip_ids);
+  perform public.delete_account_rows_if_column_matches_any('clip_views', 'clip_id', v_clip_ids);
+  perform public.delete_account_rows_if_column_matches_any('clip_feed_impressions', 'clip_id', v_clip_ids);
+  perform public.delete_account_rows_if_column_matches_any('clip_shares', 'clip_id', v_clip_ids);
+  perform public.delete_account_rows_if_column_matches_any('clip_exposure_state', 'clip_id', v_clip_ids);
+  perform public.delete_account_rows_if_column_matches_any('clip_engagement_exposure_awards', 'clip_id', v_clip_ids);
+  perform public.delete_account_rows_if_column_matches_any('content_reports', 'reported_clip_id', v_clip_ids);
+
+  perform public.delete_account_rows_if_column_exists('user_contacts', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('user_settings', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('blocked_users', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('blocked_users', 'blocked_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('profile_views', 'viewer_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('profile_views', 'profile_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('profile_views', 'viewed_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('notifications', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('notifications', 'actor_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('notifications', 'secondary_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('clip_likes', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('clip_comments', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('clip_views', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('clip_feed_impressions', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('clip_shares', 'user_id', _target_user_id);
+
+  perform public.delete_account_rows_if_column_exists('parent_player_links', 'parent_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('parent_player_links', 'player_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('parent_player_links', 'requested_by_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('parent_player_links', 'approved_by_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('parent_player_links', 'removed_by_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_matches_any('parent_player_links', 'parent_profile_id', v_parent_profile_ids);
+  perform public.delete_account_rows_if_column_matches_any('parent_player_links', 'player_profile_id', v_player_profile_ids);
+
+  perform public.delete_account_rows_if_column_exists('player_team_memberships', 'player_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_matches_any('player_team_memberships', 'player_profile_id', v_player_profile_ids);
+  perform public.delete_account_rows_if_column_matches_any('player_team_memberships', 'team_id', v_team_ids);
+  perform public.delete_account_rows_if_column_matches_any('player_team_memberships', 'club_team_id', v_club_team_ids);
+  perform public.delete_account_rows_if_column_exists('team_player_invites', 'player_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('team_player_invites', 'invited_by', _target_user_id);
+  perform public.delete_account_rows_if_column_matches_any('team_player_invites', 'player_profile_id', v_player_profile_ids);
+  perform public.delete_account_rows_if_column_matches_any('team_player_invites', 'team_id', v_team_ids);
+  perform public.delete_account_rows_if_column_matches_any('team_player_invites', 'club_team_id', v_club_team_ids);
+  perform public.delete_account_rows_if_column_exists('team_join_requests', 'player_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('team_join_requests', 'reviewed_by', _target_user_id);
+  perform public.delete_account_rows_if_column_matches_any('team_join_requests', 'player_profile_id', v_player_profile_ids);
+  perform public.delete_account_rows_if_column_matches_any('team_join_requests', 'team_id', v_team_ids);
+  perform public.delete_account_rows_if_column_matches_any('team_join_requests', 'club_team_id', v_club_team_ids);
+
+  perform public.delete_account_rows_if_column_exists('coach_staff_team_memberships', 'coach_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_matches_any('coach_staff_team_memberships', 'team_id', v_team_ids);
+  perform public.delete_account_rows_if_column_matches_any('coach_staff_team_memberships', 'club_team_id', v_club_team_ids);
+  perform public.delete_account_rows_if_column_exists('coach_staff_team_invites', 'coach_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('coach_staff_team_invites', 'invited_by', _target_user_id);
+  perform public.delete_account_rows_if_column_matches_any('coach_staff_team_invites', 'team_id', v_team_ids);
+  perform public.delete_account_rows_if_column_matches_any('coach_staff_team_invites', 'club_team_id', v_club_team_ids);
+  perform public.delete_account_rows_if_column_exists('coach_staff_join_requests', 'coach_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('coach_staff_join_requests', 'reviewed_by', _target_user_id);
+  perform public.delete_account_rows_if_column_matches_any('coach_staff_join_requests', 'team_id', v_team_ids);
+  perform public.delete_account_rows_if_column_matches_any('coach_staff_join_requests', 'club_team_id', v_club_team_ids);
+
+  perform public.delete_account_rows_if_column_exists('referee_match_claims', 'referee_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('referee_report_uploads', 'uploaded_by_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('match_comments', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('assist_claims', 'claimant_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_matches_any('assist_claims', 'claimant_player_profile_id', v_player_profile_ids);
+  perform public.null_account_column_if_exists('assist_claims', 'reviewed_by_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('match_events', 'player_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_matches_any('match_events', 'player_profile_id', v_player_profile_ids);
+  perform public.delete_account_rows_if_column_matches_any('match_events', 'team_id', v_team_ids);
+  perform public.null_account_column_if_exists('match_events', 'created_by_user_id', _target_user_id);
+  perform public.null_account_column_if_exists('matches', 'referee_user_id', _target_user_id);
+  perform public.null_account_column_if_exists('matches', 'created_by_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('match_film_links', 'submitted_by_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('match_film_links', 'user_id', _target_user_id);
+
+  perform public.delete_account_rows_if_column_exists('club_news_posts', 'author_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_matches_any('club_news_posts', 'team_id', v_team_ids);
+  perform public.delete_account_rows_if_column_matches_any('club_news_posts', 'club_id', v_club_ids);
+
+  perform public.delete_account_rows_if_column_exists('content_reports', 'reporter_account_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('content_reports', 'reported_account_id', _target_user_id);
+  perform public.null_account_column_if_exists('content_reports', 'reviewed_by_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('content_report_actions', 'target_account_id', _target_user_id);
+  perform public.null_account_column_if_exists('content_report_actions', 'admin_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('account_strikes', 'account_id', _target_user_id);
+  perform public.null_account_column_if_exists('account_strikes', 'admin_user_id', _target_user_id);
+  perform public.null_account_column_if_exists('account_strikes', 'removed_by_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('temporary_bans', 'account_id', _target_user_id);
+  perform public.null_account_column_if_exists('temporary_bans', 'admin_user_id', _target_user_id);
+  perform public.null_account_column_if_exists('account_email_bans', 'account_id', _target_user_id);
+  perform public.null_account_column_if_exists('account_email_bans', 'admin_user_id', _target_user_id);
+
+  perform public.delete_account_rows_if_column_matches_any('clips', 'id', v_clip_ids);
+  perform public.delete_account_rows_if_column_exists('clips', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_matches_any('clips', 'player_id', v_player_profile_ids);
+  perform public.delete_account_rows_if_column_matches_any('clips', 'player_id', v_legacy_player_ids);
+  perform public.delete_account_rows_if_column_matches_any('current_player_statistics', 'player_profile_id', v_player_profile_ids);
+  perform public.delete_account_rows_if_column_matches_any('player_statistics', 'player_profile_id', v_player_profile_ids);
+  perform public.delete_account_rows_if_column_matches_any('player_statistics', 'player_id', v_legacy_player_ids);
+  perform public.delete_account_rows_if_column_matches_any('club_history', 'player_profile_id', v_player_profile_ids);
+  perform public.delete_account_rows_if_column_matches_any('club_history', 'player_id', v_legacy_player_ids);
+  perform public.delete_account_rows_if_column_matches_any('player_match_minutes', 'player_profile_id', v_player_profile_ids);
+
+  perform public.delete_account_rows_if_column_matches_any('club_teams', 'id', v_club_team_ids);
+  perform public.delete_account_rows_if_column_matches_any('clubs', 'id', v_club_ids);
+  perform public.delete_account_rows_if_column_matches_any('teams', 'id', v_team_ids);
+  perform public.delete_account_rows_if_column_exists('clubs', 'owner_user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('teams', 'owner_user_id', _target_user_id);
+
+  perform public.delete_account_rows_if_column_exists('players', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('player_profiles', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('staff_profiles', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('parent_profiles', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('team_profiles', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('user_roles', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('global_admin_users', 'user_id', _target_user_id);
+  perform public.delete_account_rows_if_column_exists('profiles', 'user_id', _target_user_id);
+
+  perform public.delete_account_storage_objects(_target_user_id);
+
+  return jsonb_build_object(
+    'success', true,
+    'target_user_id', _target_user_id,
+    'deleted_by_user_id', _deleted_by_user_id,
+    'player_profiles_removed', coalesce(array_length(v_player_profile_ids, 1), 0),
+    'clips_removed', coalesce(array_length(v_clip_ids, 1), 0),
+    'teams_removed', coalesce(array_length(v_team_ids, 1), 0),
+    'club_teams_removed', coalesce(array_length(v_club_team_ids, 1), 0)
+  );
+end;
+$$;
+
+revoke all on function public.delete_account_app_data(uuid, uuid, text)
+  from public, anon, authenticated;
+
+create or replace function public.cleanup_app_data_after_auth_user_delete()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_explicit_target text :=
+    current_setting('footy_status.deleting_user_id', true);
+begin
+  if v_explicit_target is distinct from old.id::text then
+    perform public.delete_account_app_data(
+      old.id,
+      null,
+      'auth_user_deleted_cleanup'
+    );
+  end if;
+
+  perform public.footy_purge_direct_auth_user_refs(old.id);
+  return old;
+end;
+$$;
+
+drop trigger if exists footy_status_cleanup_app_data_before_auth_user_delete
+  on auth.users;
+create trigger footy_status_cleanup_app_data_before_auth_user_delete
+  before delete on auth.users
+  for each row
+  execute function public.cleanup_app_data_after_auth_user_delete();
+
+create or replace function public.delete_my_account()
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_deleted integer := 0;
+begin
+  if v_user_id is null then
+    raise exception 'You must be signed in to delete your account.';
+  end if;
+
+  perform public.assert_user_can_be_deleted(v_user_id);
+  perform set_config(
+    'footy_status.deleting_user_id',
+    v_user_id::text,
+    true
+  );
+
+  perform public.delete_account_app_data(
+    v_user_id,
+    v_user_id,
+    'self_delete_account'
+  );
+  perform public.footy_purge_direct_auth_user_refs(v_user_id);
+
+  delete from auth.identities where user_id = v_user_id;
+  delete from auth.users where id = v_user_id;
+  get diagnostics v_deleted = row_count;
+
+  if v_deleted <> 1 then
+    raise exception 'Account deletion failed: Auth user was not removed.';
+  end if;
+
+  return true;
+end;
+$$;
+
+create or replace function public.admin_delete_account(
+  _target_user_id uuid,
+  _reason text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_admin_user_id uuid := auth.uid();
+  v_before jsonb;
+  v_result jsonb;
+  v_deleted integer := 0;
+begin
+  perform public.admin_assert_official(_reason);
+
+  if _target_user_id is null then
+    raise exception 'Target account is required.';
+  end if;
+
+  if nullif(trim(coalesce(_reason, '')), '') is null then
+    raise exception 'Enter an admin note before deleting an account.';
+  end if;
+
+  perform public.assert_user_can_be_deleted(_target_user_id);
+
+  if not exists (
+    select 1 from auth.users where id = _target_user_id
+  ) then
+    raise exception 'Account deletion failed: Auth user was not found.';
+  end if;
+
+  select jsonb_build_object(
+    'profile', (
+      select to_jsonb(p)
+      from public.profiles p
+      where p.user_id = _target_user_id
+      limit 1
+    ),
+    'player_profile', (
+      select to_jsonb(p)
+      from public.player_profiles p
+      where p.user_id = _target_user_id
+      limit 1
+    ),
+    'staff_profile', (
+      select to_jsonb(p)
+      from public.staff_profiles p
+      where p.user_id = _target_user_id
+      limit 1
+    ),
+    'parent_profile', (
+      select to_jsonb(p)
+      from public.parent_profiles p
+      where p.user_id = _target_user_id
+      limit 1
+    ),
+    'team_profile', (
+      select to_jsonb(p)
+      from public.team_profiles p
+      where p.user_id = _target_user_id
+      limit 1
+    )
+  )
+  into v_before;
+
+  perform public.admin_write_audit(
+    'account_permanently_deleted',
+    'auth.users',
+    _target_user_id::text,
+    _target_user_id,
+    _reason,
+    v_before,
+    null,
+    jsonb_build_object('admin_user_id', v_admin_user_id)
+  );
+
+  perform set_config(
+    'footy_status.deleting_user_id',
+    _target_user_id::text,
+    true
+  );
+
+  v_result := public.delete_account_app_data(
+    _target_user_id,
+    v_admin_user_id,
+    _reason
+  );
+  perform public.footy_purge_direct_auth_user_refs(_target_user_id);
+
+  delete from auth.identities where user_id = _target_user_id;
+  delete from auth.users where id = _target_user_id;
+  get diagnostics v_deleted = row_count;
+
+  if v_deleted <> 1 then
+    raise exception 'Account deletion failed: Auth user was not removed.';
+  end if;
+
+  return coalesce(v_result, '{}'::jsonb) || jsonb_build_object(
+    'success', true,
+    'target_user_id', _target_user_id,
+    'auth_user_deleted', true,
+    'cleanup_atomic', true
+  );
+end;
+$$;
+
+revoke all on function public.delete_my_account() from public, anon;
+revoke all on function public.admin_delete_account(uuid, text) from public, anon;
+grant execute on function public.delete_my_account() to authenticated;
+grant execute on function public.admin_delete_account(uuid, text) to authenticated;
+
+notify pgrst, 'reload schema';
+
 -- ############################################################################
 -- 20260711120000 + 20260713230000 + 20260714130000 + 20260720190000
 -- COMPLETE ACCOUNT DELETION CHAIN (self-delete RPC + full cleanup + protection)
@@ -3411,8 +3902,11 @@ grant execute on function public.footy_purge_direct_auth_user_refs(uuid) to auth
 --    Deletes owned content (clips + all clip-derived rows, posts, stats,
 --    owned teams/clubs) and removes/detaches every link; NEVER destroys a
 --    shared team/match owned by someone else (those are only detached).
+--    Retained under a legacy name for migration-history reference. The active,
+--    schema-correct delete_account_app_data implementation is defined above
+--    and must not be overwritten by this historical body.
 -- ---------------------------------------------------------------------------
-create or replace function public.delete_account_app_data(
+create or replace function public.delete_account_app_data_legacy_20260714(
   _target_user_id uuid,
   _deleted_by_user_id uuid default null,
   _reason text default null
@@ -3795,6 +4289,9 @@ revoke all on function public.delete_account_rows_if_column_matches_any(text, te
 revoke all on function public.null_account_column_if_exists(text, text, uuid) from public;
 revoke all on function public.delete_account_storage_objects(uuid) from public;
 revoke all on function public.delete_account_app_data(uuid, uuid, text) from public;
+revoke all on function public.delete_account_app_data_legacy_20260714(uuid, uuid, text)
+  from public, anon, authenticated;
+drop function public.delete_account_app_data_legacy_20260714(uuid, uuid, text);
 revoke all on function public.delete_my_account() from public;
 revoke all on function public.admin_delete_account(uuid, text) from public;
 grant execute on function public.delete_my_account() to authenticated;
@@ -5001,6 +5498,12 @@ $$;
 --    CURRENT league resolved live. A league assignment/change updates the
 --    section's league rather than adding another section.
 -- -----------------------------------------------------------------------------
+-- CREATE OR REPLACE VIEW cannot reorder/rename existing columns, and this view's
+-- column set changed over time (e.g. minutes removed, saves added). Drop first so
+-- a re-run against an older live view definition cannot fail with
+-- "cannot change name of view column ...". Safe: only functions read this view
+-- (they do not block the drop); no other view depends on it.
+drop view if exists public.current_player_statistics cascade;
 create or replace view public.current_player_statistics as
 with player_rows as (
   select
@@ -5434,6 +5937,12 @@ grant execute on function public.admin_upsert_player_statistics(uuid, text, json
 -- 4) View: one section per (player, team, season); Saves counted live from
 --    approved 'save' events; Minutes removed.
 -- -----------------------------------------------------------------------------
+-- CREATE OR REPLACE VIEW cannot reorder/rename existing columns, and this view's
+-- column set changed over time (e.g. minutes removed, saves added). Drop first so
+-- a re-run against an older live view definition cannot fail with
+-- "cannot change name of view column ...". Safe: only functions read this view
+-- (they do not block the drop); no other view depends on it.
+drop view if exists public.current_player_statistics cascade;
 create or replace view public.current_player_statistics as
 with player_rows as (
   select
@@ -5960,5 +6469,517 @@ $$;
 
 revoke all on function public.respond_coach_staff_invite(uuid, boolean) from public, anon;
 grant execute on function public.respond_coach_staff_invite(uuid, boolean) to authenticated;
+
+notify pgrst, 'reload schema';
+
+-- =============================================================================
+-- FINAL ACCOUNT-DELETION OVERRIDES
+-- Keep these last: the SQL Editor bundle contains historical function versions
+-- above, so the strict 20260724180000 implementation must win.
+-- =============================================================================
+
+create or replace function public.delete_account_rows_if_column_exists(
+  _table_name text,
+  _column_name text,
+  _user_id uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = public, pg_catalog
+as $$
+declare
+  v_relation regclass;
+begin
+  v_relation := to_regclass(format('%I.%I', 'public', _table_name));
+
+  if v_relation is null
+     or not exists (
+       select 1 from pg_class c
+       where c.oid = v_relation and c.relkind in ('r', 'p')
+     )
+     or not exists (
+       select 1 from pg_attribute a
+       where a.attrelid = v_relation
+         and a.attname = _column_name
+         and a.attnum > 0
+         and not a.attisdropped
+     ) then
+    return;
+  end if;
+
+  execute format('delete from %s where %I = $1', v_relation, _column_name)
+  using _user_id;
+end;
+$$;
+
+create or replace function public.delete_account_rows_if_column_matches_any(
+  _table_name text,
+  _column_name text,
+  _ids uuid[]
+)
+returns void
+language plpgsql
+security definer
+set search_path = public, pg_catalog
+as $$
+declare
+  v_relation regclass;
+begin
+  if coalesce(array_length(_ids, 1), 0) = 0 then
+    return;
+  end if;
+
+  v_relation := to_regclass(format('%I.%I', 'public', _table_name));
+
+  if v_relation is null
+     or not exists (
+       select 1 from pg_class c
+       where c.oid = v_relation and c.relkind in ('r', 'p')
+     )
+     or not exists (
+       select 1 from pg_attribute a
+       where a.attrelid = v_relation
+         and a.attname = _column_name
+         and a.attnum > 0
+         and not a.attisdropped
+     ) then
+    return;
+  end if;
+
+  execute format('delete from %s where %I = any($1)', v_relation, _column_name)
+  using _ids;
+end;
+$$;
+
+create or replace function public.null_account_column_if_exists(
+  _table_name text,
+  _column_name text,
+  _user_id uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = public, pg_catalog
+as $$
+declare
+  v_relation regclass;
+begin
+  v_relation := to_regclass(format('%I.%I', 'public', _table_name));
+
+  if v_relation is null
+     or not exists (
+       select 1 from pg_class c
+       where c.oid = v_relation and c.relkind in ('r', 'p')
+     )
+     or not exists (
+       select 1 from pg_attribute a
+       where a.attrelid = v_relation
+         and a.attname = _column_name
+         and a.attnum > 0
+         and not a.attisdropped
+         and not a.attnotnull
+     ) then
+    return;
+  end if;
+
+  execute format(
+    'update %s set %I = null where %I = $1',
+    v_relation,
+    _column_name,
+    _column_name
+  )
+  using _user_id;
+end;
+$$;
+
+revoke all on function public.delete_account_rows_if_column_exists(text, text, uuid)
+  from public, anon, authenticated;
+revoke all on function public.delete_account_rows_if_column_matches_any(text, text, uuid[])
+  from public, anon, authenticated;
+revoke all on function public.null_account_column_if_exists(text, text, uuid)
+  from public, anon, authenticated;
+
+create or replace function public.delete_account_storage_objects(
+  _target_user_id uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  return;
+end;
+$$;
+
+revoke all on function public.delete_account_storage_objects(uuid)
+  from public, anon, authenticated;
+revoke all on function public.footy_purge_direct_auth_user_refs(uuid)
+  from public, anon, authenticated;
+
+create or replace function public.admin_account_storage_manifest(
+  _target_user_id uuid,
+  _reason text default null
+)
+returns table (
+  bucket_id text,
+  object_name text
+)
+language plpgsql
+security definer
+set search_path = public, storage
+as $$
+begin
+  perform public.admin_assert_official(_reason);
+
+  if _target_user_id is null then
+    raise exception 'Target account is required.';
+  end if;
+
+  perform public.assert_user_can_be_deleted(_target_user_id);
+
+  return query
+  select distinct
+    o.bucket_id::text,
+    o.name::text
+  from storage.objects o
+  where o.owner::text = _target_user_id::text
+     or o.name like _target_user_id::text || '/%'
+     or o.name like '%/' || _target_user_id::text || '/%'
+     or o.name like '%/' || _target_user_id::text || '-%'
+     or o.name like '%/' || _target_user_id::text || '_%'
+  order by 1, 2;
+end;
+$$;
+
+revoke all on function public.admin_account_storage_manifest(uuid, text)
+  from public, anon;
+grant execute on function public.admin_account_storage_manifest(uuid, text)
+  to authenticated;
+
+create or replace function public.cleanup_app_data_after_auth_user_delete()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_explicit_target text :=
+    current_setting('footy_status.deleting_user_id', true);
+begin
+  if v_explicit_target is distinct from old.id::text then
+    perform public.delete_account_app_data(
+      old.id,
+      null,
+      'auth_user_deleted_cleanup'
+    );
+  end if;
+
+  perform public.footy_purge_direct_auth_user_refs(old.id);
+  return old;
+end;
+$$;
+
+drop trigger if exists footy_status_cleanup_app_data_before_auth_user_delete
+  on auth.users;
+create trigger footy_status_cleanup_app_data_before_auth_user_delete
+  before delete on auth.users
+  for each row
+  execute function public.cleanup_app_data_after_auth_user_delete();
+
+create or replace function public.delete_my_account()
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_deleted integer := 0;
+begin
+  if v_user_id is null then
+    raise exception 'You must be signed in to delete your account.';
+  end if;
+
+  perform public.assert_user_can_be_deleted(v_user_id);
+  perform set_config(
+    'footy_status.deleting_user_id',
+    v_user_id::text,
+    true
+  );
+
+  perform public.delete_account_app_data(
+    v_user_id,
+    v_user_id,
+    'self_delete_account'
+  );
+  perform public.footy_purge_direct_auth_user_refs(v_user_id);
+
+  delete from auth.identities where user_id = v_user_id;
+  delete from auth.users where id = v_user_id;
+  get diagnostics v_deleted = row_count;
+
+  if v_deleted <> 1 then
+    raise exception 'Account deletion failed: Auth user was not removed.';
+  end if;
+
+  return true;
+end;
+$$;
+
+create or replace function public.admin_delete_account(
+  _target_user_id uuid,
+  _reason text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_admin_user_id uuid := auth.uid();
+  v_before jsonb;
+  v_result jsonb;
+  v_deleted integer := 0;
+begin
+  perform public.admin_assert_official(_reason);
+
+  if _target_user_id is null then
+    raise exception 'Target account is required.';
+  end if;
+
+  if nullif(trim(coalesce(_reason, '')), '') is null then
+    raise exception 'Enter an admin note before deleting an account.';
+  end if;
+
+  perform public.assert_user_can_be_deleted(_target_user_id);
+
+  if not exists (
+    select 1 from auth.users where id = _target_user_id
+  ) then
+    raise exception 'Account deletion failed: Auth user was not found.';
+  end if;
+
+  select jsonb_build_object(
+    'profile', (
+      select to_jsonb(p)
+      from public.profiles p
+      where p.user_id = _target_user_id
+      limit 1
+    ),
+    'player_profile', (
+      select to_jsonb(p)
+      from public.player_profiles p
+      where p.user_id = _target_user_id
+      limit 1
+    ),
+    'staff_profile', (
+      select to_jsonb(p)
+      from public.staff_profiles p
+      where p.user_id = _target_user_id
+      limit 1
+    ),
+    'parent_profile', (
+      select to_jsonb(p)
+      from public.parent_profiles p
+      where p.user_id = _target_user_id
+      limit 1
+    ),
+    'team_profile', (
+      select to_jsonb(p)
+      from public.team_profiles p
+      where p.user_id = _target_user_id
+      limit 1
+    )
+  )
+  into v_before;
+
+  perform public.admin_write_audit(
+    'account_permanently_deleted',
+    'auth.users',
+    _target_user_id::text,
+    _target_user_id,
+    _reason,
+    v_before,
+    null,
+    jsonb_build_object('admin_user_id', v_admin_user_id)
+  );
+
+  perform set_config(
+    'footy_status.deleting_user_id',
+    _target_user_id::text,
+    true
+  );
+
+  v_result := public.delete_account_app_data(
+    _target_user_id,
+    v_admin_user_id,
+    _reason
+  );
+  perform public.footy_purge_direct_auth_user_refs(_target_user_id);
+
+  delete from auth.identities where user_id = _target_user_id;
+  delete from auth.users where id = _target_user_id;
+  get diagnostics v_deleted = row_count;
+
+  if v_deleted <> 1 then
+    raise exception 'Account deletion failed: Auth user was not removed.';
+  end if;
+
+  return coalesce(v_result, '{}'::jsonb) || jsonb_build_object(
+    'success', true,
+    'target_user_id', _target_user_id,
+    'auth_user_deleted', true,
+    'cleanup_atomic', true
+  );
+end;
+$$;
+
+revoke all on function public.delete_my_account() from public, anon;
+revoke all on function public.admin_delete_account(uuid, text) from public, anon;
+grant execute on function public.delete_my_account() to authenticated;
+grant execute on function public.admin_delete_account(uuid, text) to authenticated;
+
+notify pgrst, 'reload schema';
+
+-- ############################################################################
+-- 20260725120000_admin_pro_override_authorization
+-- ############################################################################
+-- Fix: Footy Status Official plan changes reported success but never applied.
+-- The guard trigger tg_guard_subscription_columns (added above) reverts any
+-- escalation of account_tier / is_pro / pro_expires_at unless the transaction
+-- sets app.pro_change_authorized = 'on'. admin_set_pro_status never set it, so
+-- admin upgrades (Free -> Yearly / One-Time) were silently reverted while the UI
+-- still showed success. Redefined below to set that flag (like the verified-
+-- purchase RPC), so admin tier changes genuinely persist and propagate app-wide.
+-- Admin grants are marked pro_verification_status = 'admin_override' and never
+-- fabricate an Apple/Google receipt or transaction id. Safe to run repeatedly.
+-- ############################################################################
+
+create or replace function public.admin_set_pro_status(
+  _target_user_id uuid,
+  _plan text,
+  _expires_at timestamptz default null,
+  _reason text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_before jsonb;
+  v_after jsonb;
+  v_plan text;
+  v_was_admin_override boolean;
+begin
+  perform public.admin_assert_official(_reason);
+
+  v_plan := lower(trim(coalesce(_plan, 'free')));
+  v_plan := replace(v_plan, '-', '_');
+
+  v_plan := case
+    when v_plan in ('free', 'off', 'none') then 'free'
+    when v_plan in ('pro_annual', 'annual', 'year', 'yearly') then 'pro_annual'
+    when v_plan in ('pro_lifetime', 'lifetime', 'one_time', 'onetime', 'one_time_pro') then 'pro_lifetime'
+    else null
+  end;
+
+  if v_plan is null then
+    raise exception 'Invalid Footy Status plan. Use free, pro_annual, or pro_lifetime.';
+  end if;
+
+  if not exists (
+    select 1
+    from public.profiles p
+    where p.user_id = _target_user_id
+      and (
+        lower(coalesce(p.account_role, '')) = 'player'
+        or lower(coalesce(p.account_type, '')) = 'player'
+        or lower(coalesce(p.account_category, '')) = 'player'
+        or lower(coalesce(p.role, '')) = 'player'
+      )
+  ) then
+    raise exception 'Footy Status plan changes are only available for player accounts.';
+  end if;
+
+  select to_jsonb(p) into v_before
+  from public.profiles p
+  where p.user_id = _target_user_id;
+
+  if v_before is null then
+    raise exception 'Profile record not found.';
+  end if;
+
+  v_was_admin_override := coalesce(v_before->>'pro_verification_status', '') = 'admin_override';
+
+  -- Authorize the subscription-column change for THIS admin transaction only, so
+  -- the guard trigger permits the tier change (this is the actual bug fix).
+  perform set_config('app.pro_change_authorized', 'on', true);
+
+  update public.profiles
+  set
+    account_tier = v_plan,
+    is_pro = (v_plan <> 'free'),
+    pro_started_at = case
+      when v_plan = 'free' then null
+      else coalesce(pro_started_at, now())
+    end,
+    pro_expires_at = case
+      when v_plan = 'pro_annual' then coalesce(_expires_at, now() + interval '1 year')
+      else null
+    end,
+    pro_platform = case
+      when v_plan = 'free' then case when v_was_admin_override then null else pro_platform end
+      else 'admin'
+    end,
+    pro_purchase_date = case
+      when v_plan = 'free' then case when v_was_admin_override then null else pro_purchase_date end
+      else coalesce(pro_purchase_date, now())
+    end,
+    pro_renewal_status = case
+      when v_plan = 'free' then case when v_was_admin_override then null else pro_renewal_status end
+      else 'admin_override'
+    end,
+    pro_verification_status = case
+      when v_plan = 'free' then case when v_was_admin_override then null else pro_verification_status end
+      else 'admin_override'
+    end,
+    -- Real store transaction ids are never fabricated or destroyed by admin edits.
+    updated_at = now()
+  where user_id = _target_user_id;
+
+  if v_plan = 'free' then
+    perform public.apply_free_clip_visibility(_target_user_id);
+  else
+    perform public.restore_pro_clips(_target_user_id);
+  end if;
+
+  select to_jsonb(p) into v_after
+  from public.profiles p
+  where p.user_id = _target_user_id;
+
+  perform public.admin_write_audit(
+    'pro_status_changed',
+    'profiles',
+    _target_user_id::text,
+    _target_user_id,
+    _reason,
+    v_before,
+    v_after,
+    jsonb_build_object(
+      'previous_plan', coalesce(v_before->>'account_tier', 'free'),
+      'new_plan', v_plan,
+      'manual_admin_override', true
+    )
+  );
+
+  return v_after;
+end;
+$$;
+
+revoke all on function public.admin_set_pro_status(uuid, text, timestamptz, text) from public;
+grant execute on function public.admin_set_pro_status(uuid, text, timestamptz, text) to authenticated;
 
 notify pgrst, 'reload schema';
