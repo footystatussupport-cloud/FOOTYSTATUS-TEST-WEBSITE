@@ -409,18 +409,48 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
     }
 
     setSaving(true);
-    const { error } = await (supabase as any).rpc("admin_delete_account", {
-      _target_user_id: targetUserId,
-      _reason: reason.trim(),
+    const { data, error } = await supabase.functions.invoke("admin-delete-account", {
+      body: {
+        target_user_id: targetUserId,
+        reason: reason.trim(),
+      },
     });
     setSaving(false);
 
     if (error) {
       toast({
         title: "Could not delete account",
-        description: error.message,
+        description: data?.message || error.message,
         variant: "destructive",
       });
+      return;
+    }
+
+    if (
+      !data?.success ||
+      !data?.auth_user_deleted ||
+      !data?.cleanup_atomic ||
+      !data?.storage_cleanup_complete
+    ) {
+      const accountWasDeleted = Boolean(data?.account_deleted && data?.auth_user_deleted);
+      toast({
+        title: accountWasDeleted
+          ? "Account deleted; file cleanup incomplete"
+          : "Could not delete account",
+        description:
+          data?.message ||
+          "The server did not confirm complete database, Auth, and storage deletion.",
+        variant: "destructive",
+      });
+      if (accountWasDeleted) {
+        setOpen(false);
+        window.dispatchEvent(
+          new CustomEvent("footy-status:account-deleted", {
+            detail: { userId: targetUserId },
+          })
+        );
+        navigate("/?tab=explore", { replace: true });
+      }
       return;
     }
 
@@ -429,7 +459,15 @@ const InlineProfileAdminControls = ({ targetUserId, targetName, section, label, 
       description: "The account and its connected Footy Status data were permanently removed.",
     });
     setOpen(false);
-    onChanged?.();
+
+    // Let any still-mounted admin/list views evict the deleted account without
+    // asking the now-deleted profile to reload (which could restart normal
+    // profile/member synchronization effects during navigation).
+    window.dispatchEvent(
+      new CustomEvent("footy-status:account-deleted", {
+        detail: { userId: targetUserId },
+      })
+    );
     navigate("/?tab=explore", { replace: true });
   };
 
