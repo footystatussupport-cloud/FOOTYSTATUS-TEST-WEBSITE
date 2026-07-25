@@ -141,7 +141,16 @@ const NextUpTab = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
   const holdTimeoutRef = useRef<number | null>(null);
-  const scrollFrameRef = useRef<number | null>(null);
+  // The active clip is owned by a single IntersectionObserver (see below).
+  // activeIndexRef mirrors currentIndex so the observer can dedupe without a
+  // stale closure; didDeepLinkScrollRef makes the deep-link scroll one-shot so
+  // it can never fight a user swipe; clipsRef gives effects a fresh clips
+  // snapshot without depending on the array identity (which changes on every
+  // like/view-count update).
+  const activeIndexRef = useRef(0);
+  const didDeepLinkScrollRef = useRef(false);
+  const clipsRef = useRef<FeedEntry[]>(clips);
+  clipsRef.current = clips;
   const holdPausedRef = useRef(false);
   const pointerDownRef = useRef(false);
   const countedPlaybackRef = useRef<Record<string, boolean>>({});
@@ -433,8 +442,12 @@ const NextUpTab = () => {
     return videoRefs.current[activeClip.feedKey] || null;
   };
 
+  // Playback follows the active clip. It intentionally keys off currentIndex /
+  // clips.length / isMuted only (never the clips array identity) so that a like
+  // or view-count update — which replaces the clips array in place — cannot
+  // re-run this and make two clips fight over play/pause during a scroll.
   useEffect(() => {
-    clips.forEach((clip, index) => {
+    clipsRef.current.forEach((clip, index) => {
       const video = videoRefs.current[clip.feedKey];
       if (!video) return;
       video.muted = isMuted;
@@ -449,12 +462,64 @@ const NextUpTab = () => {
         resetPlaybackCounter(clip.feedKey);
       }
     });
-  }, [clips, currentIndex, isMuted]);
+  }, [currentIndex, clips.length, isMuted]);
 
+  // Keep the observer's dedupe guard in sync no matter who moved the index
+  // (the observer itself, a deep link, "Not interested", or an action button).
   useEffect(() => {
+    activeIndexRef.current = currentIndex;
+  }, [currentIndex]);
+
+  // THE single source of truth for the active clip. Whichever section is most
+  // in view wins; the observer only fires when a section crosses a visibility
+  // threshold (never every scroll frame), so it settles on exactly one clip and
+  // cannot oscillate between two. Native CSS scroll-snap does the movement; this
+  // only reads the result. Re-created only when the number of sections changes
+  // (pagination), never on like/view-count updates.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || clips.length === 0) return;
+    const sections = Array.from(container.querySelectorAll<HTMLElement>("[data-index]"));
+    if (sections.length === 0) return;
+
+    const ratios = new Map<number, number>();
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const idx = Number((entry.target as HTMLElement).dataset.index);
+          ratios.set(idx, entry.isIntersecting ? entry.intersectionRatio : 0);
+        }
+        let bestIndex = -1;
+        let bestRatio = 0;
+        ratios.forEach((ratio, idx) => {
+          if (ratio > bestRatio) {
+            bestRatio = ratio;
+            bestIndex = idx;
+          }
+        });
+        // Require a clear majority so a half-way swipe never flips the active
+        // clip early; the settled clip sits at ~1.0 and wins unambiguously.
+        if (bestIndex >= 0 && bestRatio >= 0.5 && bestIndex !== activeIndexRef.current) {
+          activeIndexRef.current = bestIndex;
+          setCurrentIndex(bestIndex);
+        }
+      },
+      { root: container, threshold: [0, 0.25, 0.5, 0.75, 1] }
+    );
+    sections.forEach((section) => observer.observe(section));
+    return () => observer.disconnect();
+  }, [clips.length]);
+
+  // Deep link: position on the requested clip exactly once, when it first
+  // appears. It must never re-fire on later clips/count changes, or it would
+  // yank the viewer back to this clip mid-scroll (the "snaps me back" bug).
+  useEffect(() => {
+    if (didDeepLinkScrollRef.current) return;
     if (!clips.length || !clipIdFromUrl) return;
     const index = clips.findIndex((clip) => clip.id === clipIdFromUrl);
     if (index >= 0) {
+      didDeepLinkScrollRef.current = true;
+      activeIndexRef.current = index;
       setCurrentIndex(index);
       containerRef.current
         ?.querySelector<HTMLElement>(`[data-clip-id="${clipIdFromUrl}"]`)
@@ -462,13 +527,17 @@ const NextUpTab = () => {
     }
   }, [clips, clipIdFromUrl]);
 
+  // Reflect the active clip in the URL. Reads from the ref and depends only on
+  // currentIndex/length, so a like or view-count update does not rewrite history
+  // (and, combined with the one-shot deep-link effect, never causes a scroll).
   useEffect(() => {
-    if (!currentClip) return;
+    const activeClip = clipsRef.current[currentIndex];
+    if (!activeClip) return;
     const url = new URL(window.location.href);
     url.searchParams.set("tab", "next-up");
-    url.searchParams.set("clip", currentClip.id);
+    url.searchParams.set("clip", activeClip.id);
     window.history.replaceState({}, "", url.toString());
-  }, [currentIndex, clips]);
+  }, [currentIndex, clips.length]);
 
   useEffect(() => {
     const fetchLikes = async () => {
@@ -494,10 +563,6 @@ const NextUpTab = () => {
 
   useEffect(() => () => {
     clearHoldTimeout();
-    if (scrollFrameRef.current) {
-      window.cancelAnimationFrame(scrollFrameRef.current);
-      scrollFrameRef.current = null;
-    }
   }, []);
 
   const getPlayerName = (clip: Clip) => {
@@ -672,24 +737,6 @@ const NextUpTab = () => {
       window.clearTimeout(holdTimeoutRef.current);
       holdTimeoutRef.current = null;
     }
-  };
-
-  const updateCurrentClipFromScroll = () => {
-    const container = containerRef.current;
-    if (!container) return;
-    const nextIndex = Math.round(container.scrollTop / Math.max(container.clientHeight, 1));
-    const boundedIndex = Math.min(Math.max(nextIndex, 0), Math.max(clips.length - 1, 0));
-    setCurrentIndex((prev) => (prev === boundedIndex ? prev : boundedIndex));
-  };
-
-  const handleFeedScroll = () => {
-    if (scrollFrameRef.current) {
-      window.cancelAnimationFrame(scrollFrameRef.current);
-    }
-    scrollFrameRef.current = window.requestAnimationFrame(() => {
-      updateCurrentClipFromScroll();
-      scrollFrameRef.current = null;
-    });
   };
 
   // Pull-to-refresh lives inside the feed itself: the global gesture is opted
@@ -947,7 +994,10 @@ const NextUpTab = () => {
       <div
         ref={containerRef}
         className="relative h-full min-h-0 w-full overscroll-y-contain overflow-y-auto snap-y snap-mandatory hide-scrollbar"
-        onScroll={handleFeedScroll}
+        // overflow-anchor:none stops the browser's scroll-anchoring from nudging
+        // the feed when the windowed <video> elements mount/unmount as the active
+        // clip moves — another source of the two-clips-competing flicker.
+        style={{ overflowAnchor: "none" }}
         onTouchStart={handlePullTouchStart}
         onTouchMove={handlePullTouchMove}
         onTouchEnd={handlePullTouchEnd}
