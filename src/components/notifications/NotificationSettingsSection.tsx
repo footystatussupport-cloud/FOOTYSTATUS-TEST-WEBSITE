@@ -1,4 +1,4 @@
-import { Bell, Mail, Smartphone, Users, Shield, Megaphone, Volume2 } from "lucide-react";
+import { Bell, Mail, Smartphone, Users, Volume2 } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -30,18 +30,6 @@ const notificationSettings = [
     icon: Users,
   },
   {
-    id: "matchAlerts",
-    label: "Match & Activity Updates",
-    description: "Be notified about match alerts and team activity.",
-    icon: Shield,
-  },
-  {
-    id: "clipNotifications",
-    label: "Club News / Clip Updates",
-    description: "Receive club news, content, and update alerts.",
-    icon: Megaphone,
-  },
-  {
     id: "soundEffects",
     label: "Sound Alerts",
     description: "Play a sound for supported notification events.",
@@ -52,12 +40,6 @@ const notificationSettings = [
     label: "Vibration",
     description: "Use haptics for supported notification events.",
     icon: Smartphone,
-  },
-  {
-    id: "emailDigest",
-    label: "Weekly Email Digest",
-    description: "Receive a weekly roundup of your account activity.",
-    icon: Mail,
   },
 ] as const;
 

@@ -10,11 +10,8 @@ export interface UserSettings {
   showAnimations: boolean;
   // Notifications
   pushNotifications: boolean;
-  matchAlerts: boolean;
   goalNotifications: boolean;
-  clipNotifications: boolean;
   messageNotifications: boolean;
-  emailDigest: boolean;
   // Privacy
   profilePublic: boolean;
   showOnlineStatus: boolean;
@@ -22,9 +19,7 @@ export interface UserSettings {
   showInSearch: boolean;
   // Content & Playback
   autoplayVideos: boolean;
-  hdVideoWifi: boolean;
   showScoreSpoilers: boolean;
-  liveCommentary: boolean;
   // Accessibility
   largeText: boolean;
   reducedMotion: boolean;
@@ -45,8 +40,6 @@ export interface UserSettings {
   profileVisibility: string;
   showContactInfo: string;
   showActivityStatus: boolean;
-  allowProfileViews: boolean;
-  showProfileViewers: boolean;
   // Notification preferences (granular)
   inAppNotifications: boolean;
   emailNotifications: boolean;
@@ -60,19 +53,14 @@ const defaultSettings: UserSettings = {
   compactView: false,
   showAnimations: true,
   pushNotifications: true,
-  matchAlerts: true,
   goalNotifications: true,
-  clipNotifications: true,
   messageNotifications: true,
-  emailDigest: false,
   profilePublic: true,
   showOnlineStatus: true,
   showLastSeen: true,
   showInSearch: true,
   autoplayVideos: true,
-  hdVideoWifi: true,
   showScoreSpoilers: true,
-  liveCommentary: true,
   largeText: false,
   reducedMotion: false,
   screenReaderOptimized: false,
@@ -88,8 +76,6 @@ const defaultSettings: UserSettings = {
   profileVisibility: "public",
   showContactInfo: "staff_only",
   showActivityStatus: true,
-  allowProfileViews: true,
-  showProfileViewers: true,
   inAppNotifications: true,
   emailNotifications: false,
   quietHoursEnabled: false,

@@ -67,6 +67,7 @@ const App = () => (
               {/* Public so the policy is reachable by every account type and pre-login (App Store requirement). */}
               <Route path="/privacy-policy" element={<PrivacyPolicyPage />} />
               <Route path="/terms-of-service" element={<TermsOfServicePage />} />
+              <Route path="/terms" element={<TermsOfServicePage />} />
               <Route path="/community-guidelines" element={<CommunityGuidelinesPage />} />
               <Route path="/reset-password" element={<ResetPasswordPage />} />
               <Route path="/player/:id" element={<ProtectedRoute><PlayerProfile /></ProtectedRoute>} />

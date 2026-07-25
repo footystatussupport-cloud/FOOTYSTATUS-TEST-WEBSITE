@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { ArrowLeft, FileText, Mail, ExternalLink, ChevronRight } from "lucide-react";
+import { ArrowLeft, Mail, ExternalLink, ChevronRight } from "lucide-react";
 import Header from "@/components/Header";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { FOOTY_STATUS_CONTACT_EMAIL, FOOTY_STATUS_CONTACT_MAILTO } from "@/lib/contact";
@@ -34,7 +34,6 @@ const SupportPage = () => {
 
   const supportLinks = [
     { icon: Mail, label: "Email Support", description: FOOTY_STATUS_CONTACT_EMAIL, action: "Send Email", href: FOOTY_STATUS_CONTACT_MAILTO },
-    { icon: FileText, label: "Documentation", description: "Read our help guides", action: "View Docs" },
   ];
 
   return (
@@ -112,15 +111,15 @@ const SupportPage = () => {
         <section className="mb-8">
           <h2 className="text-lg font-semibold text-navy mb-2">Quick Links</h2>
           <div className="bg-card border border-border rounded-xl divide-y divide-border">
-            <Link to="/privacy-policy" className="flex items-center justify-between p-4 hover:bg-muted/50 transition-colors">
+            <Link to="/privacy-policy" state={{ from: "/support" }} className="flex items-center justify-between p-4 hover:bg-muted/50 transition-colors">
               <span>Privacy Policy</span>
               <ChevronRight className="h-5 w-5 text-muted-foreground" />
             </Link>
-            <Link to="/terms" className="flex items-center justify-between p-4 hover:bg-muted/50 transition-colors">
+            <Link to="/terms-of-service" state={{ from: "/support" }} className="flex items-center justify-between p-4 hover:bg-muted/50 transition-colors">
               <span>Terms of Service</span>
               <ChevronRight className="h-5 w-5 text-muted-foreground" />
             </Link>
-            <Link to="/community-guidelines" className="flex items-center justify-between p-4 hover:bg-muted/50 transition-colors">
+            <Link to="/community-guidelines" state={{ from: "/support" }} className="flex items-center justify-between p-4 hover:bg-muted/50 transition-colors">
               <span>Community Guidelines</span>
               <ChevronRight className="h-5 w-5 text-muted-foreground" />
             </Link>

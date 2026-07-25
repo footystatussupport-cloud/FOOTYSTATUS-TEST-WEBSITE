@@ -161,9 +161,7 @@ const SettingsPage = () => {
 
   const contentSettings: SettingItem[] = [
     { id: 'autoplayVideos', label: 'Autoplay Videos', description: 'Automatically play clips as you scroll', type: 'toggle', icon: <Smartphone className="h-5 w-5" /> },
-    { id: 'hdVideoWifi', label: 'HD Video on WiFi', description: 'Play high quality video when on WiFi', type: 'toggle' },
     { id: 'showScoreSpoilers', label: 'Show Score Spoilers', description: 'Display match scores immediately', type: 'toggle' },
-    { id: 'liveCommentary', label: 'Live Commentary', description: 'Show live match commentary updates', type: 'toggle' },
   ];
 
   const accessibilitySettings: SettingItem[] = [
@@ -403,6 +401,7 @@ const SettingsPage = () => {
           <div className="bg-card border border-border rounded-xl px-4">
             <Link
               to="/privacy-policy"
+              state={{ from: "/settings" }}
               className="flex items-center justify-between py-4 hover:bg-muted/50 -mx-4 px-4 rounded-lg transition-colors"
             >
               <div className="flex items-center gap-3 flex-1">
@@ -417,6 +416,7 @@ const SettingsPage = () => {
             <Separator />
             <Link
               to="/terms-of-service"
+              state={{ from: "/settings" }}
               className="flex items-center justify-between py-4 hover:bg-muted/50 -mx-4 px-4 rounded-lg transition-colors"
             >
               <div className="flex items-center gap-3 flex-1">
@@ -431,6 +431,7 @@ const SettingsPage = () => {
             <Separator />
             <Link
               to="/community-guidelines"
+              state={{ from: "/settings" }}
               className="flex items-center justify-between py-4 hover:bg-muted/50 -mx-4 px-4 rounded-lg transition-colors"
             >
               <div className="flex items-center gap-3 flex-1">

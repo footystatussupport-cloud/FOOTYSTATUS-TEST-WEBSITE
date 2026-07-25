@@ -1,6 +1,5 @@
-import { Link } from "react-router-dom";
-import { ArrowLeft } from "lucide-react";
 import Header from "@/components/Header";
+import LegalBackButton from "@/components/LegalBackButton";
 import { FOOTY_STATUS_CONTACT_EMAIL, FOOTY_STATUS_CONTACT_MAILTO } from "@/lib/contact";
 
 // Static legal document. Rendered for every account type (and publicly), reached
@@ -35,13 +34,7 @@ const TermsOfServicePage = () => {
         <Header />
 
         <main className="px-4 py-6">
-          <Link
-            to="/settings"
-            className="mb-4 inline-flex items-center text-sm text-muted-foreground hover:text-foreground"
-          >
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Back
-          </Link>
+          <LegalBackButton />
 
           <h1 className="text-2xl font-bold">Footy Status Terms of Service</h1>
           <p className="mt-2 text-sm text-muted-foreground">Effective Date: July 25, 2026</p>

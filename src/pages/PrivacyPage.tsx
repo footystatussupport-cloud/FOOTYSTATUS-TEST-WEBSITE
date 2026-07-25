@@ -1,18 +1,15 @@
 import { Link } from "react-router-dom";
-import { ArrowLeft, Shield, Eye, Users, UserX } from "lucide-react";
+import { ArrowLeft, Shield, Eye } from "lucide-react";
 import Header from "@/components/Header";
-import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSettings } from "@/hooks/useSettings";
-import { useBlockedUsers } from "@/hooks/useBlockedUsers";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 
 const PrivacyPage = () => {
   const { settings, updateSetting, loading } = useSettings();
-  const { blockedUsers, unblockUser, loading: blockedLoading } = useBlockedUsers();
 
   const handleContactVisibilityChange = async (value: string) => {
     const { error } = await (supabase as any).rpc("set_contact_info_visibility", {
@@ -80,74 +77,6 @@ const PrivacyPage = () => {
           </div>
         </section>
 
-        {/* Profile Views */}
-        <section className="mb-8">
-          <h2 className="text-lg font-semibold text-navy mb-2">Profile Views</h2>
-          <div className="bg-card border border-border rounded-xl px-4">
-            <div className="flex items-start gap-3 py-4">
-              <Users className="h-5 w-5 text-muted-foreground mt-0.5" />
-              <div className="flex-1">
-                <p className="text-base font-medium">Profiles can always be opened</p>
-                <p className="text-sm text-muted-foreground">
-                  Since every Footy profile is public, anyone on the app can view it. You can still control whether profile viewers are shown below.
-                </p>
-              </div>
-            </div>
-            <Separator />
-            <div className="flex items-center justify-between py-4">
-              <div className="flex-1">
-                <Label htmlFor="showViewers" className="text-base font-medium cursor-pointer">
-                  Show Who Viewed My Profile
-                </Label>
-                <p className="text-sm text-muted-foreground">See who has viewed your profile</p>
-              </div>
-              <Switch
-                id="showViewers"
-                checked={settings.showProfileViewers}
-                onCheckedChange={(checked) => updateSetting('showProfileViewers', checked)}
-                disabled={loading}
-              />
-            </div>
-          </div>
-        </section>
-
-        {/* Blocked Users */}
-        <section className="mb-8">
-          <h2 className="text-lg font-semibold text-navy mb-2">Blocked Users</h2>
-          <div className="bg-card border border-border rounded-xl p-4">
-            <div className="flex items-center gap-3 mb-3">
-              <UserX className="h-5 w-5 text-muted-foreground" />
-              <div className="flex-1">
-                <p className="font-medium">Manage Blocked Users</p>
-                <p className="text-sm text-muted-foreground">
-                  {blockedLoading
-                    ? "Loading..."
-                    : blockedUsers.length === 0 
-                      ? "You haven't blocked anyone" 
-                      : `${blockedUsers.length} blocked user(s)`}
-                </p>
-              </div>
-            </div>
-            {blockedUsers.length > 0 && (
-              <div className="space-y-2 mt-2">
-                {blockedUsers.map((bu) => (
-                  <div key={bu.id} className="flex items-center justify-between p-3 bg-muted rounded-lg">
-                    <div>
-                      <p className="text-sm font-medium">{bu.full_name || bu.email || "Unknown User"}</p>
-                      <p className="text-xs text-muted-foreground">Blocked {new Date(bu.created_at).toLocaleDateString()}</p>
-                    </div>
-                    <button
-                      className="text-sm text-primary hover:underline"
-                      onClick={() => unblockUser(bu.blocked_user_id)}
-                    >
-                      Unblock
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
       </div>
     </div>
   );
