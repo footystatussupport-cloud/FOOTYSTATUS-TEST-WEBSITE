@@ -16,6 +16,7 @@ import ParentProfileForm from "@/components/signup/ParentProfileForm";
 import RefereeProfileForm from "@/components/signup/RefereeProfileForm";
 import AuthMethodSelector from "@/components/signup/AuthMethodSelector";
 import { buildAppUrl } from "@/lib/appOrigin";
+import { isNativeApp, startNativeGoogleAuth } from "@/lib/nativeAuth";
 import { isEmbeddedBrowser } from "@/lib/browserContext";
 import { formatRoleDisplayLabel } from "@/lib/coachStaffTeams";
 import { getUsernameErrorMessage, normalizeUsername, validateUsername } from "@/lib/usernames";
@@ -61,6 +62,10 @@ const getAuthErrorMessage = (error: unknown) => {
               ? (error as any).details
               : "Something went wrong. Please try again.";
   const lowerMessage = message.toLowerCase();
+
+  if (lowerMessage.includes("load failed") || lowerMessage.includes("failed to fetch")) {
+    return "Could not reach Supabase. Check the device internet connection and the app's Supabase URL, then try again.";
+  }
 
   if (lowerMessage.includes("username already taken") || lowerMessage.includes("username is already taken")) {
     return "Username already taken. Please choose another.";
@@ -646,6 +651,21 @@ const AuthPage = () => {
   useEffect(() => { accountTypeRef.current = accountType; }, [accountType]);
   useEffect(() => { staffTypeRef.current = staffType; }, [staffType]);
   useEffect(() => { modeRef.current = mode; }, [mode]);
+  useEffect(() => {
+    const showNativeAuthError = (event: Event) => {
+      const message = (event as CustomEvent<string>).detail;
+      toast({
+        title: "Google sign-in failed",
+        description: message || "Google sign-in could not be completed.",
+        variant: "destructive",
+      });
+      setLoading(false);
+      setPendingGoogleAuth(false);
+    };
+
+    window.addEventListener("footy-status-native-auth-error", showNativeAuthError);
+    return () => window.removeEventListener("footy-status-native-auth-error", showNativeAuthError);
+  }, [toast]);
 
   const persistSignupFlow = (nextAccountType: AccountType | null, nextStaffType: StaffType | null) => {
     const selectedRole = getSignupRoleFromSelection(nextAccountType, nextStaffType);
@@ -950,7 +970,7 @@ const AuthPage = () => {
       return;
     }
 
-    if (embeddedBrowser) {
+    if (embeddedBrowser && !isNativeApp()) {
       toast({
         title: "Open Google sign-in in Safari",
         description: embeddedGoogleAuthMessage,
@@ -964,6 +984,12 @@ const AuthPage = () => {
     try {
       await supabase.auth.signOut({ scope: "local" });
       clearStoredAuthSession();
+      if (isNativeApp()) {
+        await startNativeGoogleAuth(
+          `/auth?mode=signup&redirectTo=${encodeURIComponent(authRedirectTo)}`,
+        );
+        return;
+      }
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
@@ -1957,7 +1983,7 @@ const AuthPage = () => {
   const handleRefereeSubmit = (data: any) => createUserAndProfile(data, 'referee');
 
   const handleLoginGoogleAuth = async () => {
-    if (embeddedBrowser) {
+    if (embeddedBrowser && !isNativeApp()) {
       toast({
         title: "Open Google sign-in in Safari",
         description: embeddedGoogleAuthMessage,
@@ -1969,6 +1995,12 @@ const AuthPage = () => {
     try {
       await supabase.auth.signOut({ scope: "local" });
       clearStoredAuthSession();
+      if (isNativeApp()) {
+        await startNativeGoogleAuth(
+          `/auth?mode=login&redirectTo=${encodeURIComponent(authRedirectTo)}`,
+        );
+        return;
+      }
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
