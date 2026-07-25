@@ -35,11 +35,11 @@ const Header = () => {
 
   return (
     <header
-      className="flex w-full max-w-full items-center justify-between gap-2 border-b border-border bg-background px-3 py-1.5 sm:px-4"
-      style={{ paddingTop: "max(0.375rem, env(safe-area-inset-top))" }}
+      className="flex w-full max-w-full items-center justify-between gap-2 overflow-hidden border-b border-border bg-background px-2 pb-2 sm:px-3 sm:pb-2.5"
+      style={{ paddingTop: "max(0.5rem, env(safe-area-inset-top))" }}
     >
-      <div className="min-w-0 flex-1">
-        <img src={logo} alt="FootyStatus" className="h-9 w-auto max-w-full object-contain sm:h-11" />
+      <div className="flex min-w-0 flex-1 items-center overflow-hidden">
+        <img src={logo} alt="FootyStatus" className="block h-12 w-auto max-w-full object-contain sm:h-14" />
       </div>
       <div className="flex shrink-0 items-center justify-end gap-2">
         {user ? (
